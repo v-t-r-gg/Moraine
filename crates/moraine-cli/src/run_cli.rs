@@ -419,12 +419,9 @@ fn read_input(spec: &str) -> Result<String> {
     }
 }
 
-fn emit_ok(json_mode: bool, value: serde_json::Value) -> Result<()> {
-    if json_mode {
-        println!("{}", serde_json::to_string_pretty(&value)?);
-    } else {
-        println!("{}", serde_json::to_string_pretty(&value)?);
-    }
+fn emit_ok(_json_mode: bool, value: serde_json::Value) -> Result<()> {
+    // Protocol responses are always machine-readable JSON on stdout.
+    println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())
 }
 

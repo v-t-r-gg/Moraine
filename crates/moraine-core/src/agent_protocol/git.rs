@@ -44,9 +44,7 @@ pub fn capture_git_context(cwd: &Path) -> GitContextSummary {
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
     let detached = abbrev == "HEAD";
-    let branch = if detached {
-        None
-    } else if abbrev.is_empty() {
+    let branch = if detached || abbrev.is_empty() {
         None
     } else {
         Some(abbrev)

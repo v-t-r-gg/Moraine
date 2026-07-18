@@ -1,0 +1,33 @@
+# Dependencies / build
+node_modules
+/build
+/.svelte-kit
+/package
+dist
+target
+src-tauri/target
+
+# Env
+.env
+.env.*
+!.env.example
+
+# OS / editors
+.DS_Store
+*.swp
+*.swo
+.idea
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# Vite
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# Logs / coverage
+*.log
+coverage
+
+# Moraine local data (if ever stored in-repo)
+.moraine/

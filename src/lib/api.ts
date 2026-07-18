@@ -1,0 +1,202 @@
+import type {
+  AppInfo,
+  DocumentSnapshot,
+  HistoryEntry,
+  HistoryEntryMeta,
+} from "./types";
+
+const isTauri =
+  typeof window !== "undefined" &&
+  // @ts-expect-error Tauri injects this
+  (window.__TAURI_INTERNALS__ != null || window.__TAURI__ != null);
+
+async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  if (!isTauri) {
+    return browserStub<T>(cmd, args);
+  }
+  const { invoke: tauriInvoke } = await import("@tauri-apps/api/core");
+  return tauriInvoke<T>(cmd, args);
+}
+
+export async function openDocument(path: string): Promise<DocumentSnapshot> {
+  return invoke("open_document", { path });
+}
+
+export async function getDocument(id: string): Promise<DocumentSnapshot> {
+  return invoke("get_document", { id });
+}
+
+export async function setDocumentContent(id: string, content: string): Promise<void> {
+  return invoke("set_document_content", { id, content });
+}
+
+export async function saveDocument(
+  id: string,
+  content?: string,
+  recordHistory = true,
+): Promise<DocumentSnapshot> {
+  return invoke("save_document", { id, content: content ?? null, recordHistory });
+}
+
+export async function reloadDocument(id: string): Promise<DocumentSnapshot> {
+  return invoke("reload_document", { id });
+}
+
+export async function historyList(path: string): Promise<HistoryEntryMeta[]> {
+  return invoke("history_list", { path });
+}
+
+export async function historyGet(path: string, entryId: string): Promise<HistoryEntry> {
+  return invoke("history_get", { path, entryId });
+}
+
+export async function historyRestoreContent(path: string, entryId: string): Promise<string> {
+  return invoke("history_restore_content", { path, entryId });
+}
+
+export async function historyPush(
+  path: string,
+  content: string,
+  label?: string,
+): Promise<HistoryEntry> {
+  return invoke("history_push", { path, content, label: label ?? null });
+}
+
+export async function appInfo(): Promise<AppInfo> {
+  return invoke("app_info");
+}
+
+export async function writeFile(path: string, content: string): Promise<void> {
+  return invoke("write_file", { path, content });
+}
+
+export async function readFile(path: string): Promise<string> {
+  return invoke("read_file", { path });
+}
+
+export async function pickMarkdownFile(): Promise<string | null> {
+  if (!isTauri) {
+    return null;
+  }
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const selected = await open({
+    multiple: false,
+    filters: [{ name: "Markdown", extensions: ["md", "markdown", "mdx", "mdown"] }],
+  });
+  if (selected == null) return null;
+  return typeof selected === "string" ? selected : selected[0] ?? null;
+}
+
+export async function pickSavePath(defaultPath?: string): Promise<string | null> {
+  if (!isTauri) return null;
+  const { save } = await import("@tauri-apps/plugin-dialog");
+  return save({
+    defaultPath,
+    filters: [{ name: "Markdown", extensions: ["md"] }],
+  });
+}
+
+export function onFileChanged(
+  handler: (event: import("./types").FileChangedEvent) => void,
+): () => void {
+  if (!isTauri) return () => {};
+  let unlisten: (() => void) | undefined;
+  import("@tauri-apps/api/event").then(({ listen }) => {
+    listen<import("./types").FileChangedEvent>("file-changed", (e) => {
+      handler(e.payload);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+  });
+  return () => unlisten?.();
+}
+
+export { isTauri };
+
+const browserDocs = new Map<string, DocumentSnapshot>();
+
+function browserStub<T>(cmd: string, args?: Record<string, unknown>): T {
+  switch (cmd) {
+    case "app_info":
+      return {
+        name: "Moraine",
+        version: "0.1.0-browser",
+        dataDir: "(browser)",
+        historyDir: "(browser)",
+        configDir: "(browser)",
+      } as T;
+    case "open_document": {
+      const path = String(args?.path ?? "untitled.md");
+      const existing = [...browserDocs.values()].find((d) => d.meta.path === path);
+      if (existing) return existing as T;
+      const id = crypto.randomUUID();
+      const title = path.split(/[/\\]/).pop() ?? "untitled.md";
+      const snap: DocumentSnapshot = {
+        meta: {
+          id,
+          path,
+          title,
+          dirty: false,
+          lastSavedAt: new Date().toISOString(),
+          lastModifiedOnDisk: null,
+          byteLen: 0,
+        },
+        content:
+          "# Welcome to Moraine\n\n" +
+          "Browser-only mode — open via **Tauri** for real file I/O.\n\n" +
+          "- Edit Markdown with the rich editor\n" +
+          "- Toggle **Preview**\n" +
+          "- Yjs powers local multi-tab collab simulation\n",
+      };
+      snap.meta.byteLen = snap.content.length;
+      browserDocs.set(id, snap);
+      return snap as T;
+    }
+    case "save_document": {
+      const id = String(args?.id);
+      const doc = browserDocs.get(id);
+      if (!doc) throw new Error("document not open");
+      if (typeof args?.content === "string") {
+        doc.content = args.content;
+        doc.meta.byteLen = doc.content.length;
+      }
+      doc.meta.dirty = false;
+      doc.meta.lastSavedAt = new Date().toISOString();
+      return doc as T;
+    }
+    case "set_document_content": {
+      const id = String(args?.id);
+      const doc = browserDocs.get(id);
+      if (doc && typeof args?.content === "string") {
+        doc.content = args.content;
+        doc.meta.dirty = true;
+        doc.meta.byteLen = doc.content.length;
+      }
+      return undefined as T;
+    }
+    case "history_list":
+      return [] as T;
+    case "history_push":
+      return {
+        id: crypto.randomUUID(),
+        createdAt: new Date().toISOString(),
+        label: args?.label ?? null,
+        contentHash: 0,
+        source: "manual",
+        byteLen: String(args?.content ?? "").length,
+        content: String(args?.content ?? ""),
+      } as T;
+    case "reload_document": {
+      const id = String(args?.id);
+      const doc = browserDocs.get(id);
+      if (!doc) throw new Error("document not open");
+      return doc as T;
+    }
+    case "write_file":
+    case "read_file":
+      return undefined as T;
+    default:
+      console.warn("[moraine browser stub] unhandled command:", cmd, args);
+      return undefined as T;
+  }
+}

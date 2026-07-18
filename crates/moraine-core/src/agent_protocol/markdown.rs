@@ -33,14 +33,7 @@ pub fn extract_human_notes(markdown: &str) -> Result<String> {
         let after = &markdown[idx + HUMAN_MARKER.len()..];
         return Ok(after.to_string());
     }
-    // Heading at start of file
-    if markdown.starts_with(HUMAN_NOTES_HEADING) {
-        let rest = markdown[HUMAN_NOTES_HEADING.len()..]
-            .strip_prefix('\n')
-            .unwrap_or("");
-        return Ok(rest.to_string());
-    }
-    // Heading without preceding newline (unlikely)
+    // Heading at BOF or without the usual preceding blank line.
     if let Some(pos) = markdown.find(HUMAN_NOTES_HEADING) {
         let after = &markdown[pos + HUMAN_NOTES_HEADING.len()..];
         let after = after.strip_prefix('\n').unwrap_or(after);

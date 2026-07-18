@@ -13,9 +13,10 @@ High-level direction only. Details live in [VISION.md](./VISION.md) and [ARCHITE
 * Optional in-memory live relay
 * Docs positioned as a review ledger for agent work
 
-## Next (polish hindsight review)
+## Next (v0.3 durable annotations, in progress)
 
-* Stronger annotation durability and rehydration
+* Operation-based annotation mutations (issue #2)
+* Stronger annotation rehydration / anchors (follow-on issues)
 * Clearer run-record conventions for agents (templates, examples)
 * Evidence pointers / capture helpers (still optional)
 * Keep CI green

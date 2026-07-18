@@ -24,6 +24,8 @@ function sample(
     createdAt: "2020-01-01T00:00:00.000Z",
     resolved,
     kind,
+    revision: 1,
+    disposition: kind === "suggestion" ? (resolved ? "resolved_legacy" : "pending") : null,
   };
 }
 

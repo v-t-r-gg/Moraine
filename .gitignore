@@ -33,3 +33,6 @@ coverage
 # (project run records under .moraine/runs are committed intentionally)
 .moraine/*.tmp
 .moraine/**/*.lock
+
+# Local ledger noise next to tracked docs (do not commit locks)
+*.moraine.json.lock

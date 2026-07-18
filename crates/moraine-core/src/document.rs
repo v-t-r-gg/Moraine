@@ -28,6 +28,9 @@ pub struct DocumentMeta {
 pub struct DocumentSnapshot {
     pub meta: DocumentMeta,
     pub content: String,
+    /// SHA-256 of exact UTF-8 content bytes (same as run ledger content hash).
+    #[serde(default)]
+    pub content_hash: String,
 }
 
 #[derive(Debug, Clone)]
@@ -185,6 +188,7 @@ impl Document {
         DocumentSnapshot {
             meta: self.meta.clone(),
             content: self.content.clone(),
+            content_hash: crate::run_meta::content_hash(&self.content),
         }
     }
 

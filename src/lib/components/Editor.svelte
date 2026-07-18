@@ -122,6 +122,40 @@
     return getMarkdown(editor);
   }
 
+  export type ViewportState = {
+    scrollTop: number;
+    selectionFrom: number | null;
+    selectionTo: number | null;
+  };
+
+  export function getViewportState(): ViewportState {
+    const scrollEl = element?.closest(".moraine-scroll") as HTMLElement | null;
+    const sel = editor?.state.selection;
+    return {
+      scrollTop: scrollEl?.scrollTop ?? 0,
+      selectionFrom: sel?.from ?? null,
+      selectionTo: sel?.to ?? null,
+    };
+  }
+
+  export function restoreViewportState(state: ViewportState) {
+    const scrollEl = element?.closest(".moraine-scroll") as HTMLElement | null;
+    if (scrollEl) {
+      const max = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+      scrollEl.scrollTop = Math.min(state.scrollTop, max);
+    }
+    if (editor && state.selectionFrom != null && state.selectionTo != null) {
+      const maxPos = editor.state.doc.content.size;
+      const from = Math.min(state.selectionFrom, maxPos);
+      const to = Math.min(state.selectionTo, maxPos);
+      try {
+        editor.commands.setTextSelection({ from, to });
+      } catch {
+        /* selection no longer valid */
+      }
+    }
+  }
+
   export function getSelectionQuote(): string | null {
     if (!editor || editor.state.selection.empty) return null;
     const { from, to } = editor.state.selection;

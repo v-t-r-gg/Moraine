@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 3,
+  "run": {
+    "id": "3ab327c0-0e80-49cc-bffd-426be3887329",
+    "createdAt": "2026-07-18T03:53:54.210068480Z",
+    "updatedAt": "2026-07-18T05:17:10.762277931Z"
+  },
+  "decisions": [
+    {
+      "id": "b213edb7-f992-4095-a22f-ec1c428572a9",
+      "decision": "approved",
+      "reviewerLabel": "v-t-r-gg",
+      "reason": "Reviewed PR #3 at implementation head e548a71. Annotation concurrency, durable suggestion outcomes, two-phase acceptance, watcher handling, conflict behavior, and recovery passed manual validation. Version-history UX quirks are tracked separately.",
+      "createdAt": "2026-07-18T05:17:10.762276291Z",
+      "contentHash": "fbe23f63965374bc0a686fbbddf9565c3739bd4016613a1bc402c83adc721a53"
+    }
+  ],
+  "comments": []
+}

@@ -19,7 +19,8 @@ use crate::comments::{comments_sidecar_path, CommentRecord, CommentsFile};
 use crate::error::{Error, Result};
 
 /// Current sidecar schema. Unknown greater versions are rejected.
-pub const SCHEMA_VERSION: u32 = 2;
+/// v3: suggestion disposition + two-phase acceptance fields.
+pub const SCHEMA_VERSION: u32 = 3;
 
 pub fn moraine_sidecar_path(md_path: &Path) -> PathBuf {
     let mut s = md_path.as_os_str().to_os_string();
@@ -209,14 +210,28 @@ fn review_snapshot_init(meta: &RunMeta, markdown: &str, initialized: bool) -> Re
 }
 
 fn parse_meta_raw(raw: &str) -> Result<RunMeta> {
-    let meta: RunMeta = serde_json::from_str(raw)?;
+    let mut meta: RunMeta = serde_json::from_str(raw)?;
     if meta.schema_version > SCHEMA_VERSION {
         return Err(Error::other(format!(
             "unsupported moraine sidecar schema version {} (max {})",
             meta.schema_version, SCHEMA_VERSION
         )));
     }
+    // Normalize comment compatibility fields in memory (disposition defaults).
+    for c in &mut meta.comments {
+        c.normalize_compat();
+    }
     Ok(meta)
+}
+
+/// Ensure written ledger uses current schema version after in-memory migration.
+pub(crate) fn promote_schema(meta: &mut RunMeta) {
+    if meta.schema_version < SCHEMA_VERSION {
+        meta.schema_version = SCHEMA_VERSION;
+    }
+    for c in &mut meta.comments {
+        c.normalize_compat();
+    }
 }
 
 fn read_moraine_file(path: &Path) -> Result<RunMeta> {
@@ -259,7 +274,7 @@ pub fn status_snapshot(md_path: &Path) -> Result<ReviewSnapshot> {
 
 /// Load meta for mutation paths: prefer `.moraine.json`; migrate legacy under caller-held lock.
 /// Does not create a new ledger when nothing exists (use `ensure_run_meta`).
-fn load_or_migrate_locked(md_path: &Path) -> Result<RunMeta> {
+pub(crate) fn load_or_migrate_locked(md_path: &Path) -> Result<RunMeta> {
     let path = moraine_sidecar_path(md_path);
     if path.exists() {
         let meta = read_moraine_file(&path)?;
@@ -346,14 +361,16 @@ pub fn ensure_run_meta(md_path: &Path) -> Result<RunMeta> {
 }
 
 /// Write ledger without taking a lock (caller must hold `SidecarLock`).
-fn write_run_meta_unlocked(md_path: &Path, meta: &RunMeta) -> Result<()> {
+pub(crate) fn write_run_meta_unlocked(md_path: &Path, meta: &RunMeta) -> Result<()> {
+    let mut meta = meta.clone();
+    promote_schema(&mut meta);
     let path = moraine_sidecar_path(md_path);
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent)?;
         }
     }
-    let raw = serde_json::to_string_pretty(meta)?;
+    let raw = serde_json::to_string_pretty(&meta)?;
     write_atomic(&path, raw.as_bytes())
 }
 
@@ -402,19 +419,11 @@ pub fn record_decision(
     Ok((meta, recorded, snap))
 }
 
-/// Replace annotations under lock (re-read after lock).
+/// **Deprecated.** Full-list replacement is not safe for concurrent writers.
+/// Use [`crate::annotation_ops`] or [`crate::annotation_ops::reconcile_session_annotations`].
+#[deprecated(note = "use annotation_ops instead of full-list annotation replacement")]
 pub fn set_comments_and_save(md_path: &Path, comments: Vec<CommentRecord>) -> Result<RunMeta> {
-    let side = moraine_sidecar_path(md_path);
-    let _lock = SidecarLock::acquire(&side)?;
-    let mut meta = match load_or_migrate_locked(md_path) {
-        Ok(m) => m,
-        Err(_) if !side.exists() && !comments_sidecar_path(md_path).exists() => RunMeta::new_run(),
-        Err(e) => return Err(e),
-    };
-    meta.comments = comments;
-    meta.touch();
-    write_run_meta_unlocked(md_path, &meta)?;
-    Ok(meta)
+    crate::annotation_ops::import_missing_annotations(md_path, &comments)
 }
 
 pub fn comments_from_meta(meta: &RunMeta) -> CommentsFile {
@@ -534,15 +543,13 @@ mod tests {
         let md = dir.path().join("both.md");
         fs::write(&md, "x\n").unwrap();
         let mut meta = RunMeta::new_run();
-        meta.comments.push(CommentRecord {
-            id: Uuid::new_v4(),
-            body: "from-moraine".into(),
-            author: "A".into(),
-            quote: "x".into(),
-            created_at: Utc::now(),
-            resolved: false,
-            kind: crate::AnnotationKind::Comment,
-        });
+        meta.comments.push(CommentRecord::new(
+            Uuid::new_v4(),
+            "from-moraine",
+            "A",
+            "x",
+            crate::AnnotationKind::Comment,
+        ));
         write_run_meta(&md, &meta).unwrap();
         let legacy = comments_sidecar_path(&md);
         fs::write(
@@ -731,7 +738,7 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_comment_updates_no_torn_json() {
+    fn concurrent_comment_creates_via_ops() {
         let dir = tempdir().unwrap();
         let md = dir.path().join("ann.md");
         fs::write(&md, "t\n").unwrap();
@@ -742,51 +749,38 @@ mod tests {
         let b1 = barrier.clone();
         let b2 = barrier;
 
-        // Full-list replace is host semantics; lock prevents torn writes. Append under lock
-        // so concurrent hosts both contribute rather than silent last-writer-wins loss.
         let t1 = thread::spawn(move || {
             b1.wait();
             for i in 0..20 {
-                let side = moraine_sidecar_path(&md1);
-                let _lock = crate::atomic::SidecarLock::acquire(&side).unwrap();
-                let mut meta = load_or_migrate_locked(&md1).unwrap();
-                meta.comments.push(CommentRecord {
-                    id: Uuid::new_v4(),
-                    body: format!("w1-{i}"),
-                    author: "W1".into(),
-                    quote: "t".into(),
-                    created_at: Utc::now(),
-                    resolved: false,
-                    kind: crate::AnnotationKind::Comment,
-                });
-                meta.touch();
-                write_run_meta_unlocked(&md1, &meta).unwrap();
+                crate::annotation_ops::create_annotation(
+                    &md1,
+                    Uuid::new_v4(),
+                    format!("w1-{i}"),
+                    "W1",
+                    "t",
+                    crate::AnnotationKind::Comment,
+                )
+                .unwrap();
             }
         });
         let t2 = thread::spawn(move || {
             b2.wait();
             for i in 0..20 {
-                let side = moraine_sidecar_path(&md2);
-                let _lock = crate::atomic::SidecarLock::acquire(&side).unwrap();
-                let mut meta = load_or_migrate_locked(&md2).unwrap();
-                meta.comments.push(CommentRecord {
-                    id: Uuid::new_v4(),
-                    body: format!("w2-{i}"),
-                    author: "W2".into(),
-                    quote: "t".into(),
-                    created_at: Utc::now(),
-                    resolved: false,
-                    kind: crate::AnnotationKind::Comment,
-                });
-                meta.touch();
-                write_run_meta_unlocked(&md2, &meta).unwrap();
+                crate::annotation_ops::create_annotation(
+                    &md2,
+                    Uuid::new_v4(),
+                    format!("w2-{i}"),
+                    "W2",
+                    "t",
+                    crate::AnnotationKind::Comment,
+                )
+                .unwrap();
             }
         });
         t1.join().unwrap();
         t2.join().unwrap();
         let meta = load_run_meta_readonly(&md).unwrap().unwrap();
         assert_eq!(meta.comments.len(), 40);
-        // Valid round-trip
         let _ = serde_json::to_string(&meta).unwrap();
     }
 }

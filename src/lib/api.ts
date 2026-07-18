@@ -92,14 +92,164 @@ export interface CommentDto {
   createdAt: string;
   resolved: boolean;
   kind?: string;
+  revision?: number;
+  disposition?: string | null;
+  acceptanceOpId?: string | null;
+  acceptanceBaseHash?: string | null;
+  acceptanceStartedAt?: string | null;
+  appliedContentHash?: string | null;
+  acceptanceCompletedAt?: string | null;
+}
+
+export interface AnnotationOpDto {
+  annotation: CommentDto;
+  comments: CommentDto[];
+  runId: string;
+}
+
+export interface BeginAcceptDto {
+  annotation: CommentDto;
+  comments: CommentDto[];
+  runId: string;
+  acceptanceOpId: string;
+  baseContentHash: string;
+}
+
+export interface ReconcileDto {
+  comments: CommentDto[];
+  created: number;
+  updated: number;
+  conflicts: {
+    annotationId: string;
+    expectedRevision: number;
+    actualRevision: number;
+    message: string;
+  }[];
+  runId: string;
 }
 
 export async function loadComments(path: string): Promise<CommentDto[]> {
   return invoke("load_comments", { path });
 }
 
-export async function saveComments(path: string, comments: CommentDto[]): Promise<void> {
-  return invoke("save_comments", { path, comments });
+export async function createAnnotation(
+  path: string,
+  id: string,
+  body: string,
+  author: string,
+  quote: string,
+  kind: string,
+): Promise<AnnotationOpDto> {
+  return invoke("create_annotation_cmd", { path, id, body, author, quote, kind });
+}
+
+export async function updateAnnotation(
+  path: string,
+  id: string,
+  expectedRevision: number,
+  body?: string | null,
+  author?: string | null,
+): Promise<AnnotationOpDto> {
+  return invoke("update_annotation_cmd", {
+    path,
+    id,
+    expectedRevision,
+    body: body ?? null,
+    author: author ?? null,
+  });
+}
+
+export async function resolveAnnotation(
+  path: string,
+  id: string,
+  expectedRevision: number,
+): Promise<AnnotationOpDto> {
+  return invoke("resolve_annotation_cmd", { path, id, expectedRevision });
+}
+
+export async function reopenAnnotation(
+  path: string,
+  id: string,
+  expectedRevision: number,
+): Promise<AnnotationOpDto> {
+  return invoke("reopen_annotation_cmd", { path, id, expectedRevision });
+}
+
+export async function beginAcceptSuggestion(
+  path: string,
+  id: string,
+  expectedRevision: number,
+  expectedContentHash: string,
+): Promise<BeginAcceptDto> {
+  return invoke("begin_accept_suggestion_cmd", {
+    path,
+    id,
+    expectedRevision,
+    expectedContentHash,
+  });
+}
+
+export async function completeAcceptSuggestion(
+  path: string,
+  id: string,
+  expectedRevision: number,
+  acceptanceOpId: string,
+  expectedSavedHash: string,
+): Promise<AnnotationOpDto> {
+  return invoke("complete_accept_suggestion_cmd", {
+    path,
+    id,
+    expectedRevision,
+    acceptanceOpId,
+    expectedSavedHash,
+  });
+}
+
+export async function cancelAcceptSuggestion(
+  path: string,
+  id: string,
+  expectedRevision: number,
+  acceptanceOpId: string,
+): Promise<AnnotationOpDto> {
+  return invoke("cancel_accept_suggestion_cmd", {
+    path,
+    id,
+    expectedRevision,
+    acceptanceOpId,
+  });
+}
+
+export interface AcceptanceRecoveryDto {
+  annotationId: string;
+  disposition: string;
+  revision: number;
+  acceptanceOpId: string | null;
+  baseContentHash: string | null;
+  currentContentHash: string;
+  cancelSafe: boolean;
+}
+
+export async function getAcceptanceRecoveryStatus(
+  path: string,
+  id: string,
+): Promise<AcceptanceRecoveryDto> {
+  return invoke("acceptance_recovery_status_cmd", { path, id });
+}
+
+export async function rejectSuggestion(
+  path: string,
+  id: string,
+  expectedRevision: number,
+): Promise<AnnotationOpDto> {
+  return invoke("reject_suggestion_cmd", { path, id, expectedRevision });
+}
+
+/** Host Save: merge live-session annotations without full-list replace or deletes. */
+export async function reconcileSessionAnnotations(
+  path: string,
+  comments: CommentDto[],
+): Promise<ReconcileDto> {
+  return invoke("reconcile_session_annotations_cmd", { path, comments });
 }
 
 export interface DecisionDto {
@@ -201,6 +351,12 @@ function browserStub<T>(cmd: string, args?: Record<string, unknown>): T {
       if (existing) return existing as T;
       const id = crypto.randomUUID();
       const title = path.split(/[/\\]/).pop() ?? "untitled.md";
+      const content =
+        "# Agent run record (browser stub)\n\n" +
+        "Browser-only mode has no real host disk. Use the **Tauri** desktop app for file I/O and sidecar persistence.\n\n" +
+        "- Open a real run-record path in desktop via `MORAINE_OPEN` or Open\n" +
+        "- **Comment** / **Suggest** for human review\n" +
+        "- Live share needs `moraine-server` and `?room=`\n";
       const snap: DocumentSnapshot = {
         meta: {
           id,
@@ -209,16 +365,11 @@ function browserStub<T>(cmd: string, args?: Record<string, unknown>): T {
           dirty: false,
           lastSavedAt: new Date().toISOString(),
           lastModifiedOnDisk: null,
-          byteLen: 0,
+          byteLen: content.length,
         },
-        content:
-          "# Agent run record (browser stub)\n\n" +
-          "Browser-only mode has no real host disk. Use the **Tauri** desktop app for file I/O and sidecar persistence.\n\n" +
-          "- Open a real run-record path in desktop via `MORAINE_OPEN` or Open\n" +
-          "- **Comment** / **Suggest** for human review\n" +
-          "- Live share needs `moraine-server` and `?room=`\n",
+        content,
+        contentHash: "0".repeat(64),
       };
-      snap.meta.byteLen = snap.content.length;
       browserDocs.set(id, snap);
       return snap as T;
     }
@@ -232,6 +383,7 @@ function browserStub<T>(cmd: string, args?: Record<string, unknown>): T {
       }
       doc.meta.dirty = false;
       doc.meta.lastSavedAt = new Date().toISOString();
+      doc.contentHash = "0".repeat(64);
       return doc as T;
     }
     case "set_document_content": {
@@ -267,8 +419,86 @@ function browserStub<T>(cmd: string, args?: Record<string, unknown>): T {
       return undefined as T;
     case "load_comments":
       return [] as T;
-    case "save_comments":
-      return undefined as T;
+    case "create_annotation_cmd":
+    case "update_annotation_cmd":
+    case "resolve_annotation_cmd":
+    case "reopen_annotation_cmd":
+    case "reject_suggestion_cmd":
+    case "complete_accept_suggestion_cmd":
+    case "cancel_accept_suggestion_cmd": {
+      const id = String(args?.id ?? crypto.randomUUID());
+      const kind = String(args?.kind ?? "comment");
+      const expected = Number(args?.expectedRevision ?? 0);
+      const isSug = kind === "suggestion" || cmd.includes("accept") || cmd.includes("reject");
+      let disposition: string | null = isSug ? "pending" : null;
+      let resolved = false;
+      if (cmd === "reject_suggestion_cmd") {
+        disposition = "rejected";
+        resolved = true;
+      }
+      if (cmd === "complete_accept_suggestion_cmd") {
+        disposition = "accepted";
+        resolved = true;
+      }
+      if (cmd === "resolve_annotation_cmd") resolved = true;
+      const ann = {
+        id,
+        body: String(args?.body ?? ""),
+        author: String(args?.author ?? "You"),
+        quote: String(args?.quote ?? ""),
+        createdAt: new Date().toISOString(),
+        resolved,
+        kind: isSug ? "suggestion" : "comment",
+        revision: cmd === "create_annotation_cmd" ? 1 : expected + 1 || 1,
+        disposition,
+      };
+      return {
+        annotation: ann,
+        comments: [ann],
+        runId: "00000000-0000-4000-8000-000000000000",
+      } as T;
+    }
+    case "begin_accept_suggestion_cmd": {
+      const id = String(args?.id ?? crypto.randomUUID());
+      const expected = Number(args?.expectedRevision ?? 0);
+      const ann = {
+        id,
+        body: "",
+        author: "You",
+        quote: "",
+        createdAt: new Date().toISOString(),
+        resolved: false,
+        kind: "suggestion",
+        revision: expected + 1 || 1,
+        disposition: "accepting",
+        acceptanceOpId: crypto.randomUUID(),
+      };
+      return {
+        annotation: ann,
+        comments: [ann],
+        runId: "00000000-0000-4000-8000-000000000000",
+        acceptanceOpId: ann.acceptanceOpId,
+        baseContentHash: String(args?.expectedContentHash ?? "0".repeat(64)),
+      } as T;
+    }
+    case "acceptance_recovery_status_cmd":
+      return {
+        annotationId: String(args?.id ?? ""),
+        disposition: "accepting",
+        revision: 2,
+        acceptanceOpId: crypto.randomUUID(),
+        baseContentHash: "0".repeat(64),
+        currentContentHash: "0".repeat(64),
+        cancelSafe: true,
+      } as T;
+    case "reconcile_session_annotations_cmd":
+      return {
+        comments: (args?.comments as CommentDto[]) ?? [],
+        created: 0,
+        updated: 0,
+        conflicts: [],
+        runId: "00000000-0000-4000-8000-000000000000",
+      } as T;
     case "comments_sidecar_path_cmd":
       return `${args?.path ?? ""}.moraine.json` as T;
     case "get_run_review":

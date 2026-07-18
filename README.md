@@ -74,6 +74,8 @@ Verified commands (from current CLI):
 ```bash
 moraine info [--json]
 moraine status [path|room] [--json|--human]   # JSON default
+moraine init <path> [--json]
+moraine decide <path> --decision <kind> --reviewer <label> [--reason TEXT] [--expected-hash HEX] [--json]
 moraine share <path> [--start] [--json] [--open] [--ui URL] [--server URL]
 moraine join <url|room> [--json] [--no-open]
 moraine cat <path>
@@ -84,17 +86,22 @@ moraine restore <path> <entry-id> [--write]
 moraine watch <path>
 ```
 
+Decision kinds: `approved`, `changes_requested`, `rejected`.
+
 Exit codes: `0` ok, `1` error, `2` not found, `3` relay down.  
-With `--json` on share/status/info/join, failures are also JSON: `{"ok":false,"error":"…","code":N}`.
+With `--json` on share/status/info/join/decide, failures are also JSON: `{"ok":false,"error":"…","code":N}`.
 
 ```bash
 # Machine-friendly share
 moraine share run-record.md --json
 # -> ok, path, room, url, ws, server
 
-# Review counts from sidecar (not live peers)
+# Run review status (run id, content hash, decision state, annotation counts)
 moraine status run-record.md
-# -> room, joinUrl, relay.ok, annotations.suggestionsOpen, …
+# -> room, run.id, run.contentHash, run.reviewState, review.latestDecision, …
+
+# Record a run-level decision bound to the current Markdown revision
+moraine decide run-record.md --decision approved --reviewer "Ada" --json
 
 # URL only for another tool
 moraine join doc_abc123 --json --no-open
@@ -108,7 +115,7 @@ There is **no** `moraine run` command. Agents write Markdown with `write`, ordin
 2. Open a run record (dialog, `MORAINE_OPEN`, or join `?room=`).
 3. Read the narrative. Select text → **Comment** or **Suggest**.
 4. **Review** sidebar: resolve comments; Accept/Reject suggestions.
-5. **Save** as host: writes `.md` and `file.md.comments.json`.
+5. **Save** as host: writes `.md` and `file.md.moraine.json` (annotations + decisions).
 6. Reopen later for hindsight; marks rehydrate from quote text when the text still matches.
 
 Host save: autosave when solo; paused when remote peers are present; explicit Save always.
@@ -125,6 +132,31 @@ Host save: autosave when solo; paused when remote peers are present; explicit Sa
 
 Live multiplayer is a convenience, not the main differentiation.
 
+## Run-level review decisions (v0.2 / v0.2.1)
+
+Besides comments/suggestions on selections, a human can record a **run-level** decision for the whole **saved** Markdown revision:
+
+* `approved` / `changes_requested` / `rejected`
+* Bound to a **content hash** (SHA-256 of exact UTF-8 Markdown bytes; no line-ending normalization)
+* Stored append-only in `file.md.moraine.json` with a stable **run ID**
+* Decisions apply only to **persisted** Markdown. The desktop UI disables Approve / Request changes / Reject while the editor is dirty.
+* If the Markdown changes later, the decision stays but is reported as **stale** until a new decision is recorded
+* Concurrent ledger writers take a per-file lock and re-read before mutating. Sidecar writes use temp-file + replace (no truncate fallback).
+
+```bash
+# status is read-only (does not create .moraine.json)
+moraine status run.md --json
+# run.initialized may be false until:
+moraine init run.md --json
+
+moraine decide run.md --decision approved --reviewer "Ada" --reason "verified steps" --json
+# optional: --expected-hash <sha256> rejects if disk content differs (revision_conflict)
+```
+
+Desktop: **Run review** bar (Approve / Request changes / Reject). This is separate from accepting a text **suggestion**. Save before deciding. External disk edits surface a conflict before Save/Decide.
+
+Legacy `file.md.comments.json` is migrated into `.moraine.json` on **init**, **decide**, desktop open, or comment save (not on `status`). After a successful migration the legacy file is renamed to `file.md.comments.json.migrated`.
+
 ## Current status and limitations
 
 Early-stage MVP. Useful for local experiments and dogfooding, not a production multi-tenant service.
@@ -133,10 +165,11 @@ Early-stage MVP. Useful for local experiments and dogfooding, not a production m
 |------|--------|
 | Auth | None on relay or files |
 | Relay | In-memory, local-oriented, no durable server state |
-| Reviewer identity | Display name only (local/random in UI) |
+| Reviewer identity | User-provided label only (not authenticated) |
 | Evidence | Manual links in Markdown only |
 | Git | Not integrated (no auto-commit/PR) |
-| Annotations | Sidecar + best-effort mark rehydration |
+| Annotations | `.moraine.json` + best-effort mark rehydration |
+| Run decisions | Append-only; stale when content hash mismatches |
 | Concurrent external editors | Limited handling; host Save and dirty flags |
 | Security | Do not expose the relay to untrusted networks |
 | Production deploy | Not claimed |

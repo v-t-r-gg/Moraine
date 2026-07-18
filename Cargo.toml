@@ -32,6 +32,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 dirs = "6"
 walkdir = "2"
+sha2 = "0.10"
+hex = "0.4"
+fs4 = "0.13"
 
 [profile.release]
 lto = true

@@ -5,7 +5,7 @@
 The central object is an **agent run**, represented by a durable **run record**:
 
 * Markdown narrative (what happened)
-* Optional sidecar `*.md.comments.json` (comments and suggestions)
+* Structured ledger `*.md.moraine.json` (run id, revision-bound decisions, comments, suggestions)
 
 Live collaboration is optional infrastructure around that record. See [VISION.md](./VISION.md).
 
@@ -15,21 +15,21 @@ Live collaboration is optional infrastructure around that record. See [VISION.md
   Agents / scripts                      Humans
         |                                  |
    moraine CLI                        GUI (Tauri / web)
-   file ops, share, status            review, edit, Save
+   file ops, status, decide           review, edit, Save
         |                                  |
         +---------- moraine-core ----------+
                     |            |
-                run record    sidecar
-                 (.md)     (.md.comments.json)
+                run record    ledger
+                 (.md)     (.md.moraine.json)
                     |
              moraine-server (optional live relay)
 ```
 
 | Surface | Audience | Role |
 |---------|----------|------|
-| CLI | Agents, scripts | Create/inspect files, share room URL, status, local history helpers |
-| GUI | Humans | Open run records, Review (comments/suggestions), host Save |
-| `moraine-core` | Shared | Domain library: documents, history, watcher, rooms, share URLs, sidecar |
+| CLI | Agents, scripts | Create/inspect files, share room URL, status, decide, local history helpers |
+| GUI | Humans | Open run records, run-level decisions, comments/suggestions, host Save |
+| `moraine-core` | Shared | Domain library: documents, history, rooms, share URLs, run ledger |
 | `moraine-server` | Optional | In-memory Yjs WebSocket relay; no auth; no disk persistence |
 
 Core has no Tauri or Axum dependency.
@@ -38,7 +38,7 @@ Core has no Tauri or Axum dependency.
 
 | Piece | Role |
 |-------|------|
-| `moraine-core` | Run-record files, local history store, FS watcher, room ids, share helpers, annotation sidecar |
+| `moraine-core` | Run-record files, local history store, FS watcher, room ids, share helpers, run ledger |
 | `moraine-cli` | Terminal API for agents and humans |
 | `moraine-server` | Live Yjs relay only |
 | `src-tauri` | Desktop host shell (IPC, dialogs, watcher bridge) |
@@ -53,7 +53,7 @@ Agent or script
     -> moraine write / cat / ordinary filesystem
     -> Markdown run record (.md)
     -> optional human later opens same path
-    -> optional moraine status (sidecar counts, room id, relay health)
+    -> optional moraine status / decide (run id, content hash, review state)
 ```
 
 ### Live review flow
@@ -62,8 +62,8 @@ Agent or script
 Agent or human edits (file and/or GUI)
     -> optional moraine share -> join URL
     -> moraine-server (WS) + Yjs in GUI
-    -> human Review (comment / suggest / accept / reject)
-    -> host desktop Save -> .md + .md.comments.json
+    -> human Review (run decide / comment / suggest / accept / reject)
+    -> host desktop Save -> .md + .md.moraine.json
 ```
 
 Relay state is not durable. When the process exits, live rooms are gone; files remain.
@@ -71,10 +71,11 @@ Relay state is not durable. When the process exits, live rooms are gone; files r
 ### Hindsight review flow
 
 ```text
-Markdown + sidecar on disk
+Markdown + .moraine.json on disk
     -> open in GUI as host (or re-share later)
-    -> load sidecar into Yjs map
+    -> load ledger (run id, decisions, annotations) into UI / Yjs map
     -> rehydrate marks by quote search (best effort)
+    -> show current vs stale run-level decision from content hash
     -> human reviews without the original agent session
 ```
 
@@ -86,7 +87,8 @@ Markdown + sidecar on disk
 | Desktop / web editor | Humans | Review and edit run records |
 | Comments and suggestions | Humans | Structured review feedback; accept/reject text suggestions |
 | Markdown persistence | Agents and humans | Durable portable run narrative |
-| Sidecar metadata | Review tooling + humans | Annotations and resolved state |
+| Sidecar metadata | Review tooling + humans | Annotations + run ID + revision-bound decisions |
+| Run-level decisions | Humans | Approve / request changes / reject bound to content hash |
 | Live collaboration | Agents and humans | Optional concurrent review via relay |
 | Local history | Humans | Revisit local snapshots under data dir (not Git) |
 
@@ -95,9 +97,20 @@ Markdown + sidecar on disk
 | Store | What | Notes |
 |-------|------|--------|
 | `.md` file | Narrative | Source of truth for prose |
-| `.md.comments.json` | Comments/suggestions | Written by host GUI; merge on open |
+| `.md.moraine.json` | Run ledger | schema v2: run id, decisions[], comments[] |
+| `.md.comments.json` | Legacy annotations | Migrated into `.moraine.json` on load |
 | `~/.local/share/moraine/history` (typical) | Local edit snapshots | Separate from Git |
 | Yjs (memory / live) | Session collab state | Not a server-side durable store |
+
+Content hash: SHA-256 of exact UTF-8 Markdown bytes (no line-ending normalization).
+
+Ledger mutations (init, decide, annotation save, migration) take a per-document lock file (`*.moraine.json.lock`), re-read after lock, then write via unique temp file + replace. There is no direct truncate-and-rewrite fallback.
+
+`moraine status` is read-only. `moraine init` (or desktop open / decide) creates the ledger.
+
+Legacy migration: copy comments into `.moraine.json`, then rename `.comments.json` to `.comments.json.migrated`.
+
+Durability boundary: temp payload is `sync_all`'d before replace; directory fsync is best-effort on Unix. Not a full durability certification.
 
 One Markdown path maps to one live room id (stable hash of absolute path).
 
@@ -121,7 +134,7 @@ Also: no automatic evidence capture; no automatic Git commits; relay has no dura
 
 ## Future direction (not implemented)
 
-Possible later work: evidence capture, stronger run identity, structured approve/reject decisions, Git helpers, authenticated collab, multi-run review inbox, optional agent protocol adapters. Present as direction only.
+Possible later work: evidence capture, authenticated reviewer identity, Git helpers, authenticated collab, multi-run review inbox, optional agent protocol adapters. Present as direction only.
 
 ## Quality preference
 

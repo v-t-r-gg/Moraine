@@ -36,11 +36,17 @@ pub fn save_document(
     id: String,
     content: Option<String>,
     record_history: Option<bool>,
+    expected_content_hash: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<DocumentSnapshot, String> {
     let id = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     state
-        .save(id, content, record_history.unwrap_or(true))
+        .save(
+            id,
+            content,
+            record_history.unwrap_or(true),
+            expected_content_hash,
+        )
         .map_err(map_err)
 }
 

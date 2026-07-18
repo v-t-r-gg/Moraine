@@ -1,5 +1,5 @@
-//! Annotation sidecar next to a Markdown file (`note.md.comments.json`).
-//! Holds comments and suggestions (same list, `kind` field).
+//! Annotation types and legacy `*.md.comments.json` reader/writer.
+//! Prefer `run_meta` for the durable ledger; this module remains for migration.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 
 pub fn comments_sidecar_path(md_path: &Path) -> PathBuf {
     let mut s = md_path.as_os_str().to_os_string();
@@ -28,10 +28,8 @@ pub enum AnnotationKind {
 #[serde(rename_all = "camelCase")]
 pub struct CommentRecord {
     pub id: Uuid,
-    /// Comment body, or suggested replacement text when kind is Suggestion.
     pub body: String,
     pub author: String,
-    /// Selected original text (for suggestions: text to replace).
     pub quote: String,
     pub created_at: DateTime<Utc>,
     pub resolved: bool,
@@ -56,6 +54,10 @@ impl Default for CommentsFile {
 }
 
 pub fn read_comments_sidecar(md_path: &Path) -> Result<CommentsFile> {
+    // Prefer unified ledger when present (read-only; does not migrate).
+    if let Some(meta) = crate::run_meta::load_run_meta_readonly(md_path)? {
+        return Ok(crate::run_meta::comments_from_meta(&meta));
+    }
     let path = comments_sidecar_path(md_path);
     if !path.exists() {
         return Ok(CommentsFile::default());
@@ -66,18 +68,11 @@ pub fn read_comments_sidecar(md_path: &Path) -> Result<CommentsFile> {
 }
 
 pub fn write_comments_sidecar(md_path: &Path, file: &CommentsFile) -> Result<()> {
-    let path = comments_sidecar_path(md_path);
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
-        }
-    }
-    let raw = serde_json::to_string_pretty(file).map_err(Error::from)?;
-    fs::write(path, raw)?;
+    // Write into unified ledger (creates run id if needed).
+    crate::run_meta::set_comments_and_save(md_path, file.comments.clone())?;
     Ok(())
 }
 
-/// Merge by id: entries already in `into` win (live Yjs / peer state).
 pub fn merge_comments(into: &mut CommentsFile, from_disk: &CommentsFile) {
     for c in &from_disk.comments {
         if !into.comments.iter().any(|x| x.id == c.id) {
@@ -101,74 +96,26 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_suggestion_kind() {
+    fn write_goes_to_moraine_json() {
         let dir = tempdir().unwrap();
         let md = dir.path().join("a.md");
         fs::write(&md, "# a\n").unwrap();
-
         let id = Uuid::new_v4();
         let file = CommentsFile {
             version: 1,
             comments: vec![CommentRecord {
                 id,
-                body: "new text".into(),
+                body: "hi".into(),
                 author: "A".into(),
-                quote: "old".into(),
+                quote: "a".into(),
                 created_at: Utc::now(),
                 resolved: false,
-                kind: AnnotationKind::Suggestion,
+                kind: AnnotationKind::Comment,
             }],
         };
         write_comments_sidecar(&md, &file).unwrap();
+        assert!(crate::run_meta::moraine_sidecar_path(&md).exists());
         let loaded = read_comments_sidecar(&md).unwrap();
-        assert_eq!(loaded.comments[0].kind, AnnotationKind::Suggestion);
-        assert_eq!(loaded.comments[0].body, "new text");
-    }
-
-    #[test]
-    fn legacy_json_defaults_to_comment() {
-        let dir = tempdir().unwrap();
-        let md = dir.path().join("b.md");
-        fs::write(&md, "x").unwrap();
-        let path = comments_sidecar_path(&md);
-        fs::write(
-            &path,
-            r#"{"version":1,"comments":[{"id":"00000000-0000-4000-8000-000000000001","body":"hi","author":"A","quote":"q","createdAt":"2020-01-01T00:00:00Z","resolved":false}]}"#,
-        )
-        .unwrap();
-        let loaded = read_comments_sidecar(&md).unwrap();
-        assert_eq!(loaded.comments[0].kind, AnnotationKind::Comment);
-    }
-
-    #[test]
-    fn merge_keeps_live() {
-        let id = Uuid::new_v4();
-        let mut live = CommentsFile {
-            version: 1,
-            comments: vec![CommentRecord {
-                id,
-                body: "from yjs".into(),
-                author: "A".into(),
-                quote: "word".into(),
-                created_at: Utc::now(),
-                resolved: true,
-                kind: AnnotationKind::Comment,
-            }],
-        };
-        let disk = CommentsFile {
-            version: 1,
-            comments: vec![CommentRecord {
-                id,
-                body: "from disk".into(),
-                author: "A".into(),
-                quote: "word".into(),
-                created_at: Utc::now(),
-                resolved: false,
-                kind: AnnotationKind::Comment,
-            }],
-        };
-        merge_comments(&mut live, &disk);
-        assert_eq!(live.comments.len(), 1);
-        assert_eq!(live.comments[0].body, "from yjs");
+        assert_eq!(loaded.comments[0].body, "hi");
     }
 }

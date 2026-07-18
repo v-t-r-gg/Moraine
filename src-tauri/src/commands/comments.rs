@@ -81,7 +81,7 @@ pub fn save_comments(path: String, comments: Vec<CommentDto>) -> Result<(), Stri
 
 #[tauri::command]
 pub fn comments_sidecar_path_cmd(path: String) -> String {
-    moraine_core::comments_sidecar_path(PathBuf::from(path).as_path())
+    moraine_core::moraine_sidecar_path(PathBuf::from(path).as_path())
         .display()
         .to_string()
 }

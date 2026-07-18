@@ -1,61 +1,51 @@
 # Architecture
 
-Practical map of the repo as it stands. Prefer this over hunting through crates.
+## Product model
 
-## Crates and apps
+**One markdown file = one collab room.** Open multiple instances for multiple files. No in-app workspace/folder tree in core.
 
-| Piece | Role | Depends on |
-|-------|------|------------|
-| `moraine-core` | Pure domain: document I/O, history store, FS watcher, room ids, share URL helpers | std + small libs |
-| `moraine-cli` (`moraine`) | CLI for files, history, share, watch | core |
-| `moraine-server` | In-memory Yjs WebSocket relay | axum (not core) |
-| `src-tauri` (`moraine-app`) | Desktop shell: IPC, dialogs, watcher bridge | core + Tauri |
-| `src/` | SvelteKit UI: Tiptap, Yjs, comments, host-save policy | Tauri IPC or browser stubs |
+## Crates
 
-**Rule of thumb:** network protocol and process spawn stay out of core. Core must stay free of Tauri and Axum so CLI and tests stay light.
+| Piece | Role |
+|-------|------|
+| `moraine-core` | Files, history, watcher, room ids, share URLs, **comment sidecar** |
+| `moraine-cli` | CLI; thin relay health check; optional `--start` spawn only |
+| `moraine-server` | In-memory Yjs WebSocket relay (Axum) |
+| `src-tauri` | Desktop IPC shell |
+| `src/` | Svelte UI (Tiptap + Yjs) |
 
-```
-  browser / Tauri webview
-           |
-      Yjs (BroadcastChannel and/or WS)
-           |
-    moraine-server (optional relay)
-           |
-  Tauri IPC  <--->  moraine-core  <--->  .md files + history dir
-           |
-      moraine CLI
-```
+Core stays free of Tauri and Axum.
 
 ## Data flow
 
-1. **Open file (host desktop):** CLI or UI -> `open_document` -> core `Document` + history "open" snapshot -> Yjs session seeded from markdown.
-2. **Edit:** Tiptap + Yjs XmlFragment. Local tabs use BroadcastChannel. `?room=` / `?sync=` enable WS to `moraine-server`.
-3. **Host save:** Solo: debounced autosave. Peers present: pause autosave; explicit Save still writes. Peers leave: resume if dirty. See `src/lib/editor/hostSave.ts`.
-4. **Comments:** Inline mark `comment` in the collab doc + metadata in Yjs map `comments` (`src/lib/editor/comments.ts`). Syncs with the room; not written as separate JSON on disk yet.
-5. **Share:** `moraine share path` builds room id from absolute path (`room_id_for_path`), ensures relay (health + optional spawn + PID file under data dir), prints UI join URL.
+1. Host opens `.md` via Tauri IPC / CLI.
+2. Yjs session: `resolveSessionConfig` + `createYjsSession` in `yjsSession.ts` (BroadcastChannel and optional WS).
+3. Host save: autosave when solo; paused when remote peers present; explicit Save always writes.
+4. Comments: Yjs map `comments` + inline marks; host persists to `file.md.comments.json`.
+5. Share: print join URL; relay must already be up unless `moraine share --start`.
 
-## Room ids
+## Comment sidecar
 
-Same algorithm in Rust (`moraine_core::room`) and TS (`roomIdForPath`): Java-style hash over UTF-16 code units, `doc_{hex}`. Always hash the absolute path when possible.
+Path: `{markdown_path}.comments.json`  
+Example: `notes.md` -> `notes.md.comments.json`
 
-## Defaults
+Load on host open (merge into Yjs by id; live ids win). Write on host Save and on comment add/resolve.
 
-| Name | Value |
-|------|--------|
-| Relay HTTP | `http://127.0.0.1:3099` |
-| Relay WS | `ws://127.0.0.1:3099` |
-| UI (vite) | `http://localhost:1420` |
-| Join URL | `{ui}/?room={room}` |
+Marks are not rehydrated from sidecar (quote still shown in sidebar).
 
-## What deliberately is not here yet
+## Quality gate
 
-Auth, TLS, SQLite, Git, suggestion mode, multi-file workspaces, P2P.
+No new major feature until the last one has: persistence (if needed), 2–3 integration tests, and a manual dogfood pass. Prefer changes that make **single-file collab** better.
+
+## Non-goals (for now)
+
+Multi-file workspace, suggestion mode, Git, SQLite, auth, TLS, P2P, process supervisor for the relay.
 
 ## Tests
 
 ```bash
-cargo test -p moraine-core
-cargo test -p moraine-cli          # share_flow needs built moraine-server
-npm test                           # vitest: collab, hostSave, comments
 ./scripts/check.sh
+cargo test -p moraine-core
+cargo test -p moraine-cli
+npm test
 ```

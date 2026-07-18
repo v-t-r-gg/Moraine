@@ -3,6 +3,7 @@
     wordCount: number;
     charCount: number;
     collabPeers: number;
+    peerNames: string;
     roomId: string | null;
     autosavePaused: boolean;
     message: string | null;
@@ -12,6 +13,7 @@
     wordCount,
     charCount,
     collabPeers,
+    peerNames,
     roomId,
     autosavePaused,
     message,
@@ -28,11 +30,16 @@
     <span title="Yjs room">room:{roomId}</span>
   {/if}
   {#if collabPeers > 0}
-    <span class="text-ice-500">{collabPeers} peer{collabPeers === 1 ? "" : "s"}</span>
+    <span class="text-ice-500" title={peerNames || undefined}>
+      You + {collabPeers} other{collabPeers === 1 ? "" : "s"}
+      {#if peerNames}
+        ({peerNames})
+      {/if}
+    </span>
   {/if}
   {#if autosavePaused}
-    <span style="color: #f59e0b;" title="Disk autosave resumes when peers leave">
-      autosave paused
+    <span style="color: #f59e0b; font-weight: 600;">
+      Live collab: autosave paused
     </span>
   {/if}
   <span class="ml-auto truncate">{message ?? "Ready"}</span>

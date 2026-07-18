@@ -1,43 +1,25 @@
 import { describe, expect, it } from "vitest";
-import {
-  remotePeerCount,
-  shouldScheduleAutosave,
-  statusForPeerTransition,
-} from "./hostSave";
+import { canAutosave, remotePeerCount } from "./hostSave";
 
 describe("hostSave", () => {
-  it("autosaves only when host, dirty, solo", () => {
-    expect(
-      shouldScheduleAutosave({
-        isHost: true,
-        peerCount: 0,
-        dirty: true,
-        saving: false,
-      }),
-    ).toBe(true);
-    expect(
-      shouldScheduleAutosave({
-        isHost: true,
-        peerCount: 2,
-        dirty: true,
-        saving: false,
-      }),
-    ).toBe(false);
-    expect(
-      shouldScheduleAutosave({
-        isHost: false,
-        peerCount: 0,
-        dirty: true,
-        saving: false,
-      }),
-    ).toBe(false);
+  it("autosaves only when host, dirty, solo, not saving", () => {
+    expect(canAutosave(true, false, true, false)).toBe(true);
+    expect(canAutosave(true, true, true, false)).toBe(false);
+    expect(canAutosave(false, false, true, false)).toBe(false);
+    expect(canAutosave(true, false, false, false)).toBe(false);
+    expect(canAutosave(true, false, true, true)).toBe(false);
   });
 
-  it("peer status messages", () => {
-    expect(statusForPeerTransition(0, 1, true)).toMatch(/paused/);
-    expect(statusForPeerTransition(1, 0, true)).toMatch(/shortly/);
-    expect(statusForPeerTransition(1, 0, false)).toMatch(/autosave on/);
-    expect(statusForPeerTransition(1, 1, true)).toBeNull();
+  it("chaos peer toggles", () => {
+    let peers = 0;
+    const dirty = true;
+    const samples = [0, 1, 2, 0, 1, 0];
+    const can: boolean[] = [];
+    for (const p of samples) {
+      peers = p;
+      can.push(canAutosave(true, peers > 0, dirty, false));
+    }
+    expect(can).toEqual([true, false, false, true, false, true]);
   });
 
   it("remote peer count excludes self", () => {

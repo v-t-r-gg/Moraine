@@ -1,10 +1,12 @@
-//! CLI entry. Thin clap surface; logic lives in moraine-core + relay helpers.
+//! CLI entry. Fail-fast share unless `--start`.
 
 mod relay;
 
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -15,7 +17,7 @@ use moraine_core::{
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
-use relay::{ensure_relay, launch_desktop};
+use relay::{health_ok, launch_desktop, require_relay, try_spawn_server};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -51,26 +53,33 @@ enum Commands {
         path: PathBuf,
         #[arg(long, default_value_t = true)]
         create: bool,
-        /// Print share URL (and ensure the relay) before opening.
+        /// Print share URL (relay must be up) then open editor.
         #[arg(long)]
         share: bool,
     },
 
-    /// Print a collab join URL; starts moraine-server if needed.
+    /// Print collab join URL for a file (one file = one room).
     Share {
         path: PathBuf,
         #[arg(long, env = "MORAINE_UI_URL", default_value = DEFAULT_UI)]
         ui: String,
         #[arg(long, env = "MORAINE_SERVER_URL", default_value = DEFAULT_RELAY_HTTP)]
         server: String,
+        /// Spawn moraine-server once if health check fails.
         #[arg(long)]
-        no_start: bool,
-        #[arg(long)]
-        watch: bool,
-        #[arg(long)]
-        open: bool,
+        start: bool,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        open: bool,
+    },
+
+    /// Open a join URL or room id in the browser.
+    Join {
+        /// Full UI URL or bare room id (`doc_…`).
+        target: String,
+        #[arg(long, env = "MORAINE_UI_URL", default_value = DEFAULT_UI)]
+        ui: String,
     },
 
     History {
@@ -121,11 +130,11 @@ fn run() -> Result<()> {
             path,
             ui,
             server,
-            no_start,
-            watch,
-            open,
+            start,
             json,
-        } => cmd_share(path, ui, server, no_start, watch, open, json),
+            open,
+        } => cmd_share(path, ui, server, start, json, open),
+        Commands::Join { target, ui } => cmd_join(target, ui),
         Commands::History { path, json, limit } => cmd_history(path, json, limit),
         Commands::Restore {
             path,
@@ -180,10 +189,8 @@ fn cmd_write(path: PathBuf, content: Option<String>, history: bool) -> Result<()
             buf
         }
     };
-
     Document::write_file(&path, &body)
         .with_context(|| format!("failed to write {}", path.display()))?;
-
     if history {
         let paths = MorainePaths::default_ensure()?;
         HistoryStore::new(paths).push(
@@ -193,7 +200,6 @@ fn cmd_write(path: PathBuf, content: Option<String>, history: bool) -> Result<()
             Some("cli write".into()),
         )?;
     }
-
     eprintln!("wrote {} ({} bytes)", path.display(), body.len());
     Ok(())
 }
@@ -207,7 +213,6 @@ fn cmd_edit(path: PathBuf, create: bool, share: bool) -> Result<()> {
             bail!("file does not exist: {}", path.display());
         }
     }
-
     if share {
         cmd_share(
             path.clone(),
@@ -216,18 +221,14 @@ fn cmd_edit(path: PathBuf, create: bool, share: bool) -> Result<()> {
             false,
             false,
             false,
-            false,
         )?;
     }
-
     if launch_desktop(&path)? {
         return Ok(());
     }
-
     let editor = std::env::var("VISUAL")
         .or_else(|_| std::env::var("EDITOR"))
         .unwrap_or_else(|_| "nano".into());
-
     let status = Command::new(&editor)
         .arg(&path)
         .stdin(Stdio::inherit())
@@ -235,7 +236,6 @@ fn cmd_edit(path: PathBuf, create: bool, share: bool) -> Result<()> {
         .stderr(Stdio::inherit())
         .status()
         .with_context(|| format!("failed to launch editor `{editor}`"))?;
-
     if !status.success() {
         bail!("editor exited with {status}");
     }
@@ -246,17 +246,25 @@ fn cmd_share(
     path: PathBuf,
     ui: String,
     server: String,
-    no_start: bool,
-    watch: bool,
-    open: bool,
+    start: bool,
     json: bool,
+    open: bool,
 ) -> Result<()> {
     if !path.exists() {
         bail!("file does not exist: {}", path.display());
     }
-    ensure_relay(&server, !no_start)?;
+    if start && !health_ok(&server) {
+        try_spawn_server(&server)?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if health_ok(&server) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+    require_relay(&server)?;
     let links = share_links(&path, &ui, &server);
-
     if json {
         println!("{}", serde_json::to_string_pretty(&links)?);
     } else {
@@ -264,14 +272,29 @@ fn cmd_share(
         eprintln!("room   {}", links.room);
         eprintln!("file   {}", links.path);
         eprintln!("ws     {}", links.ws);
-        eprintln!("open the URL in a browser (npm run dev) or another client");
     }
-
     if open {
         launch_desktop(path.as_path())?;
     }
-    if watch {
-        cmd_watch(path)?;
+    Ok(())
+}
+
+fn cmd_join(target: String, ui: String) -> Result<()> {
+    let url = if target.starts_with("http://") || target.starts_with("https://") {
+        target
+    } else if target.starts_with("doc_") {
+        format!("{}/?room={target}", ui.trim_end_matches('/'))
+    } else {
+        bail!("expected a URL or room id (doc_…), got: {target}");
+    };
+    eprintln!("opening {url}");
+    let status = Command::new("xdg-open")
+        .arg(&url)
+        .status()
+        .or_else(|_| Command::new("open").arg(&url).status())
+        .with_context(|| "failed to open browser (tried xdg-open / open)")?;
+    if !status.success() {
+        bail!("browser open failed: {status}");
     }
     Ok(())
 }
@@ -280,7 +303,6 @@ fn cmd_history(path: PathBuf, json: bool, limit: usize) -> Result<()> {
     let paths = MorainePaths::default_ensure()?;
     let mut entries = HistoryStore::new(paths).list_meta(&path)?;
     entries.truncate(limit);
-
     if json {
         println!("{}", serde_json::to_string_pretty(&entries)?);
         return Ok(());
@@ -289,7 +311,6 @@ fn cmd_history(path: PathBuf, json: bool, limit: usize) -> Result<()> {
         println!("(no history for {})", path.display());
         return Ok(());
     }
-
     println!("{:<36}  {:<20}  {:>8}  SOURCE", "ID", "WHEN (UTC)", "BYTES");
     for e in entries {
         let when = e.created_at.format("%Y-%m-%d %H:%M:%S").to_string();
@@ -308,7 +329,6 @@ fn cmd_restore(path: PathBuf, entry_id: String, write: bool) -> Result<()> {
     let paths = MorainePaths::default_ensure()?;
     let store = HistoryStore::new(paths);
     let content = store.restore_content(&path, id)?;
-
     if write {
         Document::write_file(&path, &content)?;
         store.push(
@@ -329,11 +349,9 @@ fn cmd_restore(path: PathBuf, entry_id: String, write: bool) -> Result<()> {
 
 fn cmd_watch(path: PathBuf) -> Result<()> {
     use moraine_core::FileWatcher;
-
     let (watcher, rx) = FileWatcher::start()?;
     watcher.watch(&path)?;
     eprintln!("watching {} (Ctrl+C to stop)", path.display());
-
     for event in rx {
         println!("{:?}\t{}", event.change, event.path.display());
     }

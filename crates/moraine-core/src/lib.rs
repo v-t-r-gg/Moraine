@@ -1,14 +1,8 @@
 //! Shared library for CLI, desktop, and tests. No Tauri / Axum / UI deps.
 //!
-//! | Module    | Responsibility                          |
-//! |-----------|-----------------------------------------|
-//! | document  | Markdown file load/save                 |
-//! | history   | Local snapshot log                      |
-//! | watcher   | FS notify + debounce                    |
-//! | room      | Stable collab room ids from paths       |
-//! | share     | Share URL helpers (no network)          |
-//! | paths     | XDG data/config dirs                    |
+//! One markdown file = one collab room. No multi-file workspace in core.
 
+pub mod comments;
 pub mod document;
 pub mod error;
 pub mod history;
@@ -17,6 +11,10 @@ pub mod room;
 pub mod share;
 pub mod watcher;
 
+pub use comments::{
+    comments_sidecar_path, merge_comments, read_comments_sidecar, write_comments_sidecar,
+    CommentRecord, CommentsFile,
+};
 pub use document::{Document, DocumentId, DocumentMeta, DocumentSnapshot};
 pub use error::{Error, Result};
 pub use history::{HistoryEntry, HistoryStore};

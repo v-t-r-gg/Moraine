@@ -1,6 +1,5 @@
 /**
- * Yjs session: BroadcastChannel + optional WS to moraine-server.
- * Frames: JSON { type: update|awareness|sync-request, update?: number[] }.
+ * Single entry for collab: room resolution + Yjs session (BroadcastChannel / WS).
  */
 
 import * as Y from "yjs";
@@ -9,12 +8,13 @@ import {
   applyAwarenessUpdate,
   encodeAwarenessUpdate,
 } from "y-protocols/awareness";
-import { DEFAULT_SYNC_URL, collabFromLocation } from "./collab";
 
-export { roomIdForPath, collabFromLocation, DEFAULT_SYNC_URL } from "./collab";
-export type { CollabBootstrap } from "./collab";
+export const DEFAULT_SYNC_URL = "ws://127.0.0.1:3099";
 
-const CHANNEL_PREFIX = "moraine-yjs:";
+export interface SessionConfig {
+  roomId: string | null;
+  syncUrl: string | null;
+}
 
 export interface YjsSession {
   doc: Y.Doc;
@@ -28,6 +28,39 @@ export interface YjsSessionOptions {
   syncUrl?: string | null;
 }
 
+/** Same hash as moraine_core::room_id_for_str. */
+export function roomIdForPath(path: string): string {
+  let h = 0;
+  for (let i = 0; i < path.length; i++) {
+    h = (Math.imul(31, h) + path.charCodeAt(i)) | 0;
+  }
+  return `doc_${(h >>> 0).toString(16)}`;
+}
+
+/** Parse ?room= / ?sync= / VITE_MORAINE_SYNC_URL. */
+export function resolveSessionConfig(
+  search: string = typeof window !== "undefined" ? window.location.search : "",
+): SessionConfig {
+  const q = new URLSearchParams(search.startsWith("?") ? search : `?${search}`);
+  const roomId = q.get("room");
+  const sync = q.get("sync");
+
+  if (sync === "0" || sync === "off") {
+    return { roomId, syncUrl: null };
+  }
+  if (sync?.startsWith("ws")) {
+    return { roomId, syncUrl: sync };
+  }
+  if (sync === "1" || sync === "on" || roomId) {
+    return { roomId, syncUrl: DEFAULT_SYNC_URL };
+  }
+
+  const env = import.meta.env?.VITE_MORAINE_SYNC_URL as string | undefined;
+  if (env === "0" || env === "off") return { roomId, syncUrl: null };
+  if (env) return { roomId, syncUrl: env };
+  return { roomId, syncUrl: null };
+}
+
 export function createYjsSession(roomId: string, options: YjsSessionOptions = {}): YjsSession {
   const doc = new Y.Doc();
   const awareness = new Awareness(doc);
@@ -38,7 +71,7 @@ export function createYjsSession(roomId: string, options: YjsSessionOptions = {}
 
   const channel =
     typeof BroadcastChannel !== "undefined"
-      ? new BroadcastChannel(CHANNEL_PREFIX + roomId)
+      ? new BroadcastChannel(`moraine-yjs:${roomId}`)
       : null;
 
   let socket: WebSocket | null = null;
@@ -97,7 +130,7 @@ export function createYjsSession(roomId: string, options: YjsSessionOptions = {}
   }
 
   const syncUrl =
-    options.syncUrl !== undefined ? options.syncUrl : collabFromLocation().syncUrl;
+    options.syncUrl !== undefined ? options.syncUrl : resolveSessionConfig().syncUrl;
 
   if (syncUrl) {
     const base = syncUrl.replace(/\/$/, "");

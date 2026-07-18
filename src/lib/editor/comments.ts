@@ -44,3 +44,19 @@ export function removeComment(map: CommentMap, id: string): void {
 export function newCommentId(): string {
   return crypto.randomUUID();
 }
+
+/** Seed map from disk without overwriting live ids. */
+export function mergeDiskIntoMap(
+  map: CommentMap,
+  disk: CommentRecord[],
+): void {
+  for (const c of disk) {
+    if (!map.has(c.id)) {
+      map.set(c.id, c);
+    }
+  }
+}
+
+export function mapToList(map: CommentMap): CommentRecord[] {
+  return listComments(map, true);
+}

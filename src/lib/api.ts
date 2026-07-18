@@ -78,6 +78,23 @@ export async function readFile(path: string): Promise<string> {
   return invoke("read_file", { path });
 }
 
+export interface CommentDto {
+  id: string;
+  body: string;
+  author: string;
+  quote: string;
+  createdAt: string;
+  resolved: boolean;
+}
+
+export async function loadComments(path: string): Promise<CommentDto[]> {
+  return invoke("load_comments", { path });
+}
+
+export async function saveComments(path: string, comments: CommentDto[]): Promise<void> {
+  return invoke("save_comments", { path, comments });
+}
+
 export async function pickMarkdownFile(): Promise<string | null> {
   if (!isTauri) {
     return null;
@@ -149,7 +166,7 @@ function browserStub<T>(cmd: string, args?: Record<string, unknown>): T {
         },
         content:
           "# Welcome to Moraine\n\n" +
-          "Browser-only mode — open via **Tauri** for real file I/O.\n\n" +
+          "Browser-only mode: open via **Tauri** for real file I/O.\n\n" +
           "- Edit Markdown with the rich editor\n" +
           "- Toggle **Preview**\n" +
           "- Yjs powers local multi-tab collab simulation\n",
@@ -201,6 +218,12 @@ function browserStub<T>(cmd: string, args?: Record<string, unknown>): T {
     case "write_file":
     case "read_file":
       return undefined as T;
+    case "load_comments":
+      return [] as T;
+    case "save_comments":
+      return undefined as T;
+    case "comments_sidecar_path_cmd":
+      return `${args?.path ?? ""}.comments.json` as T;
     default:
       console.warn("[moraine browser stub] unhandled command:", cmd, args);
       return undefined as T;

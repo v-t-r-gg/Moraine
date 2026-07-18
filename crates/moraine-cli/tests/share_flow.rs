@@ -1,4 +1,4 @@
-//! Integration: share CLI against a live moraine-server (if binary is present).
+//! Integration: share CLI against a live moraine-server.
 
 use std::fs;
 use std::net::TcpStream;
@@ -21,19 +21,33 @@ fn cli_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_moraine"))
 }
 
-fn free_port_base() -> String {
-    // Prefer a high fixed port for tests; fall back if busy.
+fn free_bind() -> (String, String) {
     for port in [3199u16, 3299, 3399] {
-        if TcpStream::connect_timeout(
-            &format!("127.0.0.1:{port}").parse().unwrap(),
-            Duration::from_millis(50),
-        )
-        .is_err()
-        {
-            return format!("http://127.0.0.1:{port}");
+        let bind = format!("127.0.0.1:{port}");
+        if TcpStream::connect_timeout(&bind.parse().unwrap(), Duration::from_millis(50)).is_err() {
+            return (bind, format!("http://127.0.0.1:{port}"));
         }
     }
-    "http://127.0.0.1:3199".into()
+    ("127.0.0.1:3199".into(), "http://127.0.0.1:3199".into())
+}
+
+#[test]
+fn share_fails_when_relay_down() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("x.md");
+    fs::write(&path, "x\n").unwrap();
+    let out = Command::new(cli_bin())
+        .args([
+            "share",
+            path.to_str().unwrap(),
+            "--server",
+            "http://127.0.0.1:1",
+        ])
+        .output()
+        .expect("run share");
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("relay not reachable") || err.contains("start it"));
 }
 
 #[test]
@@ -43,11 +57,9 @@ fn share_json_with_running_server() {
         return;
     };
 
-    let base = free_port_base();
-    let bind = base.trim_start_matches("http://");
-
+    let (bind, base) = free_bind();
     let mut child = Command::new(&server)
-        .args(["--bind", bind])
+        .args(["--bind", &bind])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -71,7 +83,6 @@ fn share_json_with_running_server() {
             "share",
             path.to_str().unwrap(),
             "--json",
-            "--no-start",
             "--server",
             &base,
             "--ui",
@@ -91,5 +102,4 @@ fn share_json_with_running_server() {
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json");
     assert!(v["room"].as_str().unwrap().starts_with("doc_"));
     assert!(v["url"].as_str().unwrap().contains("room="));
-    assert!(v["ws"].as_str().unwrap().contains("/ws/"));
 }

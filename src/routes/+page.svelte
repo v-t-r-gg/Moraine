@@ -285,7 +285,7 @@ Review: Comment or Suggest on a selection. Sidecar: \`file.md.comments.json\`.
     try {
       await saveComments(doc.meta.path, list);
     } catch (e) {
-      status = `Comment save failed: ${e}`;
+      status = `error: could not write review sidecar (${e})`;
     }
   }
 
@@ -357,28 +357,48 @@ Review: Comment or Suggest on a selection. Sidecar: \`file.md.comments.json\`.
       }
       if (historyOpen) await refreshHistory();
     } catch (e) {
-      status = `Save failed: ${e}`;
+      status = `error: save failed (${e})`;
     } finally {
       saving = false;
     }
+  }
+
+  function previewQuote(q: string, max = 48): string {
+    const t = q.replace(/\s+/g, " ").trim();
+    return t.length <= max ? t : `${t.slice(0, max)}…`;
   }
 
   async function addAnnotation(kind: "comment" | "suggestion") {
     if (!session || !editorRef) return;
     const quote = editorRef.getSelectionQuote?.();
     if (!quote) {
-      status = kind === "suggestion" ? "Select text to suggest a change" : "Select text to comment";
+      status =
+        kind === "suggestion"
+          ? "Select text first, then Suggest"
+          : "Select text first, then Comment";
       return;
     }
-    const promptLabel = kind === "suggestion" ? "Suggested replacement" : "Comment";
-    const initial = kind === "suggestion" ? quote : "";
-    const body = window.prompt(promptLabel, initial);
-    if (body == null) return;
-    if (kind === "comment" && !body.trim()) return;
+
+    const body =
+      kind === "suggestion"
+        ? window.prompt(
+            `Suggest replacement for “${previewQuote(quote)}”\n(leave empty to delete that text)`,
+            quote,
+          )
+        : window.prompt(`Comment on “${previewQuote(quote)}”`, "");
+
+    if (body == null) {
+      status = "Cancelled";
+      return;
+    }
+    if (kind === "comment" && !body.trim()) {
+      status = "Comment text is empty";
+      return;
+    }
 
     const id = newCommentId();
     if (!editorRef.applyCommentMark?.(id, kind)) {
-      status = "Could not attach mark";
+      status = "Could not attach highlight";
       return;
     }
     upsertComment(commentsMap(session.doc), {
@@ -391,12 +411,19 @@ Review: Comment or Suggest on a selection. Sidecar: \`file.md.comments.json\`.
       kind,
     });
     commentsOpen = true;
-    status =
-      kind === "suggestion"
-        ? "Suggestion added"
-        : isTauri
-          ? "Comment added"
-          : "Comment added (session only)";
+    historyOpen = false;
+
+    const open = countPending(listComments(commentsMap(session.doc), true));
+    if (kind === "suggestion") {
+      status =
+        body.trim() === ""
+          ? `Suggestion added (delete “${previewQuote(quote)}”); ${open.suggestions} pending`
+          : `Suggestion added; ${open.suggestions} pending`;
+    } else {
+      status = isTauri
+        ? `Comment added; ${open.comments} open`
+        : `Comment added (browser: session only)`;
+    }
     if (isTauri) await persistComments();
   }
 
@@ -411,7 +438,7 @@ Review: Comment or Suggest on a selection. Sidecar: \`file.md.comments.json\`.
   async function reopenComment(id: string) {
     if (!session) return;
     setResolved(commentsMap(session.doc), id, false);
-    status = "Reopened";
+    status = "Thread reopened";
     if (isTauri) await persistComments();
   }
 
@@ -421,7 +448,7 @@ Review: Comment or Suggest on a selection. Sidecar: \`file.md.comments.json\`.
     if (!rec || rec.kind !== "suggestion") return;
     const ok = editorRef?.acceptSuggestion?.(id, rec.body, rec.quote) ?? false;
     if (!ok) {
-      status = "Could not apply suggestion (quoted text missing)";
+      status = "Accept failed: quoted text not found in document";
       orphanedMarkIds = [...new Set([...orphanedMarkIds, id])];
       return;
     }
@@ -429,7 +456,11 @@ Review: Comment or Suggest on a selection. Sidecar: \`file.md.comments.json\`.
     orphanedMarkIds = orphanedMarkIds.filter((x) => x !== id);
     dirty = true;
     scheduleSave();
-    status = "Suggestion accepted";
+    const left = countPending(listComments(commentsMap(session.doc), true)).suggestions;
+    status =
+      left > 0
+        ? `Suggestion accepted; ${left} still pending`
+        : "Suggestion accepted";
     if (isTauri) await persistComments();
   }
 
@@ -438,7 +469,11 @@ Review: Comment or Suggest on a selection. Sidecar: \`file.md.comments.json\`.
     editorRef?.clearCommentMark?.(id);
     setResolved(commentsMap(session.doc), id, true);
     orphanedMarkIds = orphanedMarkIds.filter((x) => x !== id);
-    status = "Suggestion rejected";
+    const left = countPending(listComments(commentsMap(session.doc), true)).suggestions;
+    status =
+      left > 0
+        ? `Suggestion rejected; ${left} still pending`
+        : "Suggestion rejected";
     if (isTauri) await persistComments();
   }
 

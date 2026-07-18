@@ -14,26 +14,15 @@ npm install
 ## Run
 
 ```bash
-# Relay (required for share)
+# Terminal A: collab relay
 cargo run -p moraine-server
-# or: npm run server
 
-# Share a file (fails clearly if relay is down)
+# Terminal B: share a file (prints join URL)
 cargo run -p moraine-cli -- share examples/welcome.md
-# optional: --start  (spawn relay once, then print URL)
-# optional: --json / --open
+# open http://localhost:1420/?room=doc_… after: npm run dev
 
-# Join in the browser
-npm run dev
-# open the printed http://localhost:1420/?room=doc_… URL
-
-# Desktop host
+# Desktop host (optional)
 npm run tauri:dev
-```
-
-```bash
-moraine join doc_abc123          # open room URL in browser
-moraine edit notes.md --share    # print URL (relay up) + open editor
 ```
 
 ## Host save
@@ -46,43 +35,71 @@ moraine edit notes.md --share    # print URL (relay up) + open editor
 
 ## Review (comments + suggestions)
 
-| Action | How |
-|--------|-----|
-| Comment | Select text -> **Comment** -> note |
-| Suggest | Select text -> **Suggest** -> replacement text |
-| Accept | **Review** sidebar -> Accept (applies replacement) |
-| Reject | **Review** sidebar -> Reject (drops mark only) |
+1. Select text in the editor.
+2. **Comment** (note) or **Suggest** (replacement; empty = delete that text).
+3. Open **Review**: resolve comments, or **Accept** / **Reject** suggestions.
+4. Host **Save** writes the doc and `file.md.comments.json`.
 
-Stored in the same Yjs map and sidecar (`file.md.comments.json`) with `kind: "comment" | "suggestion"`. Host Save still respects peer presence for the markdown file; suggestion accept marks the doc dirty and schedules autosave when solo.
+Accept applies the replacement and marks the doc dirty (autosave runs when solo). Reject drops the highlight only. On cold open, marks rehydrate from quote text; if the quote is gone, Review shows "quote not found".
 
-## CLI
+## Human + agent workflows
+
+### Human (GUI)
+
+```bash
+cargo run -p moraine-server
+cargo run -p moraine-cli -- share notes.md --open   # if desktop is built
+# or: npm run dev and open the printed ?room= URL in two tabs
+```
+
+In the UI: edit, Comment/Suggest, Review accept/reject, Save.
+
+### Agent / scripts (CLI)
+
+Exit codes: `0` ok, `1` error, `2` not found, `3` relay down.  
+With `--json`, errors are also JSON on stdout: `{"ok":false,"error":"…","code":3}`.
+
+```bash
+# Version + dirs
+moraine info --json
+
+# Path, room id, join URL, sidecar counts (default JSON)
+moraine status notes.md
+# {
+#   "ok": true,
+#   "room": "doc_…",
+#   "joinUrl": "http://localhost:1420/?room=doc_…",
+#   "relay": { "url": "http://127.0.0.1:3099", "ok": true },
+#   "annotations": { "suggestionsOpen": 1, "commentsOpen": 0, ... }
+# }
+moraine status notes.md --human
+
+# Share for another client (stdout URL, or full object with --json)
+moraine share notes.md --json
+moraine share notes.md --start --json   # spawn relay once if down
+
+# Join URL only (no browser)
+moraine join doc_abc123 --json --no-open
+```
+
+Status does not include live peer count (that is UI/Yjs only). It is safe for automation: room id, relay health, and review counts from the sidecar.
+
+## CLI cheat sheet
 
 ```bash
 moraine info [--json]
-moraine status [path|room] [--json|--human]   # default --json
+moraine status [path|room] [--json|--human]
 moraine share <path> [--start] [--json] [--open]
 moraine join <url|room> [--json] [--no-open]
-moraine cat|write|history|restore|watch|edit
+moraine edit <path> [--share]
+moraine cat|write|history|restore|watch
 ```
 
-### Agent / script notes
-
-Exit codes: `0` ok, `1` error, `2` not found, `3` relay down.
-
 ```bash
-# Share (stdout is URL; --json is structured)
-moraine share notes.md --json
-# {"ok":true,"path":"...","room":"doc_…","url":"...","ws":"..."}
-
-# Fail without relay
-moraine share notes.md --json; echo $?   # 3, {"ok":false,"error":"...","code":3}
-
-# Status from sidecar + room id (no live peer count)
-moraine status notes.md
-# annotations.suggestionsOpen, room, joinUrl, relay.ok
-
-# Join without opening a browser
-moraine join doc_abc --json --no-open
+moraine --help
+moraine status --help
+moraine share --help
+moraine join --help
 ```
 
 ## Checks
@@ -93,7 +110,7 @@ moraine join doc_abc --json --no-open
 
 ## Non-goals
 
-In-app multi-file workspace, auth, full suggestion mode (yet). Multiple terminals/instances cover multi-file.
+In-app multi-file workspace, auth, MCP server. Multiple terminals cover multi-file.
 
 ## License
 

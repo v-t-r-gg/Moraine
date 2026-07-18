@@ -62,7 +62,8 @@
   <div class="moraine-scroll flex-1 overflow-auto p-2">
     {#if visible.length === 0}
       <p class="px-2 text-xs" style="color: var(--muted);">
-        Select text, then Comment or Suggest.
+        Select text in the editor, then use Comment or Suggest. Accept applies a
+        suggestion; Reject discards it.
       </p>
     {:else}
       <ul class="space-y-2">

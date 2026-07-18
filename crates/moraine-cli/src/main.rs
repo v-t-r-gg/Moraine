@@ -31,7 +31,10 @@ const EXIT_RELAY: i32 = 3;
 #[command(
     name = "moraine",
     version,
-    about = "Moraine: local-first collaborative Markdown editor (CLI)"
+    about = "Moraine: local-first collaborative Markdown editor (CLI)",
+    long_about = "Work with plain .md files, share collab rooms, and inspect review sidecars.\n\
+                  Exit codes: 0 ok, 1 error, 2 not found, 3 relay down.\n\
+                  Prefer --json on share/status/info/join when calling from scripts."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -43,12 +46,19 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    /// Print version and data directories
     Info {
+        /// Machine-readable object on stdout
         #[arg(long)]
         json: bool,
     },
 
-    /// File / room / relay snapshot for scripts (no live peer list).
+    /// Snapshot path/room, relay health, and sidecar review counts
+    #[command(after_help = "Examples:\n  \
+        moraine status notes.md\n  \
+        moraine status notes.md --human\n  \
+        moraine status doc_abc123\n  \
+        moraine status")]
     Status {
         /// Markdown path or room id (`doc_…`). Omit for relay-only status.
         target: Option<String>,
@@ -56,17 +66,18 @@ enum Commands {
         server: String,
         #[arg(long, env = "MORAINE_UI_URL", default_value = DEFAULT_UI)]
         ui: String,
+        /// JSON on stdout (default). Use --human for lines.
         #[arg(long, default_value_t = true)]
         json: bool,
-        /// Human-readable lines instead of JSON.
+        /// Human-readable lines instead of JSON
         #[arg(long)]
         human: bool,
     },
 
-    Cat {
-        path: PathBuf,
-    },
+    /// Print file contents
+    Cat { path: PathBuf },
 
+    /// Write content or stdin to a file
     Write {
         path: PathBuf,
         #[arg(long, short)]
@@ -75,39 +86,57 @@ enum Commands {
         history: bool,
     },
 
+    /// Open a file in the desktop app or $EDITOR
     Edit {
         path: PathBuf,
         #[arg(long, default_value_t = true)]
         create: bool,
+        /// Print share URL first (relay must be up)
         #[arg(long)]
         share: bool,
     },
 
+    /// Print a collab join URL for a Markdown file
+    #[command(after_help = "Examples:\n  \
+        moraine share notes.md\n  \
+        moraine share notes.md --json\n  \
+        moraine share notes.md --start --json\n  \
+        moraine share notes.md --open")]
     Share {
         path: PathBuf,
         #[arg(long, env = "MORAINE_UI_URL", default_value = DEFAULT_UI)]
         ui: String,
         #[arg(long, env = "MORAINE_SERVER_URL", default_value = DEFAULT_RELAY_HTTP)]
         server: String,
+        /// Spawn moraine-server once if health check fails
         #[arg(long)]
         start: bool,
+        /// Structured result (or error with code) on stdout
         #[arg(long)]
         json: bool,
+        /// Also launch the desktop app for this path
         #[arg(long)]
         open: bool,
     },
 
+    /// Resolve a room/URL for joining (optionally open a browser)
+    #[command(after_help = "Examples:\n  \
+        moraine join doc_abc123 --json --no-open\n  \
+        moraine join 'http://localhost:1420/?room=doc_abc123'")]
     Join {
+        /// Full UI URL or bare room id (`doc_…`)
         target: String,
         #[arg(long, env = "MORAINE_UI_URL", default_value = DEFAULT_UI)]
         ui: String,
+        /// Structured result on stdout
         #[arg(long)]
         json: bool,
-        /// Print URL only; do not open a browser.
+        /// Print URL only; do not open a browser
         #[arg(long)]
         no_open: bool,
     },
 
+    /// List local edit history for a path
     History {
         path: PathBuf,
         #[arg(long)]
@@ -116,6 +145,7 @@ enum Commands {
         limit: usize,
     },
 
+    /// Restore a history entry
     Restore {
         path: PathBuf,
         entry_id: String,
@@ -123,9 +153,8 @@ enum Commands {
         write: bool,
     },
 
-    Watch {
-        path: PathBuf,
-    },
+    /// Watch a path for filesystem events
+    Watch { path: PathBuf },
 }
 
 fn main() {
@@ -203,6 +232,7 @@ fn init_tracing(verbose: u8) {
 }
 
 fn emit_err(json: bool, code: i32, msg: &str) -> i32 {
+    // Keep agent and human wording aligned: short, actionable.
     if json {
         let _ = writeln!(
             io::stdout(),
@@ -469,7 +499,9 @@ fn cmd_share(
         return Ok(emit_err(
             json,
             EXIT_RELAY,
-            &format!("relay not reachable at {server}/health; start: cargo run -p moraine-server"),
+            &format!(
+                "relay not reachable at {server}/health (start with: cargo run -p moraine-server, or pass --start)"
+            ),
         ));
     }
     let links = share_links(&path, &ui, &server);

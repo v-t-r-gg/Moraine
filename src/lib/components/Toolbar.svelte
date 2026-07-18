@@ -110,10 +110,20 @@
     >
       {saving ? "Saving…" : "Save"}
     </button>
-    <button type="button" class="btn" onclick={onComment} title="Comment on selection">
+    <button
+      type="button"
+      class="btn"
+      onclick={onComment}
+      title="Select text, then add a comment"
+    >
       Comment
     </button>
-    <button type="button" class="btn" onclick={onSuggest} title="Suggest replacement for selection">
+    <button
+      type="button"
+      class="btn"
+      onclick={onSuggest}
+      title="Select text, then propose a replacement"
+    >
       Suggest
     </button>
     <button
@@ -121,7 +131,7 @@
       class="btn"
       class:ring-1={commentsOpen}
       onclick={onToggleComments}
-      title="Comments and suggestions"
+      title="Open comments and suggestions"
     >
       Review
     </button>

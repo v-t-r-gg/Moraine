@@ -9,6 +9,11 @@
   import Editor from "$lib/components/Editor.svelte";
   import {
     appInfo,
+    beginAcceptSuggestion,
+    cancelAcceptSuggestion,
+    completeAcceptSuggestion,
+    createAnnotation,
+    getAcceptanceRecoveryStatus,
     getRunReview,
     historyList,
     historyRestoreContent,
@@ -18,8 +23,11 @@
     openDocument,
     pickMarkdownFile,
     recordRunDecision,
+    reconcileSessionAnnotations,
+    rejectSuggestion as rejectSuggestionApi,
     reloadDocument,
-    saveComments,
+    reopenAnnotation,
+    resolveAnnotation,
     saveDocument,
     takeStartupPath,
     writeFile,
@@ -34,12 +42,13 @@
     type YjsSession,
   } from "$lib/editor/yjsSession";
   import {
+    applyDurableRecord,
     commentsMap,
     countPending,
+    isAnnotationConflictError,
     listComments,
     mergeDiskIntoMap,
     newCommentId,
-    setResolved,
     upsertComment,
     type CommentRecord,
   } from "$lib/editor/comments";
@@ -50,6 +59,7 @@
     remotePeerCount,
   } from "$lib/editor/hostSave";
   import { isRevisionConflictError } from "$lib/editor/reviewGate";
+  import { classifyDiskEvent, type ViewportState } from "$lib/editor/diskWatch";
   import type { DocumentSnapshot, HistoryEntryMeta, ViewMode } from "$lib/types";
 
   const WELCOME_MD = `# Agent run record
@@ -88,19 +98,27 @@ See the project README and VISION.md for the full model.
   let localAuthor = $state("You");
   let runReview = $state<RunReviewDto | null>(null);
   let reviewBusy = $state(false);
+  let recoveryBusy = $state(false);
   /** Hash of the last known persisted Markdown revision (from disk load/save). */
   let baseContentHash = $state<string | null>(null);
   /** External disk change detected while this session holds a different base. */
   let externalConflict = $state(false);
   /** Local text preserved when an external conflict blocks overwrite. */
   let conflictLocalMarkdown = $state<string | null>(null);
+  /** Last external disk hash we already handled (dedupe reload/conflict). */
+  let lastHandledExternalHash = $state<string | null>(null);
 
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let unlistenFile: (() => void) | null = null;
   let unsubComments: (() => void) | null = null;
-  let ignoreNextEditorSync = false;
+  /** Generation token for programmatic editor updates (reload/open). */
+  let programmaticUpdateGen = 0;
+  let ignoreProgrammaticUpdates = false;
   let prevPeers = 0;
   let pendingRehydrate = false;
+  /** Serialize watcher handlers for one document. */
+  let watchInFlight: Promise<void> | null = null;
+  let watchGeneration = 0;
 
   const title = $derived(doc?.meta.title ?? "Moraine");
   const path = $derived(doc?.meta.path ?? null);
@@ -120,25 +138,69 @@ See the project README and VISION.md for the full model.
       status = "Moraine";
     }
     await loadInitial();
-    unlistenFile = onFileChanged(async (ev) => {
+    unlistenFile = onFileChanged((ev) => {
+      void handleDiskWatchEvent(ev);
+    });
+  });
+
+  async function handleDiskWatchEvent(ev: import("$lib/types").FileChangedEvent) {
+    // Serialize handlers so bursts do not stack reloads.
+    const run = async () => {
+      const gen = ++watchGeneration;
       if (!doc || !ev.documentId || ev.documentId !== doc.meta.id) return;
-      externalConflict = true;
-      if (dirty || saving) {
-        conflictLocalMarkdown = editorRef?.getMarkdownContent?.() ?? markdown;
-        status =
-          "File changed on disk while you have local edits. Reload from disk or copy your text before Save.";
+
+      const kind = classifyDiskEvent({
+        event: ev,
+        openDocumentId: doc.meta.id,
+        knownPersistedHash: baseContentHash,
+        lastHandledExternalHash,
+        dirty,
+        saving,
+      });
+
+      if (
+        kind === "ignore_same_hash" ||
+        kind === "ignore_duplicate" ||
+        kind === "ignore_sidecar" ||
+        kind === "ignore_while_saving"
+      ) {
         return;
       }
+
+      const diskHash = ev.diskContentHash ?? null;
+      if (diskHash) lastHandledExternalHash = diskHash;
+
+      if (kind === "external_dirty") {
+        // Stable conflict: set once, no auto-reload, no session reset.
+        if (!externalConflict) {
+          externalConflict = true;
+          conflictLocalMarkdown = editorRef?.getMarkdownContent?.() ?? markdown;
+          status =
+            "File changed on disk while you have local edits. Reload from disk or copy your text before Save.";
+        }
+        return;
+      }
+
+      // external_clean: reload once in place without conflict language
+      if (gen !== watchGeneration) return;
       try {
-        applyDocument(await reloadDocument(doc.meta.id), true);
-        externalConflict = false;
-        conflictLocalMarkdown = null;
-        status = "Reloaded from disk";
+        const snap = await reloadDocument(doc.meta.id);
+        if (gen !== watchGeneration) return;
+        applyDocumentInPlace(snap);
+        status = "Updated from disk";
       } catch (e) {
         status = `Reload failed: ${e}`;
       }
+    };
+
+    if (watchInFlight) {
+      await watchInFlight;
+    }
+    watchInFlight = run().finally(() => {
+      watchInFlight = null;
     });
-  });
+    await watchInFlight;
+  }
 
   onDestroy(() => {
     clearSaveTimer();
@@ -193,13 +255,22 @@ See the project README and VISION.md for the full model.
     }
   }
 
+  function hashFromSnap(snap: DocumentSnapshot): string | null {
+    if (snap.contentHash && snap.contentHash.length === 64) return snap.contentHash;
+    return null;
+  }
+
+  /** Open a different document (or first open): may reset collab session. */
   function applyDocument(snap: DocumentSnapshot, resetSession: boolean) {
-    ignoreNextEditorSync = true;
+    beginProgrammaticUpdate();
     doc = snap;
     markdown = snap.content;
     dirty = snap.meta.dirty;
     externalConflict = false;
     conflictLocalMarkdown = null;
+    const h = hashFromSnap(snap);
+    if (h) baseContentHash = h;
+    lastHandledExternalHash = null;
 
     if (resetSession) {
       session?.destroy();
@@ -240,20 +311,66 @@ See the project README and VISION.md for the full model.
       void refreshRunReview(snap.meta.path);
     }
 
+    endProgrammaticUpdateSoon();
+  }
+
+  /**
+   * Same-file revision reload: keep Yjs session, avoid reseeding, restore viewport.
+   */
+  function applyDocumentInPlace(snap: DocumentSnapshot) {
+    const samePath = doc?.meta.path === snap.meta.path;
+    if (!samePath || !session) {
+      applyDocument(snap, true);
+      return;
+    }
+    const vp: ViewportState | undefined = editorRef?.getViewportState?.();
+    beginProgrammaticUpdate();
+    doc = snap;
+    markdown = snap.content;
+    dirty = false;
+    externalConflict = false;
+    conflictLocalMarkdown = null;
+    const h = hashFromSnap(snap);
+    if (h) baseContentHash = h;
+    editorRef?.setMarkdown?.(snap.content);
+    void refreshRunReview(snap.meta.path);
+    // Rehydrate marks for open annotations without destroying session.
+    pendingRehydrate = true;
     queueMicrotask(() => {
-      ignoreNextEditorSync = false;
+      tryRehydrateMarks();
+      if (vp) editorRef?.restoreViewportState?.(vp);
+      endProgrammaticUpdateSoon();
+    });
+  }
+
+  function beginProgrammaticUpdate() {
+    programmaticUpdateGen += 1;
+    ignoreProgrammaticUpdates = true;
+  }
+
+  function endProgrammaticUpdateSoon() {
+    const gen = programmaticUpdateGen;
+    // Editor may emit updates async; hold suppression across a couple of frames.
+    queueMicrotask(() => {
+      requestAnimationFrame(() => {
+        if (gen === programmaticUpdateGen) {
+          ignoreProgrammaticUpdates = false;
+        }
+      });
     });
   }
 
   async function refreshRunReview(filePath: string) {
     if (!isTauri) {
       runReview = null;
-      baseContentHash = null;
       return;
     }
     try {
       runReview = await getRunReview(filePath);
-      baseContentHash = runReview.contentHash;
+      // Do not overwrite a fresher base from Save with a racey stale read.
+      if (runReview.contentHash) {
+        baseContentHash = runReview.contentHash;
+      }
     } catch (e) {
       status = `error: could not load run review (${e})`;
     }
@@ -301,12 +418,12 @@ See the project README and VISION.md for the full model.
     if (!doc || !isTauri) return;
     conflictLocalMarkdown = editorRef?.getMarkdownContent?.() ?? markdown;
     try {
-      applyDocument(await reloadDocument(doc.meta.id), true);
-      await refreshRunReview(doc.meta.path);
-      externalConflict = false;
+      const snap = await reloadDocument(doc.meta.id);
+      // Same path: keep session; do not force conflict language.
+      applyDocumentInPlace(snap);
       status = conflictLocalMarkdown
         ? "Reloaded from disk. Your previous local text is kept in memory for copy (conflict buffer)."
-        : "Reloaded from disk";
+        : "Updated from disk";
     } catch (e) {
       status = `Reload failed: ${e}`;
     }
@@ -360,6 +477,13 @@ See the project README and VISION.md for the full model.
       createdAt: c.createdAt,
       resolved: c.resolved,
       kind: c.kind === "suggestion" ? "suggestion" : "comment",
+      revision: c.revision && c.revision > 0 ? c.revision : 1,
+      disposition: (c.disposition as CommentRecord["disposition"]) ?? null,
+      acceptanceOpId: c.acceptanceOpId ?? null,
+      acceptanceBaseHash: c.acceptanceBaseHash ?? null,
+      acceptanceStartedAt: c.acceptanceStartedAt ?? null,
+      appliedContentHash: c.appliedContentHash ?? null,
+      acceptanceCompletedAt: c.acceptanceCompletedAt ?? null,
     };
   }
 
@@ -372,21 +496,53 @@ See the project README and VISION.md for the full model.
       createdAt: c.createdAt,
       resolved: c.resolved,
       kind: c.kind,
+      revision: c.revision ?? 1,
+      disposition: c.disposition ?? null,
+      acceptanceOpId: c.acceptanceOpId ?? null,
+      acceptanceBaseHash: c.acceptanceBaseHash ?? null,
+      acceptanceStartedAt: c.acceptanceStartedAt ?? null,
+      appliedContentHash: c.appliedContentHash ?? null,
+      acceptanceCompletedAt: c.acceptanceCompletedAt ?? null,
     };
   }
 
-  async function persistComments() {
+  async function reconcileCommentsFromSession() {
     if (!isTauri || !doc || !session) return;
     const list = listComments(commentsMap(session.doc), true).map(recordToDto);
     try {
-      await saveComments(doc.meta.path, list);
+      const res = await reconcileSessionAnnotations(doc.meta.path, list);
+      const map = commentsMap(session.doc);
+      for (const c of res.comments) {
+        applyDurableRecord(map, dtoToRecord(c));
+      }
+      if (res.conflicts.length) {
+        status = `Annotation conflict(s): ${res.conflicts.length}. Refreshed durable state; review latest revisions.`;
+      }
     } catch (e) {
-      status = `error: could not write review sidecar (${e})`;
+      status = `error: could not reconcile annotations (${e})`;
+    }
+  }
+
+  async function applyOpResult(op: { annotation: CommentDto }) {
+    if (!session) return;
+    applyDurableRecord(commentsMap(session.doc), dtoToRecord(op.annotation));
+  }
+
+  async function refreshAnnotationsFromDisk() {
+    if (!isTauri || !doc || !session) return;
+    try {
+      const disk = await loadComments(doc.meta.path);
+      const map = commentsMap(session.doc);
+      for (const c of disk) {
+        applyDurableRecord(map, dtoToRecord(c));
+      }
+    } catch {
+      /* ignore */
     }
   }
 
   function onEditorUpdate(md: string) {
-    if (ignoreNextEditorSync) return;
+    if (ignoreProgrammaticUpdates) return;
     if (md === markdown) return;
     markdown = md;
     dirty = true;
@@ -451,6 +607,12 @@ See the project README and VISION.md for the full model.
         baseContentHash,
       );
       doc = snap;
+      // Authoritative saved hash from backend before watcher classification.
+      const savedHash = hashFromSnap(snap);
+      if (savedHash) {
+        baseContentHash = savedHash;
+        lastHandledExternalHash = null;
+      }
       const now = editorRef?.getMarkdownContent?.() ?? markdown;
       if (now === md) {
         markdown = snap.content;
@@ -466,8 +628,15 @@ See the project README and VISION.md for the full model.
         status = "Saved; newer edits still pending";
         scheduleSave();
       }
-      await persistComments();
-      if (isTauri) await refreshRunReview(doc.meta.path);
+      await reconcileCommentsFromSession();
+      // Review state refresh; base hash already set from Save.
+      if (isTauri) {
+        try {
+          runReview = await getRunReview(doc.meta.path);
+        } catch {
+          /* non-fatal */
+        }
+      }
       externalConflict = false;
       if (!fromAutosave && isTauri) {
         status = `${status}; ledger: ${doc.meta.path}.moraine.json`;
@@ -525,7 +694,7 @@ See the project README and VISION.md for the full model.
       status = "Could not attach highlight";
       return;
     }
-    upsertComment(commentsMap(session.doc), {
+    const provisional: CommentRecord = {
       id,
       body: body.trim(),
       author: localAuthor,
@@ -533,9 +702,30 @@ See the project README and VISION.md for the full model.
       createdAt: new Date().toISOString(),
       resolved: false,
       kind,
-    });
+      revision: 1,
+    };
+    upsertComment(commentsMap(session.doc), provisional);
     commentsOpen = true;
     historyOpen = false;
+
+    if (isTauri && doc) {
+      try {
+        const op = await createAnnotation(
+          doc.meta.path,
+          id,
+          provisional.body,
+          provisional.author,
+          provisional.quote,
+          kind,
+        );
+        await applyOpResult(op);
+      } catch (e) {
+        commentsMap(session.doc).delete(id);
+        editorRef?.clearCommentMark?.(id);
+        status = `error: could not create annotation (${e})`;
+        return;
+      }
+    }
 
     const open = countPending(listComments(commentsMap(session.doc), true));
     if (kind === "suggestion") {
@@ -548,57 +738,296 @@ See the project README and VISION.md for the full model.
         ? `Comment added; ${open.comments} open`
         : `Comment added (browser: session only)`;
     }
-    if (isTauri) await persistComments();
   }
 
   async function resolveComment(id: string) {
     if (!session) return;
+    const rec = commentsMap(session.doc).get(id);
+    if (!rec) return;
+    const prev = { ...rec };
     editorRef?.clearCommentMark?.(id);
-    setResolved(commentsMap(session.doc), id, true);
-    status = "Comment resolved";
-    if (isTauri) await persistComments();
+    if (isTauri && doc) {
+      try {
+        const op = await resolveAnnotation(doc.meta.path, id, rec.revision ?? 1);
+        await applyOpResult(op);
+        status = "Comment resolved";
+      } catch (e) {
+        upsertComment(commentsMap(session.doc), prev);
+        if (isAnnotationConflictError(e)) {
+          await refreshAnnotationsFromDisk();
+          status = "Annotation conflict: refreshed from disk. Resolve again if still needed.";
+        } else {
+          status = `error: could not resolve (${e})`;
+        }
+      }
+    } else {
+      upsertComment(commentsMap(session.doc), { ...rec, resolved: true });
+      status = "Comment resolved";
+    }
   }
 
   async function reopenComment(id: string) {
     if (!session) return;
-    setResolved(commentsMap(session.doc), id, false);
-    status = "Thread reopened";
-    if (isTauri) await persistComments();
+    const rec = commentsMap(session.doc).get(id);
+    if (!rec) return;
+    const prev = { ...rec };
+    if (isTauri && doc) {
+      try {
+        const op = await reopenAnnotation(doc.meta.path, id, rec.revision ?? 1);
+        await applyOpResult(op);
+        status = "Thread reopened";
+      } catch (e) {
+        upsertComment(commentsMap(session.doc), prev);
+        if (isAnnotationConflictError(e)) {
+          await refreshAnnotationsFromDisk();
+          status = "Annotation conflict: refreshed from disk.";
+        } else {
+          status = `error: could not reopen (${e})`;
+        }
+      }
+    } else {
+      upsertComment(commentsMap(session.doc), { ...rec, resolved: false });
+      status = "Thread reopened";
+    }
   }
 
   async function acceptSuggestion(id: string) {
-    if (!session) return;
+    if (!session || !doc) return;
     const rec = commentsMap(session.doc).get(id);
     if (!rec || rec.kind !== "suggestion") return;
-    const ok = editorRef?.acceptSuggestion?.(id, rec.body, rec.quote) ?? false;
-    if (!ok) {
-      status = "Accept failed: quoted text not found in document";
-      orphanedMarkIds = [...new Set([...orphanedMarkIds, id])];
+    if (rec.disposition === "accepting") {
+      status =
+        "This suggestion has an incomplete acceptance. Use Cancel acceptance or complete recovery after Save.";
       return;
     }
-    setResolved(commentsMap(session.doc), id, true);
-    orphanedMarkIds = orphanedMarkIds.filter((x) => x !== id);
+    if (!isTauri) {
+      const ok = editorRef?.acceptSuggestion?.(id, rec.body, rec.quote) ?? false;
+      if (!ok) {
+        status = "Accept failed: quoted text not found in document";
+        return;
+      }
+      upsertComment(commentsMap(session.doc), {
+        ...rec,
+        resolved: true,
+        disposition: "accepted",
+      });
+      dirty = true;
+      status = "Suggestion accepted (browser session only)";
+      return;
+    }
+
+    // Phase A: reserve before mutating Markdown
+    const expectedHash = baseContentHash;
+    if (!expectedHash) {
+      status = "Save the document first so acceptance can bind to a content revision.";
+      return;
+    }
+    let begin;
+    try {
+      begin = await beginAcceptSuggestion(
+        doc.meta.path,
+        id,
+        rec.revision ?? 1,
+        expectedHash,
+      );
+      await applyOpResult(begin);
+    } catch (e) {
+      if (isAnnotationConflictError(e)) {
+        await refreshAnnotationsFromDisk();
+        status = "Could not begin accept (conflict or content hash mismatch). Refreshed from disk.";
+      } else {
+        status = `Could not begin accept (${e})`;
+      }
+      return;
+    }
+
+    // Phase B: apply edit + save
+    const ok = editorRef?.acceptSuggestion?.(id, rec.body, rec.quote) ?? false;
+    if (!ok) {
+      try {
+        const cancelled = await cancelAcceptSuggestion(
+          doc.meta.path,
+          id,
+          begin.annotation.revision ?? 2,
+          begin.acceptanceOpId,
+        );
+        await applyOpResult(cancelled);
+      } catch {
+        /* best effort */
+      }
+      orphanedMarkIds = [...new Set([...orphanedMarkIds, id])];
+      status = "Accept cancelled: quoted text not found. Reservation released.";
+      return;
+    }
+
     dirty = true;
-    scheduleSave();
-    const left = countPending(listComments(commentsMap(session.doc), true)).suggestions;
-    status =
-      left > 0
-        ? `Suggestion accepted; ${left} still pending`
-        : "Suggestion accepted";
-    if (isTauri) await persistComments();
+    try {
+      await handleSave(false);
+    } catch {
+      /* handleSave sets status */
+    }
+    if (dirty || externalConflict) {
+      try {
+        const cancelled = await cancelAcceptSuggestion(
+          doc.meta.path,
+          id,
+          begin.annotation.revision ?? 2,
+          begin.acceptanceOpId,
+        );
+        await applyOpResult(cancelled);
+      } catch {
+        status =
+          "Save failed after reservation. Suggestion remains incomplete (accepting). Cancel or retry.";
+        return;
+      }
+      status = "Save failed; acceptance cancelled. Markdown not finalized as accepted.";
+      return;
+    }
+
+    // Phase C: finalize against saved hash
+    const savedHash = baseContentHash ?? runReview?.contentHash;
+    if (!savedHash) {
+      status = "Missing saved content hash; suggestion left incomplete. Cancel or complete after Save.";
+      return;
+    }
+    try {
+      // revision after begin is begin.annotation.revision
+      const cur = commentsMap(session.doc).get(id);
+      const expectRev = cur?.revision ?? begin.annotation.revision ?? 1;
+      const op = await completeAcceptSuggestion(
+        doc.meta.path,
+        id,
+        expectRev,
+        begin.acceptanceOpId,
+        savedHash,
+      );
+      await applyOpResult(op);
+      orphanedMarkIds = orphanedMarkIds.filter((x) => x !== id);
+      const left = countPending(listComments(commentsMap(session.doc), true)).suggestions;
+      status =
+        left > 0
+          ? `Suggestion accepted; ${left} still pending`
+          : "Suggestion accepted";
+    } catch (e) {
+      await refreshAnnotationsFromDisk();
+      status = `Incomplete acceptance: finalize failed (${e}). Cancel or retry after checking the document.`;
+    }
+  }
+
+  async function cancelIncompleteAcceptance(id: string) {
+    if (!session || !doc || !isTauri) return;
+    const rec = commentsMap(session.doc).get(id);
+    if (!rec?.acceptanceOpId) {
+      status = "No active acceptance to cancel.";
+      return;
+    }
+    recoveryBusy = true;
+    try {
+      // Prefer backend recovery check (disk hash), not editor buffer.
+      const st = await getAcceptanceRecoveryStatus(doc.meta.path, id);
+      if (!st.cancelSafe) {
+        await refreshAnnotationsFromDisk();
+        await refreshRunReview(doc.meta.path);
+        status =
+          "Cannot cancel: Markdown changed after acceptance began. Finalize against the saved document, or restore the original revision first.";
+        return;
+      }
+      const op = await cancelAcceptSuggestion(
+        doc.meta.path,
+        id,
+        rec.revision ?? st.revision,
+        rec.acceptanceOpId,
+      );
+      await applyOpResult(op);
+      status = "Acceptance cancelled; suggestion is pending again.";
+    } catch (e) {
+      await refreshAnnotationsFromDisk();
+      await refreshRunReview(doc.meta.path);
+      status = `Could not cancel acceptance (${e})`;
+    } finally {
+      recoveryBusy = false;
+    }
+  }
+
+  async function finalizeIncompleteAcceptance(id: string) {
+    if (!session || !doc || !isTauri) return;
+    recoveryBusy = true;
+    try {
+      const st = await getAcceptanceRecoveryStatus(doc.meta.path, id);
+      if (!st.acceptanceOpId) {
+        status = "No acceptance operation to finalize.";
+        return;
+      }
+      if (st.cancelSafe) {
+        status =
+          "Document still matches the base revision. Cancel acceptance if the suggestion was not applied, or apply and Save before finalizing.";
+        return;
+      }
+      const op = await completeAcceptSuggestion(
+        doc.meta.path,
+        id,
+        st.revision,
+        st.acceptanceOpId,
+        st.currentContentHash,
+      );
+      await applyOpResult(op);
+      await refreshRunReview(doc.meta.path);
+      status = "Acceptance finalized for the current saved document revision.";
+    } catch (e) {
+      await refreshAnnotationsFromDisk();
+      await refreshRunReview(doc.meta.path);
+      status = `Could not finalize acceptance (${e})`;
+    } finally {
+      recoveryBusy = false;
+    }
+  }
+
+  async function refreshAcceptanceRecovery(id: string) {
+    if (!doc || !isTauri) return;
+    recoveryBusy = true;
+    try {
+      await refreshAnnotationsFromDisk();
+      await refreshRunReview(doc.meta.path);
+      const st = await getAcceptanceRecoveryStatus(doc.meta.path, id);
+      status = st.cancelSafe
+        ? "Recovery status: Markdown still at base hash (Cancel is safe)."
+        : "Recovery status: Markdown differs from base (Finalize or restore original).";
+    } catch (e) {
+      status = `Could not refresh recovery status (${e})`;
+    } finally {
+      recoveryBusy = false;
+    }
   }
 
   async function rejectSuggestion(id: string) {
     if (!session) return;
+    const rec = commentsMap(session.doc).get(id);
+    if (!rec || rec.kind !== "suggestion") return;
+    const prev = { ...rec };
     editorRef?.clearCommentMark?.(id);
-    setResolved(commentsMap(session.doc), id, true);
+    if (isTauri && doc) {
+      try {
+        const op = await rejectSuggestionApi(doc.meta.path, id, rec.revision ?? 1);
+        await applyOpResult(op);
+      } catch (e) {
+        upsertComment(commentsMap(session.doc), prev);
+        if (isAnnotationConflictError(e)) {
+          await refreshAnnotationsFromDisk();
+          status = "Annotation conflict: refreshed from disk.";
+        } else {
+          status = `error: could not reject (${e})`;
+        }
+        return;
+      }
+    } else {
+      upsertComment(commentsMap(session.doc), { ...rec, resolved: true });
+    }
     orphanedMarkIds = orphanedMarkIds.filter((x) => x !== id);
     const left = countPending(listComments(commentsMap(session.doc), true)).suggestions;
     status =
       left > 0
         ? `Suggestion rejected; ${left} still pending`
         : "Suggestion rejected";
-    if (isTauri) await persistComments();
   }
 
   function focusComment(id: string) {
@@ -721,11 +1150,16 @@ See the project README and VISION.md for the full model.
         comments={commentList}
         orphanedIds={orphanedMarkIds}
         showResolved={showResolvedComments}
+        currentDiskHash={baseContentHash}
+        recoveryBusy={recoveryBusy}
         onToggleShowResolved={() => (showResolvedComments = !showResolvedComments)}
         onResolve={resolveComment}
         onReopen={reopenComment}
         onAccept={acceptSuggestion}
         onReject={rejectSuggestion}
+        onCancelAccept={cancelIncompleteAcceptance}
+        onFinalizeAccept={finalizeIncompleteAcceptance}
+        onRefreshRecovery={refreshAcceptanceRecovery}
         onFocus={focusComment}
         onClose={() => (commentsOpen = false)}
       />

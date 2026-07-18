@@ -3,6 +3,7 @@
 //! One Markdown run record path maps to one live review room.
 //! Structured review state lives in `file.md.moraine.json`.
 
+pub mod annotation_ops;
 pub mod atomic;
 pub mod comments;
 pub mod document;
@@ -14,9 +15,17 @@ pub mod run_meta;
 pub mod share;
 pub mod watcher;
 
+pub use annotation_ops::{
+    acceptance_recovery_status, apply_mutation, begin_accept_suggestion, cancel_accept_suggestion,
+    complete_accept_suggestion, create_annotation, reconcile_session_annotations,
+    reject_suggestion, reopen_annotation, resolve_annotation, update_annotation,
+    AcceptanceRecoveryStatus, AnnotationMutation, AnnotationOpResult, BeginAcceptResult,
+    ReconcileResult,
+};
+#[allow(deprecated)]
 pub use comments::{
     comments_sidecar_path, merge_comments, read_comments_sidecar, write_comments_sidecar,
-    AnnotationKind, CommentRecord, CommentsFile,
+    AnnotationKind, CommentRecord, CommentsFile, SuggestionDisposition,
 };
 pub use document::{Document, DocumentId, DocumentMeta, DocumentSnapshot};
 pub use error::{Error, Result};

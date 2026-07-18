@@ -87,7 +87,7 @@ Markdown + .moraine.json on disk
 | Desktop / web editor | Humans | Review and edit run records |
 | Comments and suggestions | Humans | Structured review feedback; accept/reject text suggestions |
 | Markdown persistence | Agents and humans | Durable portable run narrative |
-| Sidecar metadata | Review tooling + humans | Annotations + run ID + revision-bound decisions |
+| Sidecar metadata | Review tooling + humans | Run ID, revision-bound decisions, operation-based annotations |
 | Run-level decisions | Humans | Approve / request changes / reject bound to content hash |
 | Live collaboration | Agents and humans | Optional concurrent review via relay |
 | Local history | Humans | Revisit local snapshots under data dir (not Git) |
@@ -104,7 +104,9 @@ Markdown + .moraine.json on disk
 
 Content hash: SHA-256 of exact UTF-8 Markdown bytes (no line-ending normalization).
 
-Ledger mutations (init, decide, annotation save, migration) take a per-document lock file (`*.moraine.json.lock`), re-read after lock, then write via unique temp file + replace. There is no direct truncate-and-rewrite fallback.
+Ledger mutations (init, decide, annotation operations, migration) take a per-document lock file (`*.moraine.json.lock`), re-read after lock, then write via unique temp file + replace. There is no direct truncate-and-rewrite fallback.
+
+Annotations use explicit operations with a per-annotation monotonic `revision` concurrency token (checked increment; overflow errors). Suggestions store a durable disposition: `pending`, `accepting`, `accepted`, `rejected`, or `resolved_legacy` (schema v3). Acceptance is two-phase: begin (reserve + bind content hash), apply and Save Markdown, then complete. Cancel is allowed only while the disk Markdown hash still equals the acceptance base hash; if the document changed, cancel fails with `acceptance_document_changed` and the human may explicitly finalize against the current saved hash. Host Save reconciles the live session by stable ID without deletes; new session IDs always start at revision 1.
 
 `moraine status` is read-only. `moraine init` (or desktop open / decide) creates the ledger.
 

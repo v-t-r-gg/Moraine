@@ -223,7 +223,7 @@ fn decide_and_stale_after_edit() {
     assert_eq!(conflict.status.code(), Some(1));
     let c: serde_json::Value = serde_json::from_slice(&conflict.stdout).unwrap();
     assert_eq!(c["ok"], false);
-    assert_eq!(c["error"]["kind"], "revision_conflict");
+    assert_eq!(c["error"]["kind"], "document_revision_conflict");
 }
 
 #[test]

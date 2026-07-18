@@ -6,7 +6,7 @@
   import Collaboration from "@tiptap/extension-collaboration";
   import CollaborationCursor from "@tiptap/extension-collaboration-cursor";
   import { Markdown } from "tiptap-markdown";
-  import { CommentMark } from "$lib/editor/commentMark";
+  import { CommentMark, findMarkRange, type MarkKind } from "$lib/editor/commentMark";
   import type { YjsSession } from "$lib/editor/yjsSession";
 
   interface Props {
@@ -128,9 +128,9 @@
     return text.trim() ? text : null;
   }
 
-  export function applyCommentMark(id: string): boolean {
+  export function applyCommentMark(id: string, kind: MarkKind = "comment"): boolean {
     if (!editor || editor.state.selection.empty) return false;
-    return editor.chain().focus().setComment(id).run();
+    return editor.chain().focus().setComment(id, kind).run();
   }
 
   export function clearCommentMark(id: string): void {
@@ -139,21 +139,39 @@
 
   export function focusComment(id: string): void {
     if (!editor) return;
-    const type = editor.schema.marks.comment;
-    if (!type) return;
-    let found: { from: number; to: number } | null = null;
-    editor.state.doc.descendants((node, pos) => {
-      if (found || !node.isText) return;
-      for (const mark of node.marks) {
-        if (mark.type === type && mark.attrs.id === id) {
-          found = { from: pos, to: pos + node.nodeSize };
-          return false;
-        }
-      }
-    });
+    const found = findMarkRange(editor.state, id);
     if (found) {
       editor.chain().focus().setTextSelection(found).scrollIntoView().run();
     }
+  }
+
+  /** Replace marked range with replacement text and drop the mark. */
+  export function acceptSuggestion(id: string, replacement: string): boolean {
+    if (!editor) return false;
+    const range = findMarkRange(editor.state, id);
+    if (!range) return false;
+    const { from, to } = range;
+    return editor
+      .chain()
+      .focus()
+      .command(({ tr, dispatch }) => {
+        tr.insertText(replacement, from, to);
+        // Marks on the replaced range are gone with the text; clear any leftover id.
+        const type = tr.doc.type.schema.marks.comment;
+        if (type) {
+          tr.doc.descendants((node, pos) => {
+            if (!node.isText) return;
+            for (const mark of node.marks) {
+              if (mark.type === type && mark.attrs.id === id) {
+                tr.removeMark(pos, pos + node.nodeSize, type);
+              }
+            }
+          });
+        }
+        if (dispatch) dispatch(tr);
+        return true;
+      })
+      .run();
   }
 
   onDestroy(() => {

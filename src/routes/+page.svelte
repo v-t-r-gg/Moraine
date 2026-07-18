@@ -48,9 +48,9 @@
 
   const WELCOME_MD = `# Welcome to Moraine
 
-One file, one room. Share with \`moraine share print path.md\` (relay must be running).
+One file, one room. Share with \`moraine share path.md\` (relay must be running).
 
-Comments persist on host Save as \`file.md.comments.json\`.
+Review: Comment or Suggest on a selection. Sidecar: \`file.md.comments.json\`.
 `;
 
   let doc = $state<DocumentSnapshot | null>(null);
@@ -232,6 +232,7 @@ Comments persist on host Save as \`file.md.comments.json\`.
       quote: c.quote,
       createdAt: c.createdAt,
       resolved: c.resolved,
+      kind: c.kind === "suggestion" ? "suggestion" : "comment",
     };
   }
 
@@ -243,6 +244,7 @@ Comments persist on host Save as \`file.md.comments.json\`.
       quote: c.quote,
       createdAt: c.createdAt,
       resolved: c.resolved,
+      kind: c.kind,
     };
   }
 
@@ -330,18 +332,22 @@ Comments persist on host Save as \`file.md.comments.json\`.
     }
   }
 
-  async function handleComment() {
+  async function addAnnotation(kind: "comment" | "suggestion") {
     if (!session || !editorRef) return;
     const quote = editorRef.getSelectionQuote?.();
     if (!quote) {
-      status = "Select text to comment";
+      status = kind === "suggestion" ? "Select text to suggest a change" : "Select text to comment";
       return;
     }
-    const body = window.prompt("Comment", "");
-    if (body == null || !body.trim()) return;
+    const promptLabel = kind === "suggestion" ? "Suggested replacement" : "Comment";
+    const initial = kind === "suggestion" ? quote : "";
+    const body = window.prompt(promptLabel, initial);
+    if (body == null) return;
+    if (kind === "comment" && !body.trim()) return;
+
     const id = newCommentId();
-    if (!editorRef.applyCommentMark?.(id)) {
-      status = "Could not attach comment mark";
+    if (!editorRef.applyCommentMark?.(id, kind)) {
+      status = "Could not attach mark";
       return;
     }
     upsertComment(commentsMap(session.doc), {
@@ -351,9 +357,15 @@ Comments persist on host Save as \`file.md.comments.json\`.
       quote,
       createdAt: new Date().toISOString(),
       resolved: false,
+      kind,
     });
     commentsOpen = true;
-    status = isTauri ? "Comment added (Save to write sidecar)" : "Comment added (session only)";
+    status =
+      kind === "suggestion"
+        ? "Suggestion added"
+        : isTauri
+          ? "Comment added"
+          : "Comment added (session only)";
     if (isTauri) await persistComments();
   }
 
@@ -368,7 +380,31 @@ Comments persist on host Save as \`file.md.comments.json\`.
   async function reopenComment(id: string) {
     if (!session) return;
     setResolved(commentsMap(session.doc), id, false);
-    status = "Comment reopened";
+    status = "Reopened";
+    if (isTauri) await persistComments();
+  }
+
+  async function acceptSuggestion(id: string) {
+    if (!session) return;
+    const rec = commentsMap(session.doc).get(id);
+    if (!rec || rec.kind !== "suggestion") return;
+    const ok = editorRef?.acceptSuggestion?.(id, rec.body) ?? false;
+    if (!ok) {
+      status = "Could not apply suggestion (mark missing?)";
+      return;
+    }
+    setResolved(commentsMap(session.doc), id, true);
+    dirty = true;
+    scheduleSave();
+    status = "Suggestion accepted";
+    if (isTauri) await persistComments();
+  }
+
+  async function rejectSuggestion(id: string) {
+    if (!session) return;
+    editorRef?.clearCommentMark?.(id);
+    setResolved(commentsMap(session.doc), id, true);
+    status = "Suggestion rejected";
     if (isTauri) await persistComments();
   }
 
@@ -440,7 +476,8 @@ Comments persist on host Save as \`file.md.comments.json\`.
     {isTauri}
     onOpen={handleOpen}
     onSave={() => handleSave(false)}
-    onComment={handleComment}
+    onComment={() => addAnnotation("comment")}
+    onSuggest={() => addAnnotation("suggestion")}
     onToggleComments={toggleComments}
     onToggleHistory={toggleHistory}
     onViewMode={(m) => (viewMode = m)}
@@ -480,6 +517,8 @@ Comments persist on host Save as \`file.md.comments.json\`.
         onToggleShowResolved={() => (showResolvedComments = !showResolvedComments)}
         onResolve={resolveComment}
         onReopen={reopenComment}
+        onAccept={acceptSuggestion}
+        onReject={rejectSuggestion}
         onFocus={focusComment}
         onClose={() => (commentsOpen = false)}
       />

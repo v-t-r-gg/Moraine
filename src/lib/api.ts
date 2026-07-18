@@ -85,6 +85,7 @@ export interface CommentDto {
   quote: string;
   createdAt: string;
   resolved: boolean;
+  kind?: string;
 }
 
 export async function loadComments(path: string): Promise<CommentDto[]> {

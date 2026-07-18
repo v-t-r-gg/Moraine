@@ -7,6 +7,8 @@
     onToggleShowResolved: () => void;
     onResolve: (id: string) => void;
     onReopen: (id: string) => void;
+    onAccept: (id: string) => void;
+    onReject: (id: string) => void;
     onFocus: (id: string) => void;
     onClose: () => void;
   }
@@ -17,6 +19,8 @@
     onToggleShowResolved,
     onResolve,
     onReopen,
+    onAccept,
+    onReject,
     onFocus,
     onClose,
   }: Props = $props();
@@ -42,7 +46,7 @@
     class="flex items-center justify-between border-b px-3 py-2"
     style="border-color: var(--border);"
   >
-    <h2 class="text-sm font-semibold">Comments</h2>
+    <h2 class="text-sm font-semibold">Review</h2>
     <button type="button" class="icon-btn" onclick={onClose} title="Close">✕</button>
   </div>
 
@@ -54,24 +58,32 @@
   <div class="moraine-scroll flex-1 overflow-auto p-2">
     {#if visible.length === 0}
       <p class="px-2 text-xs" style="color: var(--muted);">
-        Select text and click Comment to start a thread.
+        Select text, then Comment or Suggest.
       </p>
     {:else}
       <ul class="space-y-2">
         {#each visible as c (c.id)}
+          {@const isSug = c.kind === "suggestion"}
           <li
             class="rounded-lg border p-2 text-xs"
             style="border-color: var(--border); opacity: {c.resolved ? 0.65 : 1};"
           >
-            <button
-              type="button"
-              class="w-full text-left"
-              onclick={() => onFocus(c.id)}
-            >
-              <div class="font-medium" style="color: var(--accent);">
+            <button type="button" class="w-full text-left" onclick={() => onFocus(c.id)}>
+              <div class="mb-1 text-[10px] font-semibold uppercase tracking-wide"
+                style="color: {isSug ? '#16a34a' : 'var(--accent)'};"
+              >
+                {isSug ? "Suggestion" : "Comment"}
+              </div>
+              <div class="font-medium" style="color: var(--text);">
                 “{c.quote.slice(0, 80)}{c.quote.length > 80 ? "…" : ""}”
               </div>
-              <div class="mt-1 whitespace-pre-wrap">{c.body}</div>
+              {#if isSug}
+                <div class="mt-1 whitespace-pre-wrap" style="color: #16a34a;">
+                  =&gt; {c.body || "(delete)"}
+                </div>
+              {:else}
+                <div class="mt-1 whitespace-pre-wrap">{c.body}</div>
+              {/if}
               <div class="mt-1" style="color: var(--muted);">
                 {c.author} · {when(c.createdAt)}
                 {#if c.resolved}
@@ -79,23 +91,14 @@
                 {/if}
               </div>
             </button>
-            <div class="mt-1.5 flex gap-2">
+            <div class="mt-1.5 flex flex-wrap gap-2">
               {#if c.resolved}
-                <button
-                  type="button"
-                  class="link"
-                  onclick={() => onReopen(c.id)}
-                >
-                  Reopen
-                </button>
+                <button type="button" class="link" onclick={() => onReopen(c.id)}>Reopen</button>
+              {:else if isSug}
+                <button type="button" class="link" onclick={() => onAccept(c.id)}>Accept</button>
+                <button type="button" class="link" onclick={() => onReject(c.id)}>Reject</button>
               {:else}
-                <button
-                  type="button"
-                  class="link"
-                  onclick={() => onResolve(c.id)}
-                >
-                  Resolve
-                </button>
+                <button type="button" class="link" onclick={() => onResolve(c.id)}>Resolve</button>
               {/if}
             </div>
           </li>

@@ -14,6 +14,7 @@
     onOpen: () => void;
     onSave: () => void;
     onComment: () => void;
+    onSuggest: () => void;
     onToggleComments: () => void;
     onToggleHistory: () => void;
     onViewMode: (mode: ViewMode) => void;
@@ -32,6 +33,7 @@
     onOpen,
     onSave,
     onComment,
+    onSuggest,
     onToggleComments,
     onToggleHistory,
     onViewMode,
@@ -111,14 +113,17 @@
     <button type="button" class="btn" onclick={onComment} title="Comment on selection">
       Comment
     </button>
+    <button type="button" class="btn" onclick={onSuggest} title="Suggest replacement for selection">
+      Suggest
+    </button>
     <button
       type="button"
       class="btn"
       class:ring-1={commentsOpen}
       onclick={onToggleComments}
-      title="Comments"
+      title="Comments and suggestions"
     >
-      Comments
+      Review
     </button>
     <button
       type="button"

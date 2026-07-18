@@ -44,11 +44,16 @@ moraine edit notes.md --share    # print URL (relay up) + open editor
 | Remote peers | Autosave paused (status bar) |
 | Explicit Save | Always |
 
-## Comments
+## Review (comments + suggestions)
 
-Select text -> **Comment**. Sidebar: resolve / reopen.  
-On host **Save** (and on add/resolve): written to `file.md.comments.json`.  
-Browser-only mode is session-only.
+| Action | How |
+|--------|-----|
+| Comment | Select text -> **Comment** -> note |
+| Suggest | Select text -> **Suggest** -> replacement text |
+| Accept | **Review** sidebar -> Accept (applies replacement) |
+| Reject | **Review** sidebar -> Reject (drops mark only) |
+
+Stored in the same Yjs map and sidecar (`file.md.comments.json`) with `kind: "comment" | "suggestion"`. Host Save still respects peer presence for the markdown file; suggestion accept marks the doc dirty and schedules autosave when solo.
 
 ## CLI
 

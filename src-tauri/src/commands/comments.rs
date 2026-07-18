@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use moraine_core::{read_comments_sidecar, write_comments_sidecar, CommentRecord, CommentsFile};
+use moraine_core::{
+    read_comments_sidecar, write_comments_sidecar, AnnotationKind, CommentRecord, CommentsFile,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -12,6 +14,12 @@ pub struct CommentDto {
     pub quote: String,
     pub created_at: String,
     pub resolved: bool,
+    #[serde(default = "default_kind")]
+    pub kind: String,
+}
+
+fn default_kind() -> String {
+    "comment".into()
 }
 
 impl From<CommentRecord> for CommentDto {
@@ -23,6 +31,10 @@ impl From<CommentRecord> for CommentDto {
             quote: c.quote,
             created_at: c.created_at.to_rfc3339(),
             resolved: c.resolved,
+            kind: match c.kind {
+                AnnotationKind::Suggestion => "suggestion".into(),
+                AnnotationKind::Comment => "comment".into(),
+            },
         }
     }
 }
@@ -32,6 +44,11 @@ fn from_dto(c: CommentDto) -> Result<CommentRecord, String> {
     let created_at = chrono::DateTime::parse_from_rfc3339(&c.created_at)
         .map(|d| d.with_timezone(&chrono::Utc))
         .map_err(|e| e.to_string())?;
+    let kind = if c.kind == "suggestion" {
+        AnnotationKind::Suggestion
+    } else {
+        AnnotationKind::Comment
+    };
     Ok(CommentRecord {
         id,
         body: c.body,
@@ -39,6 +56,7 @@ fn from_dto(c: CommentDto) -> Result<CommentRecord, String> {
         quote: c.quote,
         created_at,
         resolved: c.resolved,
+        kind,
     })
 }
 

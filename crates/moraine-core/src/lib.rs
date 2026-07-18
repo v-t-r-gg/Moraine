@@ -13,7 +13,7 @@ pub mod watcher;
 
 pub use comments::{
     comments_sidecar_path, merge_comments, read_comments_sidecar, write_comments_sidecar,
-    CommentRecord, CommentsFile,
+    AnnotationKind, CommentRecord, CommentsFile,
 };
 pub use document::{Document, DocumentId, DocumentMeta, DocumentSnapshot};
 pub use error::{Error, Result};

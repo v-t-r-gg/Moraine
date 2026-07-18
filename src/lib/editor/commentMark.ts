@@ -1,35 +1,33 @@
 import { Mark, mergeAttributes } from "@tiptap/core";
 
-export interface CommentMarkOptions {
-  HTMLAttributes: Record<string, unknown>;
-}
+export type MarkKind = "comment" | "suggestion";
 
 declare module "@tiptap/core" {
   interface Commands<ReturnType> {
     comment: {
-      setComment: (id: string) => ReturnType;
+      setComment: (id: string, kind?: MarkKind) => ReturnType;
       unsetComment: () => ReturnType;
       unsetCommentById: (id: string) => ReturnType;
     };
   }
 }
 
-export const CommentMark = Mark.create<CommentMarkOptions>({
+export const CommentMark = Mark.create({
   name: "comment",
   inclusive: false,
   excludes: "",
-
-  addOptions() {
-    return { HTMLAttributes: {} };
-  },
 
   addAttributes() {
     return {
       id: {
         default: null,
         parseHTML: (el) => el.getAttribute("data-comment-id"),
-        renderHTML: (attrs) =>
-          attrs.id ? { "data-comment-id": attrs.id } : {},
+        renderHTML: (attrs) => (attrs.id ? { "data-comment-id": attrs.id } : {}),
+      },
+      kind: {
+        default: "comment",
+        parseHTML: (el) => el.getAttribute("data-kind") || "comment",
+        renderHTML: (attrs) => ({ "data-kind": attrs.kind || "comment" }),
       },
     };
   },
@@ -39,11 +37,12 @@ export const CommentMark = Mark.create<CommentMarkOptions>({
   },
 
   renderHTML({ HTMLAttributes }) {
+    const kind = (HTMLAttributes["data-kind"] as string) || "comment";
+    const cls =
+      kind === "suggestion" ? "moraine-suggestion-mark" : "moraine-comment-mark";
     return [
       "span",
-      mergeAttributes(this.options.HTMLAttributes, HTMLAttributes, {
-        class: "moraine-comment-mark",
-      }),
+      mergeAttributes(HTMLAttributes, { class: cls }),
       0,
     ];
   },
@@ -51,9 +50,9 @@ export const CommentMark = Mark.create<CommentMarkOptions>({
   addCommands() {
     return {
       setComment:
-        (id: string) =>
+        (id: string, kind: MarkKind = "comment") =>
         ({ commands }) =>
-          commands.setMark(this.name, { id }),
+          commands.setMark(this.name, { id, kind }),
       unsetComment:
         () =>
         ({ commands }) =>
@@ -79,3 +78,25 @@ export const CommentMark = Mark.create<CommentMarkOptions>({
     };
   },
 });
+
+export function findMarkRange(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  state: any,
+  id: string,
+): { from: number; to: number } | null {
+  const type = state.schema.marks.comment;
+  if (!type) return null;
+  let from: number | null = null;
+  let to: number | null = null;
+  state.doc.descendants((node: { isText: boolean; marks: { type: unknown; attrs: { id?: string } }[]; nodeSize: number }, pos: number) => {
+    if (!node.isText) return;
+    for (const mark of node.marks) {
+      if (mark.type === type && mark.attrs.id === id) {
+        if (from == null) from = pos;
+        to = pos + node.nodeSize;
+      }
+    }
+  });
+  if (from == null || to == null) return null;
+  return { from, to };
+}

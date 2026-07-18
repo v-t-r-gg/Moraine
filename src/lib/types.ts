@@ -11,6 +11,8 @@ export interface DocumentMeta {
 export interface DocumentSnapshot {
   meta: DocumentMeta;
   content: string;
+  /** SHA-256 of exact UTF-8 content bytes (same rules as run ledger). */
+  contentHash?: string;
 }
 
 export interface HistoryEntryMeta {
@@ -38,6 +40,9 @@ export interface FileChangedEvent {
   path: string;
   change: string;
   documentId: string | null;
+  diskContentHash?: string | null;
+  knownContentHash?: string | null;
+  contentChanged?: boolean | null;
 }
 
 export type ViewMode = "edit" | "preview" | "split";

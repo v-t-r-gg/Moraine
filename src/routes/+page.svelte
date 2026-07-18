@@ -8,8 +8,10 @@
   import RunReviewPanel from "$lib/components/RunReviewPanel.svelte";
   import Editor from "$lib/components/Editor.svelte";
   import {
-    acceptSuggestion as acceptSuggestionApi,
     appInfo,
+    beginAcceptSuggestion,
+    cancelAcceptSuggestion,
+    completeAcceptSuggestion,
     createAnnotation,
     getRunReview,
     historyList,
@@ -367,6 +369,12 @@ See the project README and VISION.md for the full model.
       resolved: c.resolved,
       kind: c.kind === "suggestion" ? "suggestion" : "comment",
       revision: c.revision && c.revision > 0 ? c.revision : 1,
+      disposition: (c.disposition as CommentRecord["disposition"]) ?? null,
+      acceptanceOpId: c.acceptanceOpId ?? null,
+      acceptanceBaseHash: c.acceptanceBaseHash ?? null,
+      acceptanceStartedAt: c.acceptanceStartedAt ?? null,
+      appliedContentHash: c.appliedContentHash ?? null,
+      acceptanceCompletedAt: c.acceptanceCompletedAt ?? null,
     };
   }
 
@@ -380,6 +388,12 @@ See the project README and VISION.md for the full model.
       resolved: c.resolved,
       kind: c.kind,
       revision: c.revision ?? 1,
+      disposition: c.disposition ?? null,
+      acceptanceOpId: c.acceptanceOpId ?? null,
+      acceptanceBaseHash: c.acceptanceBaseHash ?? null,
+      acceptanceStartedAt: c.acceptanceStartedAt ?? null,
+      appliedContentHash: c.appliedContentHash ?? null,
+      acceptanceCompletedAt: c.acceptanceCompletedAt ?? null,
     };
   }
 
@@ -656,45 +670,148 @@ See the project README and VISION.md for the full model.
   }
 
   async function acceptSuggestion(id: string) {
-    if (!session) return;
+    if (!session || !doc) return;
     const rec = commentsMap(session.doc).get(id);
     if (!rec || rec.kind !== "suggestion") return;
-    const ok = editorRef?.acceptSuggestion?.(id, rec.body, rec.quote) ?? false;
-    if (!ok) {
-      status = "Accept failed: quoted text not found in document";
-      orphanedMarkIds = [...new Set([...orphanedMarkIds, id])];
+    if (rec.disposition === "accepting") {
+      status =
+        "This suggestion has an incomplete acceptance. Use Cancel acceptance or complete recovery after Save.";
       return;
     }
-    const prev = { ...rec };
-    if (isTauri && doc) {
-      try {
-        const op = await acceptSuggestionApi(doc.meta.path, id, rec.revision ?? 1);
-        await applyOpResult(op);
-      } catch (e) {
-        // Document already changed; durable mark failed — report clearly.
-        upsertComment(commentsMap(session.doc), prev);
-        if (isAnnotationConflictError(e)) {
-          await refreshAnnotationsFromDisk();
-          status =
-            "Document edit applied, but annotation conflict on accept. Refreshed ledger; verify the suggestion state.";
-        } else {
-          status = `Document edit applied, but ledger accept failed (${e})`;
-        }
-        dirty = true;
-        scheduleSave();
+    if (!isTauri) {
+      const ok = editorRef?.acceptSuggestion?.(id, rec.body, rec.quote) ?? false;
+      if (!ok) {
+        status = "Accept failed: quoted text not found in document";
         return;
       }
-    } else {
-      upsertComment(commentsMap(session.doc), { ...rec, resolved: true });
+      upsertComment(commentsMap(session.doc), {
+        ...rec,
+        resolved: true,
+        disposition: "accepted",
+      });
+      dirty = true;
+      status = "Suggestion accepted (browser session only)";
+      return;
     }
-    orphanedMarkIds = orphanedMarkIds.filter((x) => x !== id);
+
+    // Phase A: reserve before mutating Markdown
+    const expectedHash = baseContentHash;
+    if (!expectedHash) {
+      status = "Save the document first so acceptance can bind to a content revision.";
+      return;
+    }
+    let begin;
+    try {
+      begin = await beginAcceptSuggestion(
+        doc.meta.path,
+        id,
+        rec.revision ?? 1,
+        expectedHash,
+      );
+      await applyOpResult(begin);
+    } catch (e) {
+      if (isAnnotationConflictError(e)) {
+        await refreshAnnotationsFromDisk();
+        status = "Could not begin accept (conflict or content hash mismatch). Refreshed from disk.";
+      } else {
+        status = `Could not begin accept (${e})`;
+      }
+      return;
+    }
+
+    // Phase B: apply edit + save
+    const ok = editorRef?.acceptSuggestion?.(id, rec.body, rec.quote) ?? false;
+    if (!ok) {
+      try {
+        const cancelled = await cancelAcceptSuggestion(
+          doc.meta.path,
+          id,
+          begin.annotation.revision ?? 2,
+          begin.acceptanceOpId,
+        );
+        await applyOpResult(cancelled);
+      } catch {
+        /* best effort */
+      }
+      orphanedMarkIds = [...new Set([...orphanedMarkIds, id])];
+      status = "Accept cancelled: quoted text not found. Reservation released.";
+      return;
+    }
+
     dirty = true;
-    scheduleSave();
-    const left = countPending(listComments(commentsMap(session.doc), true)).suggestions;
-    status =
-      left > 0
-        ? `Suggestion accepted; ${left} still pending`
-        : "Suggestion accepted";
+    try {
+      await handleSave(false);
+    } catch {
+      /* handleSave sets status */
+    }
+    if (dirty || externalConflict) {
+      try {
+        const cancelled = await cancelAcceptSuggestion(
+          doc.meta.path,
+          id,
+          begin.annotation.revision ?? 2,
+          begin.acceptanceOpId,
+        );
+        await applyOpResult(cancelled);
+      } catch {
+        status =
+          "Save failed after reservation. Suggestion remains incomplete (accepting). Cancel or retry.";
+        return;
+      }
+      status = "Save failed; acceptance cancelled. Markdown not finalized as accepted.";
+      return;
+    }
+
+    // Phase C: finalize against saved hash
+    const savedHash = baseContentHash ?? runReview?.contentHash;
+    if (!savedHash) {
+      status = "Missing saved content hash; suggestion left incomplete. Cancel or complete after Save.";
+      return;
+    }
+    try {
+      // revision after begin is begin.annotation.revision
+      const cur = commentsMap(session.doc).get(id);
+      const expectRev = cur?.revision ?? begin.annotation.revision ?? 1;
+      const op = await completeAcceptSuggestion(
+        doc.meta.path,
+        id,
+        expectRev,
+        begin.acceptanceOpId,
+        savedHash,
+      );
+      await applyOpResult(op);
+      orphanedMarkIds = orphanedMarkIds.filter((x) => x !== id);
+      const left = countPending(listComments(commentsMap(session.doc), true)).suggestions;
+      status =
+        left > 0
+          ? `Suggestion accepted; ${left} still pending`
+          : "Suggestion accepted";
+    } catch (e) {
+      await refreshAnnotationsFromDisk();
+      status = `Incomplete acceptance: finalize failed (${e}). Cancel or retry after checking the document.`;
+    }
+  }
+
+  async function cancelIncompleteAcceptance(id: string) {
+    if (!session || !doc || !isTauri) return;
+    const rec = commentsMap(session.doc).get(id);
+    if (!rec?.acceptanceOpId) {
+      status = "No active acceptance to cancel.";
+      return;
+    }
+    try {
+      const op = await cancelAcceptSuggestion(
+        doc.meta.path,
+        id,
+        rec.revision ?? 1,
+        rec.acceptanceOpId,
+      );
+      await applyOpResult(op);
+      status = "Acceptance cancelled; suggestion is pending again.";
+    } catch (e) {
+      await refreshAnnotationsFromDisk();
+      status = `Could not cancel acceptance (${e})`;
+    }
   }
 
   async function rejectSuggestion(id: string) {
@@ -853,6 +970,7 @@ See the project README and VISION.md for the full model.
         onReopen={reopenComment}
         onAccept={acceptSuggestion}
         onReject={rejectSuggestion}
+        onCancelAccept={cancelIncompleteAcceptance}
         onFocus={focusComment}
         onClose={() => (commentsOpen = false)}
       />

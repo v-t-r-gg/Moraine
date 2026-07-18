@@ -4,18 +4,28 @@ export const COMMENTS_MAP = "comments";
 
 export type AnnotationKind = "comment" | "suggestion";
 
+export type SuggestionDisposition =
+  | "pending"
+  | "accepting"
+  | "accepted"
+  | "rejected"
+  | "resolved_legacy";
+
 export interface CommentRecord {
   id: string;
-  /** Comment text, or suggested replacement when kind is suggestion. */
   body: string;
   author: string;
-  /** Original selection (suggestion: text to replace). */
   quote: string;
   createdAt: string;
   resolved: boolean;
   kind: AnnotationKind;
-  /** Durable concurrency token from the ledger (default 1). */
   revision: number;
+  disposition?: SuggestionDisposition | null;
+  acceptanceOpId?: string | null;
+  acceptanceBaseHash?: string | null;
+  acceptanceStartedAt?: string | null;
+  appliedContentHash?: string | null;
+  acceptanceCompletedAt?: string | null;
 }
 
 export type CommentMap = Y.Map<CommentRecord>;
@@ -28,28 +38,65 @@ export function listComments(map: CommentMap, includeResolved = true): CommentRe
   const out: CommentRecord[] = [];
   map.forEach((value) => {
     const rec = normalize(value);
-    if (!includeResolved && rec.resolved) return;
+    if (!includeResolved && isResolvedView(rec)) return;
     out.push(rec);
   });
   out.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return out;
 }
 
+export function isResolvedView(rec: CommentRecord): boolean {
+  if (rec.kind === "suggestion") {
+    const d = rec.disposition ?? (rec.resolved ? "resolved_legacy" : "pending");
+    return d === "accepted" || d === "rejected" || d === "resolved_legacy";
+  }
+  return rec.resolved;
+}
+
+export function dispositionLabel(rec: CommentRecord): string {
+  if (rec.kind !== "suggestion") {
+    return rec.resolved ? "Resolved" : "Open";
+  }
+  switch (rec.disposition ?? (rec.resolved ? "resolved_legacy" : "pending")) {
+    case "pending":
+      return "Pending";
+    case "accepting":
+      return "Accepting (incomplete)";
+    case "accepted":
+      return "Accepted";
+    case "rejected":
+      return "Rejected";
+    case "resolved_legacy":
+      return "Resolved (legacy)";
+    default:
+      return "Suggestion";
+  }
+}
+
 function normalize(value: CommentRecord): CommentRecord {
+  const kind: AnnotationKind = value.kind === "suggestion" ? "suggestion" : "comment";
+  let disposition = value.disposition ?? null;
+  if (kind === "suggestion" && !disposition) {
+    disposition = value.resolved ? "resolved_legacy" : "pending";
+  }
+  if (kind === "comment") disposition = null;
+  const resolved =
+    kind === "suggestion"
+      ? disposition === "accepted" ||
+        disposition === "rejected" ||
+        disposition === "resolved_legacy"
+      : !!value.resolved;
   return {
     ...value,
-    kind: value.kind === "suggestion" ? "suggestion" : "comment",
+    kind,
     revision: value.revision && value.revision > 0 ? value.revision : 1,
+    disposition,
+    resolved,
   };
 }
 
-/** Apply durable op result into the Yjs map (source of truth after host mutation). */
 export function applyDurableRecord(map: CommentMap, record: CommentRecord): void {
   map.set(record.id, normalize(record));
-}
-
-export function isAnnotationConflictError(err: unknown): boolean {
-  return String(err).includes("annotation_conflict");
 }
 
 export function upsertComment(map: CommentMap, record: CommentRecord): void {
@@ -59,7 +106,16 @@ export function upsertComment(map: CommentMap, record: CommentRecord): void {
 export function setResolved(map: CommentMap, id: string, resolved: boolean): void {
   const cur = map.get(id);
   if (!cur) return;
-  map.set(id, { ...normalize(cur), resolved });
+  const n = normalize(cur);
+  if (n.kind === "suggestion") {
+    map.set(id, {
+      ...n,
+      resolved,
+      disposition: resolved ? "resolved_legacy" : "pending",
+    });
+  } else {
+    map.set(id, { ...n, resolved });
+  }
 }
 
 export function removeComment(map: CommentMap, id: string): void {
@@ -78,7 +134,46 @@ export function mergeDiskIntoMap(map: CommentMap, disk: CommentRecord[]): void {
   }
 }
 
-/** Pure accept/reject helpers for tests (doc text transformation). */
+export type StructuredError = {
+  kind: string;
+  annotationId?: string | null;
+  expectedRevision?: number | null;
+  actualRevision?: number | null;
+  message?: string;
+};
+
+export function parseStructuredError(err: unknown): StructuredError | null {
+  const s = String(err);
+  // Tauri may wrap JSON in "error: " or similar.
+  const start = s.indexOf("{");
+  const end = s.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  try {
+    const obj = JSON.parse(s.slice(start, end + 1)) as StructuredError;
+    if (obj && typeof obj.kind === "string") return obj;
+  } catch {
+    /* not JSON */
+  }
+  return null;
+}
+
+export function isAnnotationConflictError(err: unknown): boolean {
+  const e = parseStructuredError(err);
+  if (e) {
+    return (
+      e.kind === "annotation_conflict" ||
+      e.kind === "incomplete_acceptance" ||
+      e.kind === "document_revision_conflict"
+    );
+  }
+  const s = String(err);
+  return (
+    s.includes("annotation_conflict") ||
+    s.includes("incomplete_acceptance") ||
+    s.includes("document_revision_conflict")
+  );
+}
+
 export function applyAcceptToText(
   fullText: string,
   quote: string,
@@ -89,7 +184,6 @@ export function applyAcceptToText(
   return fullText.slice(0, i) + replacement + fullText.slice(i + quote.length);
 }
 
-/** Map plain-text index of quote to PM positions (contiguous text only). */
 export function findQuoteRangeInDoc(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   doc: any,
@@ -120,7 +214,7 @@ export function countPending(records: CommentRecord[]): {
   let comments = 0;
   let suggestions = 0;
   for (const r of records) {
-    if (r.resolved) continue;
+    if (isResolvedView(r)) continue;
     if (r.kind === "suggestion") suggestions++;
     else comments++;
   }

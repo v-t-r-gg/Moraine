@@ -93,12 +93,26 @@ export interface CommentDto {
   resolved: boolean;
   kind?: string;
   revision?: number;
+  disposition?: string | null;
+  acceptanceOpId?: string | null;
+  acceptanceBaseHash?: string | null;
+  acceptanceStartedAt?: string | null;
+  appliedContentHash?: string | null;
+  acceptanceCompletedAt?: string | null;
 }
 
 export interface AnnotationOpDto {
   annotation: CommentDto;
   comments: CommentDto[];
   runId: string;
+}
+
+export interface BeginAcceptDto {
+  annotation: CommentDto;
+  comments: CommentDto[];
+  runId: string;
+  acceptanceOpId: string;
+  baseContentHash: string;
 }
 
 export interface ReconcileDto {
@@ -161,12 +175,48 @@ export async function reopenAnnotation(
   return invoke("reopen_annotation_cmd", { path, id, expectedRevision });
 }
 
-export async function acceptSuggestion(
+export async function beginAcceptSuggestion(
   path: string,
   id: string,
   expectedRevision: number,
+  expectedContentHash: string,
+): Promise<BeginAcceptDto> {
+  return invoke("begin_accept_suggestion_cmd", {
+    path,
+    id,
+    expectedRevision,
+    expectedContentHash,
+  });
+}
+
+export async function completeAcceptSuggestion(
+  path: string,
+  id: string,
+  expectedRevision: number,
+  acceptanceOpId: string,
+  expectedSavedHash: string,
 ): Promise<AnnotationOpDto> {
-  return invoke("accept_suggestion_cmd", { path, id, expectedRevision });
+  return invoke("complete_accept_suggestion_cmd", {
+    path,
+    id,
+    expectedRevision,
+    acceptanceOpId,
+    expectedSavedHash,
+  });
+}
+
+export async function cancelAcceptSuggestion(
+  path: string,
+  id: string,
+  expectedRevision: number,
+  acceptanceOpId: string,
+): Promise<AnnotationOpDto> {
+  return invoke("cancel_accept_suggestion_cmd", {
+    path,
+    id,
+    expectedRevision,
+    acceptanceOpId,
+  });
 }
 
 export async function rejectSuggestion(
@@ -354,28 +404,62 @@ function browserStub<T>(cmd: string, args?: Record<string, unknown>): T {
     case "update_annotation_cmd":
     case "resolve_annotation_cmd":
     case "reopen_annotation_cmd":
-    case "accept_suggestion_cmd":
-    case "reject_suggestion_cmd": {
+    case "reject_suggestion_cmd":
+    case "complete_accept_suggestion_cmd":
+    case "cancel_accept_suggestion_cmd": {
       const id = String(args?.id ?? crypto.randomUUID());
       const kind = String(args?.kind ?? "comment");
       const expected = Number(args?.expectedRevision ?? 0);
+      const isSug = kind === "suggestion" || cmd.includes("accept") || cmd.includes("reject");
+      let disposition: string | null = isSug ? "pending" : null;
+      let resolved = false;
+      if (cmd === "reject_suggestion_cmd") {
+        disposition = "rejected";
+        resolved = true;
+      }
+      if (cmd === "complete_accept_suggestion_cmd") {
+        disposition = "accepted";
+        resolved = true;
+      }
+      if (cmd === "resolve_annotation_cmd") resolved = true;
       const ann = {
         id,
         body: String(args?.body ?? ""),
         author: String(args?.author ?? "You"),
         quote: String(args?.quote ?? ""),
         createdAt: new Date().toISOString(),
-        resolved:
-          cmd === "resolve_annotation_cmd" ||
-          cmd === "accept_suggestion_cmd" ||
-          cmd === "reject_suggestion_cmd",
-        kind: kind === "suggestion" ? "suggestion" : "comment",
+        resolved,
+        kind: isSug ? "suggestion" : "comment",
         revision: cmd === "create_annotation_cmd" ? 1 : expected + 1 || 1,
+        disposition,
       };
       return {
         annotation: ann,
         comments: [ann],
         runId: "00000000-0000-4000-8000-000000000000",
+      } as T;
+    }
+    case "begin_accept_suggestion_cmd": {
+      const id = String(args?.id ?? crypto.randomUUID());
+      const expected = Number(args?.expectedRevision ?? 0);
+      const ann = {
+        id,
+        body: "",
+        author: "You",
+        quote: "",
+        createdAt: new Date().toISOString(),
+        resolved: false,
+        kind: "suggestion",
+        revision: expected + 1 || 1,
+        disposition: "accepting",
+        acceptanceOpId: crypto.randomUUID(),
+      };
+      return {
+        annotation: ann,
+        comments: [ann],
+        runId: "00000000-0000-4000-8000-000000000000",
+        acceptanceOpId: ann.acceptanceOpId,
+        baseContentHash: String(args?.expectedContentHash ?? "0".repeat(64)),
       } as T;
     }
     case "reconcile_session_annotations_cmd":

@@ -194,4 +194,4 @@ Not a general knowledge-management workspace, full agent observability stack, Gi
 
 ## License
 
-Dual-licensed under **MIT OR Apache-2.0**. See [LICENSE-MIT](./LICENSE-MIT) and [LICENSE-APACHE](./LICENSE-APACHE).
+Licensed under the **Apache License, Version 2.0**. See [LICENSE](./LICENSE).

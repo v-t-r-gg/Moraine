@@ -1,8 +1,8 @@
 # Moraine
 
-Local-first Markdown collab for **humans + agents**.
+Local-first Markdown for **agent work logs + human review**.
 
-Agents and scripts do heavy writing through the **CLI** and the files on disk. Humans review and approve in the **desktop/web UI** (comments, suggestion accept/reject, Save). **One file = one room.** No mandatory cloud.
+Agents document what they did (changes, decisions, outcomes) as plain `.md` while they work. That history stays on disk and can be reviewed **in real time** or **later**. Humans use the desktop/web UI for comments, suggestion accept/reject, and Save. **One file = one room.** No mandatory cloud.
 
 Repo: https://github.com/v-t-r-gg/Moraine  
 See [VISION.md](./VISION.md) and [ARCHITECTURE.md](./ARCHITECTURE.md).
@@ -11,9 +11,11 @@ See [VISION.md](./VISION.md) and [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 | | CLI (`moraine`) | GUI (Tauri / web) |
 |--|-----------------|-------------------|
-| Built for | Agents, CI, shell tools | Human review and live editing |
-| Strengths | `cat`/`write`, `share`, `status --json`, exit codes | Presence, Comment/Suggest, Accept/Reject, host Save |
-| Durable state | Plain `.md` + `file.md.comments.json` | Same files; Yjs for live session |
+| Built for | Agents logging work; scripts and CI | Humans reviewing and approving |
+| Strengths | Write/read files, `share`, `status --json`, exit codes | Presence, Comment/Suggest, Accept/Reject, host Save |
+| Durable state | `.md` work log + `file.md.comments.json` | Same files; Yjs for a live session |
+
+Agents produce the record. Humans audit it. Real-time collab is optional glue when both are online.
 
 ## Setup
 
@@ -25,59 +27,57 @@ npm install
 ## Quick start
 
 ```bash
-# Relay (needed for multiplayer join URLs)
 cargo run -p moraine-server
 
-# Agent/script: publish a room for a file
-cargo run -p moraine-cli -- share examples/welcome.md --json
+# Agent: expose a room for a work log (or notes file)
+cargo run -p moraine-cli -- share path/to/work-log.md --json
 
-# Human: open the printed join URL after starting the UI
+# Human: open the printed join URL (after npm run dev) or open the file as host
 npm run dev
-# or host desktop: npm run tauri:dev
+# or: npm run tauri:dev
 ```
 
 ## Human + agent workflows
 
-### Agent writes, human reviews
+### Agent documents the task (CLI / files)
 
-Typical loop:
+While working, the agent appends or rewrites Markdown (any editor, `moraine write`, etc.): summary of changes, decisions, open questions. Optional:
 
-1. **Agent** edits the markdown file (editor, `moraine write`, or any tool).
-2. **Agent** shares the room so a human can join live if needed:
-   ```bash
-   moraine share notes.md --json
-   # {"ok":true,"room":"doc_…","url":"http://localhost:1420/?room=doc_…", ...}
-   ```
-3. **Agent** (or host) checks review state without a browser:
-   ```bash
-   moraine status notes.md
-   # annotations.suggestionsOpen, commentsOpen, relay.ok, joinUrl
-   ```
-4. **Human** opens the join URL or the file as host, uses **Review** to comment, Accept/Reject suggestions, then **Save**.
+```bash
+moraine share work-log.md --json
+# room + url for a human who wants to watch live
 
-Exit codes for scripts: `0` ok, `1` error, `2` not found, `3` relay down.  
+moraine status work-log.md
+# room, joinUrl, relay.ok, open comment/suggestion counts from sidecar
+```
+
+Exit codes: `0` ok, `1` error, `2` not found, `3` relay down.  
 With `--json`, failures also print `{"ok":false,"error":"…","code":N}` on stdout.
 
 ```bash
 moraine info --json
-moraine status notes.md              # JSON by default
-moraine status notes.md --human
-moraine share notes.md --json
-moraine share notes.md --start --json   # spawn relay once if down
-moraine join doc_abc --json --no-open   # URL only, no browser
+moraine status work-log.md              # JSON by default
+moraine status work-log.md --human
+moraine share work-log.md --json
+moraine share work-log.md --start --json
+moraine join doc_abc --json --no-open
 ```
 
-`status` does not report live peer count (that is Yjs/UI only). It is reliable for automation: room id, relay health, sidecar review counts.
+`status` is for audit and automation (disk + sidecar + relay). It does not report live peer count (that is UI/Yjs only).
 
-### Human collab (GUI)
+### Human reviews (GUI), live or later
+
+**Live:** open the `?room=` URL while the agent still has the room shared. Presence + Review work as usual.
+
+**Later (hindsight):** open the same `.md` as host (desktop) or open the file again after the fact. Sidecar comments/suggestions rehydrate; missing quotes show as "quote not found." Accept/Reject and Save still apply.
 
 ```bash
-cargo run -p moraine-server
-cargo run -p moraine-cli -- share notes.md
-npm run dev   # open the ?room= URL in one or more tabs
+cargo run -p moraine-server   # only needed for live multiplayer
+cargo run -p moraine-cli -- share work-log.md
+npm run dev                   # or tauri:dev as host
 ```
 
-In the UI: select text, **Comment** or **Suggest**, open **Review**, Accept/Reject, **Save**.
+In the UI: read the log, **Comment** / **Suggest**, **Review** Accept/Reject, **Save**.
 
 ### Host save (desktop)
 
@@ -89,16 +89,16 @@ In the UI: select text, **Comment** or **Suggest**, open **Review**, Accept/Reje
 
 ## Review (comments + suggestions)
 
-Both humans and agent-driven edits land as plain text; review is human-first in the UI.
+Review is how humans structure oversight on agent-written Markdown (or any collab edit).
 
 | Action | How |
 |--------|-----|
 | Comment | Select text -> **Comment** |
-| Suggest | Select text -> **Suggest** (empty replacement = delete) |
+| Suggest | Select text -> **Suggest** (empty = delete) |
 | Accept | **Review** -> Accept (applies replacement) |
 | Reject | **Review** -> Reject (drops mark only) |
 
-Stored in Yjs during the session and in `file.md.comments.json` on host Save (and on add/resolve/accept/reject). On cold open, marks rehydrate from quote text; if the quote is gone, Review shows "quote not found".
+Session state is Yjs; durable review state is `file.md.comments.json` on host Save (and on add/resolve/accept/reject). Cold open rehydrates marks from quote text when possible.
 
 ## CLI cheat sheet
 
@@ -115,7 +115,6 @@ moraine cat|write|history|restore|watch
 moraine --help
 moraine status --help
 moraine share --help
-moraine join --help
 ```
 
 ## Checks
@@ -126,7 +125,7 @@ moraine join --help
 
 ## Non-goals
 
-In-app multi-file workspace, auth product, MCP as the only agent path. The **CLI is the agent path** today. Multi-file = multiple processes/terminals.
+In-app multi-file workspace, auth product, MCP as the only agent path. CLI is the agent path; GUI is the review/audit path. Multi-file = multiple processes.
 
 ## License
 

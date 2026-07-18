@@ -2,81 +2,82 @@
 
 ## Product model
 
-**One markdown file = one collab room.**  
-**Dual access:** agents/scripts use the CLI; humans use the GUI for live review.  
-See [VISION.md](./VISION.md).
+**One markdown file = one collab room.**
 
-Open multiple instances for multiple files. No in-app workspace tree in core.
+**Agent work logs + human audit:** agents write Markdown that records what they did; humans review that record live or later. CLI is the agent surface; GUI is the review surface. See [VISION.md](./VISION.md).
+
+No in-app multi-file workspace. Multiple files = multiple instances.
 
 ## Dual-access layout
 
 ```
-  Agent / script                    Human
-       |                               |
-  moraine CLI                     Tauri / web UI
-  (files, share, status)          (edit, presence, Review)
-       |                               |
-       +-------- moraine-core ---------+
-                  |        |
-              .md files   .md.comments.json
-                  |
-           moraine-server (optional Yjs relay)
+  Agent (logs work in .md)              Human (reviews / audits)
+         |                                      |
+    moraine CLI                            Tauri / web UI
+    write, share, status                   edit, presence, Review
+         |                                      |
+         +----------- moraine-core -------------+
+                       |            |
+                   .md files    .md.comments.json
+                       |
+                moraine-server (optional live Yjs)
 ```
 
 | Surface | Responsibility |
 |---------|----------------|
-| `moraine` CLI | File I/O, share/join URLs, status for automation, history; JSON + exit codes |
-| GUI | Tiptap/Yjs editing, presence, comments, suggestion accept/reject, host Save |
-| `moraine-core` | Domain only: documents, history, watcher, rooms, share URLs, annotation sidecar |
-| `moraine-server` | In-memory Yjs WebSocket relay (no auth) |
+| `moraine` CLI | File I/O, share/join, status for scripts; JSON + exit codes |
+| GUI | Live edit, presence, comments, suggestion accept/reject, host Save |
+| `moraine-core` | Documents, history, watcher, rooms, share URLs, annotation sidecar |
+| `moraine-server` | In-memory Yjs WebSocket relay |
 
-Core stays free of Tauri and Axum so the CLI stays light for agents.
+Core has no Tauri or Axum so agents keep a small CLI.
 
 ## Crates
 
 | Piece | Role |
 |-------|------|
-| `moraine-core` | Files, history, watcher, room ids, share URLs, annotation sidecar |
-| `moraine-cli` | Agent/human terminal entry; thin relay health; optional `--start` spawn |
-| `moraine-server` | Yjs WebSocket relay (Axum) |
-| `src-tauri` | Desktop host shell (IPC, dialogs, watcher bridge) |
+| `moraine-core` | Domain: files, history, watcher, rooms, share helpers, sidecar |
+| `moraine-cli` | Terminal entry for agents and humans |
+| `moraine-server` | Yjs relay (Axum) |
+| `src-tauri` | Desktop host (IPC, dialogs, FS watcher bridge) |
 | `src/` | Svelte UI (Tiptap + Yjs + Review) |
 
 ## Data flow
 
-1. **Write path (often agent):** CLI or any tool updates `.md` on disk; host desktop may also edit via GUI.
-2. **Share path:** `moraine share` prints join URL / room id; relay must be up unless `--start`.
-3. **Live path:** GUI joins via `?room=` (and optional WS to relay). Yjs session from `yjsSession.ts`.
+1. **Log (agent):** Markdown on disk is updated during a task (CLI or any tool). That file is the durable work history.
+2. **Share (optional live):** `moraine share` prints room/URL so a human can join mid-task. Relay must be up unless `--start`.
+3. **Live session:** GUI joins `?room=`; Yjs from `yjsSession.ts` (BroadcastChannel and/or WS).
 4. **Host save:** autosave when solo; paused when remote peers present; explicit Save always writes.
-5. **Review path (often human):** annotations in Yjs map `comments` + marks (`kind` comment|suggestion). Host persists to `file.md.comments.json`. Accept applies replacement into the doc; reject drops the mark.
-6. **Status path (agent):** `moraine status` reads path/room, relay health, sidecar counts (not live peer count).
+5. **Review (human):** comments/suggestions in Yjs map `comments` + marks. Host persists to `file.md.comments.json`. Accept applies text; reject drops mark.
+6. **Audit later:** open the same path without peers; sidecar rehydrates list and quote-based marks for hindsight.
+7. **Status (agent):** `moraine status` reads path/room, relay health, sidecar counts (not live peers).
 
 ## Annotation sidecar
 
 Path: `{markdown_path}.comments.json`  
-Example: `notes.md` -> `notes.md.comments.json`
+Example: `work-log.md` -> `work-log.md.comments.json`
 
-Fields: `kind` (`comment` default, or `suggestion`), `quote`, `body`, author, resolved.
+Fields: `kind` (`comment` or `suggestion`), `quote`, `body`, author, resolved.
 
-Load on host open (merge by id; live Yjs wins). Write on host Save and on add/resolve/accept/reject. Marks rehydrate by searching for `quote` in the document; missing quotes are orphaned in the UI.
+Supports both live review and later audit of what was proposed or discussed.
 
 ## Features vs audiences
 
-| Feature | Agent | Human |
-|---------|-------|-------|
-| `cat` / `write` / history | Primary | Occasional |
+| Feature | Agent (logging / scripts) | Human (oversight) |
+|---------|---------------------------|-------------------|
+| Writing `.md` work logs | Primary | Read / lightly edit |
 | `share` / `join` / `status --json` | Primary | Convenience |
-| Live cursors / presence | N/A (today) | Primary |
-| Comments + suggestions UI | Indirect (sidecar counts via status) | Primary |
-| Host Save under collab | If driving the desktop host | Primary |
+| Live presence | N/A today | Primary when online |
+| Comments + suggestions UI | Indirect (`status` counts) | Primary |
+| Host Save under collab | If host process is agent-driven desktop | Primary |
 
 ## Quality gate
 
-No new major feature until the last one has: persistence where needed, a few real tests, and a dogfood pass. Prefer work that makes **single-file human+agent collab** better.
+Prefer changes that improve **agent-written history** or **human review/audit** of that history on a single file. Persistence + tests before the next large feature.
 
 ## Non-goals (for now)
 
-Multi-file workspace UI, auth/TLS product, Git/SQLite productization, process supervisor for the relay, MCP as required agent API (CLI first).
+Multi-file workspace UI, auth/TLS product, Git/SQLite productization, MCP as required agent API (CLI first).
 
 ## Tests
 

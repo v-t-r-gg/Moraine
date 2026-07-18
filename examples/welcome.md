@@ -1,13 +1,11 @@
 # Welcome to Moraine
 
-Local-first Markdown for **humans + agents**: CLI for writing and scripts, GUI for review (comments, suggestions, Save).
-
-## Try
+Agents document their work in Markdown. Humans review that history live or later (comments, suggestions, Save).
 
 ```bash
 cargo run -p moraine-server
 cargo run -p moraine-cli -- share examples/welcome.md --json
-npm run dev    # open the printed ?room= URL
+npm run dev
 ```
 
-See the repo README: Human + agent workflows, and `moraine status` for sidecar review counts.
+See README: Human + agent workflows, and VISION.md for positioning.

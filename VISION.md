@@ -1,30 +1,38 @@
 # Vision
 
-Moraine is a **local-first Markdown collab tool** for teams where **agents do a lot of the writing** and **humans do the review**.
+Moraine is a **local-first Markdown collab tool** where **agents document their own work** and **humans review that record**.
 
 ## Positioning
 
-| Role | Primary surface | What they do |
-|------|-----------------|--------------|
-| Agent / script | `moraine` CLI (`--json`, exit codes) | Read/write files, open share rooms, inspect status and review counts |
-| Human | Desktop (Tauri) or web UI | Live edit, comments, accept/reject suggestions, Save to disk |
+While coding or operating systems, agents write plain Markdown: what changed, why, decisions, outcomes. That becomes a durable audit trail next to the code (or any folder). Humans review it **live** or **later**, with comments, suggestions, and accept/reject, without forcing a cloud SaaS doc product into the loop.
 
-Plain `.md` on disk stays the durable artifact. No mandatory cloud. Optional self-hosted Yjs relay for multiplayer.
+| Role | Primary surface | Job |
+|------|-----------------|-----|
+| Agent / script | `moraine` CLI + writing `.md` | Log work as Markdown; share rooms; `status` for review counts |
+| Human | Desktop / web UI | Read history, comment, accept/reject suggestions, Save |
 
-## Design rules that follow from this
+**One file = one room.** The artifact is always a real `.md` file (plus optional `file.md.comments.json`). No mandatory cloud.
 
-1. **CLI is first-class**, not a thin wrapper around the GUI. Agents should not need a browser to contribute.
-2. **GUI is for judgment**: presence, comments, suggestions, host Save under collab.
-3. **One file = one room.** Keep the product focused; multi-file can be multiple processes.
-4. **Scriptable I/O**: stable JSON shapes, exit codes (`0/1/2/3`), short error messages.
-5. **Review data next to the file**: `file.md.comments.json` so comments/suggestions survive cold open and fit git workflows.
+## Why this split
 
-## What success looks like
+- Agents already work in terminals and tools. The CLI (`cat`/`write`, `share`, `status --json`, exit codes) is the agent API.
+- Humans need presence, Review UI, and judgment. The GUI is for oversight, not for blocking agents from writing.
+- Persistent files mean hindsight works: open the same path tomorrow, rehydrate marks from the sidecar, audit what was proposed and accepted.
 
-- An agent can `share` a doc, edit via CLI or file tools, and leave suggestions/comments for a human.
-- A human opens the same room (or the file as host), reviews Accept/Reject, and Saves.
-- Scripts can poll `status` without attaching to Yjs awareness.
+## Design rules
+
+1. **Agent logging is a first-class use case.** Docs written during a task should survive cold open and git.
+2. **Human review is first-class.** Comments and suggestions exist so oversight is structured, not only "read the whole file."
+3. **CLI is not secondary.** Scripts must not need a browser to contribute or inspect status.
+4. **Real-time is optional.** Live Yjs rooms help when a human joins mid-task; offline file + sidecar still matter for later audit.
+5. **Keep scope narrow.** One file per room; multi-file = multi process. Prefer polish on review and CLI over workspace UI.
+
+## Success
+
+- An agent finishes a task and leaves Markdown + review state a human can open hours later and still understand.
+- A human can join a live room *or* open the file alone and Accept/Reject leftover suggestions.
+- Automation can `status` a path without attaching to Yjs awareness.
 
 ## Out of scope (for now)
 
-In-app multi-file workspace, auth/TLS product, full MCP server as the only agent path. The CLI is the agent path today.
+In-app multi-file workspace, auth product, MCP as the only agent path. CLI remains the agent path; GUI remains the review path.

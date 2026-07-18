@@ -1,6 +1,7 @@
 //! CLI for agent run records and review helpers. Fail-fast share unless `--start`.
 
 mod relay;
+mod run_cli;
 
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
@@ -35,8 +36,9 @@ const EXIT_RELAY: i32 = 3;
     version,
     about = "Moraine CLI: run records and review helpers for agents and scripts",
     long_about = "Create and inspect Markdown run records, share live review rooms, and read sidecar status.\n\
+                  Agent protocol: moraine project init; moraine run start|show|checkpoint|ready|resume|open --json.\n\
                   Exit codes: 0 ok, 1 error, 2 not found, 3 relay down.\n\
-                  Prefer --json on share/status/info/join when calling from scripts."
+                  Prefer --json on share/status/info/join/run/project when calling from scripts."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -188,6 +190,18 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+
+    /// Moraine project init/discovery under `.moraine`
+    Project {
+        #[command(subcommand)]
+        cmd: run_cli::ProjectCmd,
+    },
+
+    /// Agent run protocol: start, checkpoint, ready, resume, show, open
+    Run {
+        #[command(subcommand)]
+        cmd: run_cli::RunCmd,
+    },
 }
 
 fn main() {
@@ -255,6 +269,8 @@ fn run() -> Result<i32> {
             expected_hash,
             json,
         } => cmd_decide(path, decision, reviewer, reason, expected_hash, json),
+        Commands::Project { cmd } => run_cli::dispatch_project(cmd),
+        Commands::Run { cmd } => run_cli::dispatch_run(cmd),
     }?;
     Ok(code)
 }

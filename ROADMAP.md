@@ -2,30 +2,31 @@
 
 High-level direction only. Details live in [VISION.md](./VISION.md) and [ARCHITECTURE.md](./ARCHITECTURE.md).
 
-## Now (v0.1 / v0.2 foundation + v0.2.1 correctness)
+## Now (foundation through agent run protocol)
 
-* Run records as Markdown + `*.md.moraine.json` ledger
-* Stable run ID + SHA-256 content hash + append-only decisions
+* Run records as Markdown + `*.md.moraine.json` ledger (schema through v4)
+* Stable run ID + SHA-256 content hash + append-only human decisions
+* Operation-based annotation mutations; durable suggestion dispositions
+* Agent run protocol: `project init`, `run start|checkpoint|show|ready|resume|open`
 * Decisions only against saved Markdown; revision preconditions; read-only status
 * Per-document ledger lock + safe atomic replace; deterministic legacy migration
-* CLI: `share`, `status --json`, `init`, `decide`, file helpers
+* CLI: protocol + `share`, `status --json`, `init`, `decide`, file helpers
 * GUI: comments, suggestions, run-level review panel, host Save
 * Optional in-memory live relay
-* Docs positioned as a review ledger for agent work
 
-## Next (v0.3 durable annotations, in progress)
+## Next
 
-* Operation-based annotation mutations (issue #2)
+* Dogfood agent protocol on real development runs
 * Stronger annotation rehydration / anchors (follow-on issues)
-* Clearer run-record conventions for agents (templates, examples)
-* Evidence pointers / capture helpers (still optional)
+* Version-history UX (issue #4)
+* MCP transport over the same core operations (not yet implemented)
 * Keep CI green
 
 ## Later (not scheduled)
 
-* Evidence capture / attachment helpers
+* Evidence capture / attachment helpers (beyond agent-reported pointers)
 * Authenticated reviewer identity (not just labels)
-* Optional Git integrations (still user-controlled)
+* Optional Git integrations beyond mechanical context capture
 * Authenticated collaboration
 * Multi-run review inbox
 

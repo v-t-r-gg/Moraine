@@ -672,6 +672,17 @@ See the project README and VISION.md for the full model.
       return;
     }
 
+    // Protocol Model A: suggestions that rewrite managed projection are blocked;
+    // comments on managed content remain allowed.
+    if (
+      kind === "suggestion" &&
+      editorRef.selectionTouchesManagedRegion?.()
+    ) {
+      status =
+        "Suggestions cannot rewrite Moraine-managed regions (above Human notes). Add a comment, or edit free-form text only under Human notes.";
+      return;
+    }
+
     const body =
       kind === "suggestion"
         ? window.prompt(
@@ -798,6 +809,11 @@ See the project README and VISION.md for the full model.
     if (rec.disposition === "accepting") {
       status =
         "This suggestion has an incomplete acceptance. Use Cancel acceptance or complete recovery after Save.";
+      return;
+    }
+    if (editorRef?.suggestionTargetsManagedRegion?.(id, rec.quote)) {
+      status =
+        "Cannot accept suggestion: it targets Moraine-managed content (above Human notes). Use comments / request-changes instead.";
       return;
     }
     if (!isTauri) {

@@ -15,7 +15,8 @@ Live collaboration is optional infrastructure around that record. See [VISION.md
   Agents / scripts                      Humans
         |                                  |
    moraine CLI                        GUI (Tauri / web)
-   file ops, status, decide           review, edit, Save
+   project/run protocol,              review, edit, Save
+   status, decide, share
         |                                  |
         +---------- moraine-core ----------+
                     |            |
@@ -25,14 +26,23 @@ Live collaboration is optional infrastructure around that record. See [VISION.md
              moraine-server (optional live relay)
 ```
 
+Long-term surfaces over the same core:
+
+```text
+moraine-core
+    ├── JSON CLI (current)
+    ├── future MCP transport
+    └── desktop human-review surface
+```
+
 | Surface | Audience | Role |
 |---------|----------|------|
-| CLI | Agents, scripts | Create/inspect files, share room URL, status, decide, local history helpers |
+| CLI | Agents, scripts | Project/run protocol, share room URL, status, decide, local history helpers |
 | GUI | Humans | Open run records, run-level decisions, comments/suggestions, host Save |
-| `moraine-core` | Shared | Domain library: documents, history, rooms, share URLs, run ledger |
+| `moraine-core` | Shared | Domain library: documents, history, rooms, share URLs, run ledger, agent protocol |
 | `moraine-server` | Optional | In-memory Yjs WebSocket relay; no auth; no disk persistence |
 
-Core has no Tauri or Axum dependency.
+Core has no Tauri or Axum dependency. MCP is not implemented yet.
 
 ## Crates
 
@@ -50,11 +60,13 @@ Core has no Tauri or Axum dependency.
 
 ```text
 Agent or script
-    -> moraine write / cat / ordinary filesystem
-    -> Markdown run record (.md)
-    -> optional human later opens same path
-    -> optional moraine status / decide (run id, content hash, review state)
+    -> moraine run start / checkpoint / ready / resume (JSON CLI)
+    -> durable Markdown projection + sidecar agent state
+    -> optional human later opens path or moraine run open --run-id
+    -> human moraine decide / GUI (not agent lifecycle)
 ```
+
+Details: [docs/AGENT_RUN_PROTOCOL.md](./docs/AGENT_RUN_PROTOCOL.md).
 
 ### Live review flow
 

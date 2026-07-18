@@ -38,6 +38,7 @@ Moraine enforces that a human decision applies to the exact Markdown revision of
 
 * One primary run record per PR when practical.
 * Name the reviewed implementation commit(s) in the Markdown body.
+* Do **not** embed the SHA of the commit that contains the run record itself (a commit cannot contain its own final SHA). Record the PR head in PR metadata at approval time.
 * After approval, do not change source, docs, or the run-record Markdown without re-review.
 * Reviewer labels are attribution only, not authenticated identity.
 * Do not claim compliance-grade or tamper-proof audit properties.

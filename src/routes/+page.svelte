@@ -13,6 +13,7 @@
     cancelAcceptSuggestion,
     completeAcceptSuggestion,
     createAnnotation,
+    getAcceptanceRecoveryStatus,
     getRunReview,
     historyList,
     historyRestoreContent,
@@ -96,6 +97,7 @@ See the project README and VISION.md for the full model.
   let localAuthor = $state("You");
   let runReview = $state<RunReviewDto | null>(null);
   let reviewBusy = $state(false);
+  let recoveryBusy = $state(false);
   /** Hash of the last known persisted Markdown revision (from disk load/save). */
   let baseContentHash = $state<string | null>(null);
   /** External disk change detected while this session holds a different base. */
@@ -799,18 +801,81 @@ See the project README and VISION.md for the full model.
       status = "No active acceptance to cancel.";
       return;
     }
+    recoveryBusy = true;
     try {
+      // Prefer backend recovery check (disk hash), not editor buffer.
+      const st = await getAcceptanceRecoveryStatus(doc.meta.path, id);
+      if (!st.cancelSafe) {
+        await refreshAnnotationsFromDisk();
+        await refreshRunReview(doc.meta.path);
+        status =
+          "Cannot cancel: Markdown changed after acceptance began. Finalize against the saved document, or restore the original revision first.";
+        return;
+      }
       const op = await cancelAcceptSuggestion(
         doc.meta.path,
         id,
-        rec.revision ?? 1,
+        rec.revision ?? st.revision,
         rec.acceptanceOpId,
       );
       await applyOpResult(op);
       status = "Acceptance cancelled; suggestion is pending again.";
     } catch (e) {
       await refreshAnnotationsFromDisk();
+      await refreshRunReview(doc.meta.path);
       status = `Could not cancel acceptance (${e})`;
+    } finally {
+      recoveryBusy = false;
+    }
+  }
+
+  async function finalizeIncompleteAcceptance(id: string) {
+    if (!session || !doc || !isTauri) return;
+    recoveryBusy = true;
+    try {
+      const st = await getAcceptanceRecoveryStatus(doc.meta.path, id);
+      if (!st.acceptanceOpId) {
+        status = "No acceptance operation to finalize.";
+        return;
+      }
+      if (st.cancelSafe) {
+        status =
+          "Document still matches the base revision. Cancel acceptance if the suggestion was not applied, or apply and Save before finalizing.";
+        return;
+      }
+      const op = await completeAcceptSuggestion(
+        doc.meta.path,
+        id,
+        st.revision,
+        st.acceptanceOpId,
+        st.currentContentHash,
+      );
+      await applyOpResult(op);
+      await refreshRunReview(doc.meta.path);
+      status = "Acceptance finalized for the current saved document revision.";
+    } catch (e) {
+      await refreshAnnotationsFromDisk();
+      await refreshRunReview(doc.meta.path);
+      status = `Could not finalize acceptance (${e})`;
+    } finally {
+      recoveryBusy = false;
+    }
+  }
+
+  async function refreshAcceptanceRecovery(id: string) {
+    if (!doc || !isTauri) return;
+    recoveryBusy = true;
+    try {
+      await refreshAnnotationsFromDisk();
+      await refreshRunReview(doc.meta.path);
+      const st = await getAcceptanceRecoveryStatus(doc.meta.path, id);
+      status = st.cancelSafe
+        ? "Recovery status: Markdown still at base hash (Cancel is safe)."
+        : "Recovery status: Markdown differs from base (Finalize or restore original).";
+    } catch (e) {
+      status = `Could not refresh recovery status (${e})`;
+    } finally {
+      recoveryBusy = false;
     }
   }
 
@@ -965,12 +1030,16 @@ See the project README and VISION.md for the full model.
         comments={commentList}
         orphanedIds={orphanedMarkIds}
         showResolved={showResolvedComments}
+        currentDiskHash={baseContentHash}
+        recoveryBusy={recoveryBusy}
         onToggleShowResolved={() => (showResolvedComments = !showResolvedComments)}
         onResolve={resolveComment}
         onReopen={reopenComment}
         onAccept={acceptSuggestion}
         onReject={rejectSuggestion}
         onCancelAccept={cancelIncompleteAcceptance}
+        onFinalizeAccept={finalizeIncompleteAcceptance}
+        onRefreshRecovery={refreshAcceptanceRecovery}
         onFocus={focusComment}
         onClose={() => (commentsOpen = false)}
       />

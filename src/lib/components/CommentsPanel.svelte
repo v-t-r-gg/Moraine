@@ -1,7 +1,9 @@
 <script lang="ts">
   import {
+    acceptanceRecoveryMode,
     dispositionLabel,
     isResolvedView,
+    shortHash,
     type CommentRecord,
   } from "$lib/editor/comments";
 
@@ -9,12 +11,17 @@
     comments: CommentRecord[];
     orphanedIds: string[];
     showResolved: boolean;
+    /** Authoritative persisted Markdown hash (disk), not editor buffer. */
+    currentDiskHash: string | null;
+    recoveryBusy?: boolean;
     onToggleShowResolved: () => void;
     onResolve: (id: string) => void;
     onReopen: (id: string) => void;
     onAccept: (id: string) => void;
     onReject: (id: string) => void;
     onCancelAccept?: (id: string) => void;
+    onFinalizeAccept?: (id: string) => void;
+    onRefreshRecovery?: (id: string) => void;
     onFocus: (id: string) => void;
     onClose: () => void;
   }
@@ -23,12 +30,16 @@
     comments,
     orphanedIds,
     showResolved,
+    currentDiskHash,
+    recoveryBusy = false,
     onToggleShowResolved,
     onResolve,
     onReopen,
     onAccept,
     onReject,
     onCancelAccept,
+    onFinalizeAccept,
+    onRefreshRecovery,
     onFocus,
     onClose,
   }: Props = $props();
@@ -120,13 +131,63 @@
             </button>
             <div class="mt-1.5 flex flex-wrap gap-2">
               {#if accepting}
-                <button type="button" class="link" onclick={() => onAccept(c.id)} disabled>
-                  Accept (in progress)
-                </button>
-                {#if onCancelAccept}
-                  <button type="button" class="link" onclick={() => onCancelAccept(c.id)}>
+                {@const mode = acceptanceRecoveryMode(
+                  c.disposition,
+                  c.acceptanceBaseHash,
+                  currentDiskHash,
+                )}
+                <div class="w-full text-[10px]" style="color: #b45309;">
+                  Incomplete acceptance.
+                  {#if c.acceptanceBaseHash && currentDiskHash}
+                    base {shortHash(c.acceptanceBaseHash)} · disk {shortHash(currentDiskHash)}
+                  {/if}
+                </div>
+                {#if mode === "cancel_safe" && onCancelAccept}
+                  <button
+                    type="button"
+                    class="link"
+                    disabled={recoveryBusy}
+                    onclick={() => onCancelAccept(c.id)}
+                  >
                     Cancel acceptance
                   </button>
+                {:else if mode === "finalize_required"}
+                  <p class="w-full text-[10px]" style="color: var(--muted);">
+                    The document changed after acceptance began. Confirm the saved document contains
+                    the intended suggestion, then finalize. To cancel instead, restore the original
+                    document revision first.
+                  </p>
+                  {#if onFinalizeAccept}
+                    <button
+                      type="button"
+                      class="link"
+                      disabled={recoveryBusy}
+                      onclick={() => onFinalizeAccept(c.id)}
+                    >
+                      Finalize acceptance
+                    </button>
+                  {/if}
+                  {#if onRefreshRecovery}
+                    <button
+                      type="button"
+                      class="link"
+                      disabled={recoveryBusy}
+                      onclick={() => onRefreshRecovery(c.id)}
+                    >
+                      Refresh status
+                    </button>
+                  {/if}
+                {:else}
+                  {#if onRefreshRecovery}
+                    <button
+                      type="button"
+                      class="link"
+                      disabled={recoveryBusy}
+                      onclick={() => onRefreshRecovery(c.id)}
+                    >
+                      Refresh status
+                    </button>
+                  {/if}
                 {/if}
               {:else if terminal}
                 <button type="button" class="link" onclick={() => onReopen(c.id)}>Reopen</button>

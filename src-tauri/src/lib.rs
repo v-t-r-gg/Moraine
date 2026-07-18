@@ -44,6 +44,7 @@ pub fn run() {
             commands::begin_accept_suggestion_cmd,
             commands::complete_accept_suggestion_cmd,
             commands::cancel_accept_suggestion_cmd,
+            commands::acceptance_recovery_status_cmd,
             commands::reject_suggestion_cmd,
             commands::reconcile_session_annotations_cmd,
             commands::comments_sidecar_path_cmd,

@@ -1,18 +1,13 @@
 # Welcome to Moraine
 
-Local-first Markdown editor: Tauri desktop, CLI, history, and optional multiplayer.
+Local-first Markdown for **humans + agents**: CLI for writing and scripts, GUI for review (comments, suggestions, Save).
 
 ## Try
 
 ```bash
-cargo run -p moraine-cli -- info
-cargo run -p moraine-cli -- share examples/welcome.md
-npm run dev             # open the printed ?room= URL
-npm run tauri:dev
+cargo run -p moraine-server
+cargo run -p moraine-cli -- share examples/welcome.md --json
+npm run dev    # open the printed ?room= URL
 ```
 
-## Next
-
-1. Real multiplayer polish (share CLI, host-only save)
-2. Comments + suggestions
-3. Git + SQLite
+See the repo README: Human + agent workflows, and `moraine status` for sidecar review counts.

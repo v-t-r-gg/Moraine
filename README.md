@@ -1,8 +1,19 @@
 # Moraine
 
-Local-first Markdown editor with optional multiplayer. **One file = one room.** Host disk is source of truth; Yjs handles live collab. No required cloud.
+Local-first Markdown collab for **humans + agents**.
 
-Repo: https://github.com/v-t-r-gg/Moraine · see [ARCHITECTURE.md](./ARCHITECTURE.md)
+Agents and scripts do heavy writing through the **CLI** and the files on disk. Humans review and approve in the **desktop/web UI** (comments, suggestion accept/reject, Save). **One file = one room.** No mandatory cloud.
+
+Repo: https://github.com/v-t-r-gg/Moraine  
+See [VISION.md](./VISION.md) and [ARCHITECTURE.md](./ARCHITECTURE.md).
+
+## Why two surfaces
+
+| | CLI (`moraine`) | GUI (Tauri / web) |
+|--|-----------------|-------------------|
+| Built for | Agents, CI, shell tools | Human review and live editing |
+| Strengths | `cat`/`write`, `share`, `status --json`, exit codes | Presence, Comment/Suggest, Accept/Reject, host Save |
+| Durable state | Plain `.md` + `file.md.comments.json` | Same files; Yjs for live session |
 
 ## Setup
 
@@ -11,78 +22,83 @@ Repo: https://github.com/v-t-r-gg/Moraine · see [ARCHITECTURE.md](./ARCHITECTUR
 npm install
 ```
 
-## Run
+## Quick start
 
 ```bash
-# Terminal A: collab relay
+# Relay (needed for multiplayer join URLs)
 cargo run -p moraine-server
 
-# Terminal B: share a file (prints join URL)
-cargo run -p moraine-cli -- share examples/welcome.md
-# open http://localhost:1420/?room=doc_… after: npm run dev
+# Agent/script: publish a room for a file
+cargo run -p moraine-cli -- share examples/welcome.md --json
 
-# Desktop host (optional)
-npm run tauri:dev
+# Human: open the printed join URL after starting the UI
+npm run dev
+# or host desktop: npm run tauri:dev
 ```
 
-## Host save
+## Human + agent workflows
 
-| Situation | Disk |
-|-----------|------|
+### Agent writes, human reviews
+
+Typical loop:
+
+1. **Agent** edits the markdown file (editor, `moraine write`, or any tool).
+2. **Agent** shares the room so a human can join live if needed:
+   ```bash
+   moraine share notes.md --json
+   # {"ok":true,"room":"doc_…","url":"http://localhost:1420/?room=doc_…", ...}
+   ```
+3. **Agent** (or host) checks review state without a browser:
+   ```bash
+   moraine status notes.md
+   # annotations.suggestionsOpen, commentsOpen, relay.ok, joinUrl
+   ```
+4. **Human** opens the join URL or the file as host, uses **Review** to comment, Accept/Reject suggestions, then **Save**.
+
+Exit codes for scripts: `0` ok, `1` error, `2` not found, `3` relay down.  
+With `--json`, failures also print `{"ok":false,"error":"…","code":N}` on stdout.
+
+```bash
+moraine info --json
+moraine status notes.md              # JSON by default
+moraine status notes.md --human
+moraine share notes.md --json
+moraine share notes.md --start --json   # spawn relay once if down
+moraine join doc_abc --json --no-open   # URL only, no browser
+```
+
+`status` does not report live peer count (that is Yjs/UI only). It is reliable for automation: room id, relay health, sidecar review counts.
+
+### Human collab (GUI)
+
+```bash
+cargo run -p moraine-server
+cargo run -p moraine-cli -- share notes.md
+npm run dev   # open the ?room= URL in one or more tabs
+```
+
+In the UI: select text, **Comment** or **Suggest**, open **Review**, Accept/Reject, **Save**.
+
+### Host save (desktop)
+
+| Situation | Disk write |
+|-----------|------------|
 | Solo | Autosave ~1.2s |
-| Remote peers | Autosave paused (status bar) |
+| Remote peers in room | Autosave paused |
 | Explicit Save | Always |
 
 ## Review (comments + suggestions)
 
-1. Select text in the editor.
-2. **Comment** (note) or **Suggest** (replacement; empty = delete that text).
-3. Open **Review**: resolve comments, or **Accept** / **Reject** suggestions.
-4. Host **Save** writes the doc and `file.md.comments.json`.
+Both humans and agent-driven edits land as plain text; review is human-first in the UI.
 
-Accept applies the replacement and marks the doc dirty (autosave runs when solo). Reject drops the highlight only. On cold open, marks rehydrate from quote text; if the quote is gone, Review shows "quote not found".
+| Action | How |
+|--------|-----|
+| Comment | Select text -> **Comment** |
+| Suggest | Select text -> **Suggest** (empty replacement = delete) |
+| Accept | **Review** -> Accept (applies replacement) |
+| Reject | **Review** -> Reject (drops mark only) |
 
-## Human + agent workflows
-
-### Human (GUI)
-
-```bash
-cargo run -p moraine-server
-cargo run -p moraine-cli -- share notes.md --open   # if desktop is built
-# or: npm run dev and open the printed ?room= URL in two tabs
-```
-
-In the UI: edit, Comment/Suggest, Review accept/reject, Save.
-
-### Agent / scripts (CLI)
-
-Exit codes: `0` ok, `1` error, `2` not found, `3` relay down.  
-With `--json`, errors are also JSON on stdout: `{"ok":false,"error":"…","code":3}`.
-
-```bash
-# Version + dirs
-moraine info --json
-
-# Path, room id, join URL, sidecar counts (default JSON)
-moraine status notes.md
-# {
-#   "ok": true,
-#   "room": "doc_…",
-#   "joinUrl": "http://localhost:1420/?room=doc_…",
-#   "relay": { "url": "http://127.0.0.1:3099", "ok": true },
-#   "annotations": { "suggestionsOpen": 1, "commentsOpen": 0, ... }
-# }
-moraine status notes.md --human
-
-# Share for another client (stdout URL, or full object with --json)
-moraine share notes.md --json
-moraine share notes.md --start --json   # spawn relay once if down
-
-# Join URL only (no browser)
-moraine join doc_abc123 --json --no-open
-```
-
-Status does not include live peer count (that is UI/Yjs only). It is safe for automation: room id, relay health, and review counts from the sidecar.
+Stored in Yjs during the session and in `file.md.comments.json` on host Save (and on add/resolve/accept/reject). On cold open, marks rehydrate from quote text; if the quote is gone, Review shows "quote not found".
 
 ## CLI cheat sheet
 
@@ -110,7 +126,7 @@ moraine join --help
 
 ## Non-goals
 
-In-app multi-file workspace, auth, MCP server. Multiple terminals cover multi-file.
+In-app multi-file workspace, auth product, MCP as the only agent path. The **CLI is the agent path** today. Multi-file = multiple processes/terminals.
 
 ## License
 

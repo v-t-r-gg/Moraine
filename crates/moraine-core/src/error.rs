@@ -61,6 +61,16 @@ pub enum Error {
     #[error("incomplete acceptance for {id}: {message}")]
     IncompleteAcceptance { id: uuid::Uuid, message: String },
 
+    /// Markdown changed after acceptance began; cancel is unsafe.
+    #[error(
+        "acceptance document changed for {id}: base {base_content_hash}, current {current_content_hash}"
+    )]
+    AcceptanceDocumentChanged {
+        id: uuid::Uuid,
+        base_content_hash: String,
+        current_content_hash: String,
+    },
+
     #[error("annotation revision overflow for {id}")]
     RevisionOverflow { id: uuid::Uuid },
 
@@ -91,6 +101,7 @@ impl Error {
             Self::AnnotationPrecondition { .. } => "annotation_precondition",
             Self::InvalidAnnotationKind { .. } => "invalid_annotation_kind",
             Self::IncompleteAcceptance { .. } => "incomplete_acceptance",
+            Self::AcceptanceDocumentChanged { .. } => "acceptance_document_changed",
             Self::RevisionOverflow { .. } => "revision_overflow",
             Self::Other(_) => "error",
         }
@@ -143,6 +154,17 @@ impl Error {
                 "kind": "incomplete_acceptance",
                 "annotationId": id.to_string(),
                 "message": message,
+            }),
+            Self::AcceptanceDocumentChanged {
+                id,
+                base_content_hash,
+                current_content_hash,
+            } => serde_json::json!({
+                "kind": "acceptance_document_changed",
+                "annotationId": id.to_string(),
+                "baseContentHash": base_content_hash,
+                "currentContentHash": current_content_hash,
+                "message": "The Markdown changed after acceptance began. Finalize the acceptance or restore the original document revision before cancelling.",
             }),
             Self::RevisionOverflow { id } => serde_json::json!({
                 "kind": "revision_overflow",

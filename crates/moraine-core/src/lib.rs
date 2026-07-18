@@ -16,10 +16,11 @@ pub mod share;
 pub mod watcher;
 
 pub use annotation_ops::{
-    apply_mutation, begin_accept_suggestion, cancel_accept_suggestion, complete_accept_suggestion,
-    create_annotation, reconcile_session_annotations, reject_suggestion, reopen_annotation,
-    resolve_annotation, update_annotation, AnnotationMutation, AnnotationOpResult,
-    BeginAcceptResult, ReconcileResult,
+    acceptance_recovery_status, apply_mutation, begin_accept_suggestion, cancel_accept_suggestion,
+    complete_accept_suggestion, create_annotation, reconcile_session_annotations,
+    reject_suggestion, reopen_annotation, resolve_annotation, update_annotation,
+    AcceptanceRecoveryStatus, AnnotationMutation, AnnotationOpResult, BeginAcceptResult,
+    ReconcileResult,
 };
 #[allow(deprecated)]
 pub use comments::{

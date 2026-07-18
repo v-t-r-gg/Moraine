@@ -219,6 +219,23 @@ export async function cancelAcceptSuggestion(
   });
 }
 
+export interface AcceptanceRecoveryDto {
+  annotationId: string;
+  disposition: string;
+  revision: number;
+  acceptanceOpId: string | null;
+  baseContentHash: string | null;
+  currentContentHash: string;
+  cancelSafe: boolean;
+}
+
+export async function getAcceptanceRecoveryStatus(
+  path: string,
+  id: string,
+): Promise<AcceptanceRecoveryDto> {
+  return invoke("acceptance_recovery_status_cmd", { path, id });
+}
+
 export async function rejectSuggestion(
   path: string,
   id: string,
@@ -462,6 +479,16 @@ function browserStub<T>(cmd: string, args?: Record<string, unknown>): T {
         baseContentHash: String(args?.expectedContentHash ?? "0".repeat(64)),
       } as T;
     }
+    case "acceptance_recovery_status_cmd":
+      return {
+        annotationId: String(args?.id ?? ""),
+        disposition: "accepting",
+        revision: 2,
+        acceptanceOpId: crypto.randomUUID(),
+        baseContentHash: "0".repeat(64),
+        currentContentHash: "0".repeat(64),
+        cancelSafe: true,
+      } as T;
     case "reconcile_session_annotations_cmd":
       return {
         comments: (args?.comments as CommentDto[]) ?? [],

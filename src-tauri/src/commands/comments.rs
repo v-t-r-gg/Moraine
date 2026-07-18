@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
 use moraine_core::{
-    begin_accept_suggestion, cancel_accept_suggestion, complete_accept_suggestion,
-    create_annotation, read_comments_sidecar, reconcile_session_annotations, reject_suggestion,
-    reopen_annotation, resolve_annotation, update_annotation, AnnotationKind, CommentRecord,
-    Error as CoreError, SuggestionDisposition,
+    acceptance_recovery_status, begin_accept_suggestion, cancel_accept_suggestion,
+    complete_accept_suggestion, create_annotation, read_comments_sidecar,
+    reconcile_session_annotations, reject_suggestion, reopen_annotation, resolve_annotation,
+    update_annotation, AnnotationKind, CommentRecord, Error as CoreError, SuggestionDisposition,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -151,6 +151,19 @@ fn map_err(e: CoreError) -> String {
             expected_content_hash: None,
             actual_content_hash: None,
             message: message.clone(),
+        },
+        CoreError::AcceptanceDocumentChanged {
+            id,
+            base_content_hash,
+            current_content_hash,
+        } => AnnotationErrorDto {
+            kind: "acceptance_document_changed".into(),
+            annotation_id: Some(id.to_string()),
+            expected_revision: None,
+            actual_revision: None,
+            expected_content_hash: Some(base_content_hash.clone()),
+            actual_content_hash: Some(current_content_hash.clone()),
+            message: "The Markdown changed after acceptance began. Finalize the acceptance or restore the original document revision before cancelling.".into(),
         },
         CoreError::RevisionOverflow { id } => AnnotationErrorDto {
             kind: "revision_overflow".into(),
@@ -372,6 +385,36 @@ pub fn cancel_accept_suggestion_cmd(
     let r = cancel_accept_suggestion(PathBuf::from(path).as_path(), id, expected_revision, op)
         .map_err(map_err)?;
     Ok(op_dto(r))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcceptanceRecoveryDto {
+    pub annotation_id: String,
+    pub disposition: String,
+    pub revision: u32,
+    pub acceptance_op_id: Option<String>,
+    pub base_content_hash: Option<String>,
+    pub current_content_hash: String,
+    pub cancel_safe: bool,
+}
+
+#[tauri::command]
+pub fn acceptance_recovery_status_cmd(
+    path: String,
+    id: String,
+) -> Result<AcceptanceRecoveryDto, String> {
+    let id = parse_id(&id)?;
+    let st = acceptance_recovery_status(PathBuf::from(path).as_path(), id).map_err(map_err)?;
+    Ok(AcceptanceRecoveryDto {
+        annotation_id: st.annotation_id.to_string(),
+        disposition: st.disposition.as_str().into(),
+        revision: st.revision,
+        acceptance_op_id: st.acceptance_op_id.map(|u| u.to_string()),
+        base_content_hash: st.base_content_hash,
+        current_content_hash: st.current_content_hash,
+        cancel_safe: st.cancel_safe,
+    })
 }
 
 #[tauri::command]

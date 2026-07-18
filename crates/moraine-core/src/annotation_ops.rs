@@ -385,6 +385,9 @@ pub fn complete_accept_suggestion(
 }
 
 /// Cancel an active acceptance reservation; return to pending.
+///
+/// Cancellation is only allowed when the current Markdown content hash still equals
+/// the stored `acceptance_base_hash` (no durable document change since begin).
 pub fn cancel_accept_suggestion(
     md_path: &Path,
     id: Uuid,
@@ -394,6 +397,10 @@ pub fn cancel_accept_suggestion(
     let side = moraine_sidecar_path(md_path);
     let _lock = SidecarLock::acquire(&side)?;
     let mut meta = ensure_meta_locked(md_path)?;
+
+    let markdown = crate::document::Document::read_file(md_path)?;
+    let current_hash = content_hash(&markdown);
+
     let idx = find_index(&meta, id).ok_or(Error::AnnotationNotFound { id })?;
     let rec = &mut meta.comments[idx];
     check_revision(rec, expected_revision)?;
@@ -409,11 +416,74 @@ pub fn cancel_accept_suggestion(
             message: "acceptance operation id does not match".into(),
         });
     }
+    let base = rec
+        .acceptance_base_hash
+        .clone()
+        .ok_or_else(|| Error::IncompleteAcceptance {
+            id,
+            message: "acceptance base content hash is missing".into(),
+        })?;
+    if current_hash != base {
+        return Err(Error::AcceptanceDocumentChanged {
+            id,
+            base_content_hash: base,
+            current_content_hash: current_hash,
+        });
+    }
+
     rec.disposition = Some(SuggestionDisposition::Pending);
     rec.resolved = false;
     rec.clear_acceptance_fields();
     bump_checked(rec)?;
     finish(md_path, &mut meta, id)
+}
+
+/// Snapshot for UI recovery of an incomplete acceptance (no mutation).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcceptanceRecoveryStatus {
+    pub annotation_id: Uuid,
+    pub disposition: SuggestionDisposition,
+    pub revision: u32,
+    pub acceptance_op_id: Option<Uuid>,
+    pub base_content_hash: Option<String>,
+    pub current_content_hash: String,
+    /// True when current disk Markdown hash equals acceptance base (cancel is safe).
+    pub cancel_safe: bool,
+}
+
+/// Read recovery status for an accepting suggestion without mutating state.
+pub fn acceptance_recovery_status(md_path: &Path, id: Uuid) -> Result<AcceptanceRecoveryStatus> {
+    let markdown = crate::document::Document::read_file(md_path)?;
+    let current_hash = content_hash(&markdown);
+    let meta = load_run_meta_readonly_or_err(md_path)?;
+    let rec = meta
+        .comments
+        .iter()
+        .find(|c| c.id == id)
+        .ok_or(Error::AnnotationNotFound { id })?;
+    let d = rec
+        .suggestion_disposition()
+        .unwrap_or(SuggestionDisposition::Pending);
+    let base = rec.acceptance_base_hash.clone();
+    let cancel_safe = matches!(
+        (d, base.as_ref()),
+        (SuggestionDisposition::Accepting, Some(b)) if b == &current_hash
+    );
+    Ok(AcceptanceRecoveryStatus {
+        annotation_id: id,
+        disposition: d,
+        revision: rec.revision,
+        acceptance_op_id: rec.acceptance_op_id,
+        base_content_hash: base,
+        current_content_hash: current_hash,
+        cancel_safe,
+    })
+}
+
+fn load_run_meta_readonly_or_err(md_path: &Path) -> Result<RunMeta> {
+    crate::run_meta::load_run_meta_readonly(md_path)?
+        .ok_or_else(|| Error::other("run ledger not initialized"))
 }
 
 /// Reject a pending suggestion.
@@ -826,6 +896,77 @@ mod tests {
             Some(SuggestionDisposition::Pending)
         );
         assert_eq!(c.annotation.revision, 3);
+    }
+
+    #[test]
+    fn cancel_after_markdown_change_fails_and_preserves_accepting() {
+        let (_d, md) = setup();
+        let id = Uuid::new_v4();
+        create_annotation(&md, id, "rep", "A", "run", AnnotationKind::Suggestion).unwrap();
+        let h = hash_md(&md);
+        let b = begin_accept_suggestion(&md, id, 1, &h).unwrap();
+        fs::write(&md, "# changed\n").unwrap();
+        let err = cancel_accept_suggestion(&md, id, 2, b.acceptance_op_id).unwrap_err();
+        match err {
+            Error::AcceptanceDocumentChanged {
+                base_content_hash,
+                current_content_hash,
+                ..
+            } => {
+                assert_eq!(base_content_hash, h);
+                assert_ne!(current_content_hash, h);
+            }
+            e => panic!("expected AcceptanceDocumentChanged, got {e}"),
+        }
+        let meta = load_run_meta_readonly(&md).unwrap().unwrap();
+        let rec = meta.comments.iter().find(|c| c.id == id).unwrap();
+        assert_eq!(rec.disposition, Some(SuggestionDisposition::Accepting));
+        assert_eq!(rec.acceptance_op_id, Some(b.acceptance_op_id));
+        assert_eq!(rec.acceptance_base_hash.as_deref(), Some(h.as_str()));
+        assert_eq!(rec.revision, 2);
+
+        // Explicit finalize against current disk succeeds
+        let h1 = hash_md(&md);
+        let done = complete_accept_suggestion(&md, id, 2, b.acceptance_op_id, &h1).unwrap();
+        assert_eq!(
+            done.annotation.disposition,
+            Some(SuggestionDisposition::Accepted)
+        );
+    }
+
+    #[test]
+    fn recovery_status_cancel_safe_flag() {
+        let (_d, md) = setup();
+        let id = Uuid::new_v4();
+        create_annotation(&md, id, "rep", "A", "run", AnnotationKind::Suggestion).unwrap();
+        let h = hash_md(&md);
+        begin_accept_suggestion(&md, id, 1, &h).unwrap();
+        let st = acceptance_recovery_status(&md, id).unwrap();
+        assert!(st.cancel_safe);
+        fs::write(&md, "x\n").unwrap();
+        let st2 = acceptance_recovery_status(&md, id).unwrap();
+        assert!(!st2.cancel_safe);
+        assert_eq!(st2.disposition, SuggestionDisposition::Accepting);
+    }
+
+    #[test]
+    fn complete_retry_after_failed_hash_then_ok() {
+        let (_d, md) = setup();
+        let id = Uuid::new_v4();
+        create_annotation(&md, id, "rep", "A", "run", AnnotationKind::Suggestion).unwrap();
+        let h0 = hash_md(&md);
+        let b = begin_accept_suggestion(&md, id, 1, &h0).unwrap();
+        fs::write(&md, "applied\n").unwrap();
+        let h1 = hash_md(&md);
+        // Wrong hash fails
+        let err = complete_accept_suggestion(&md, id, 2, b.acceptance_op_id, &h0).unwrap_err();
+        assert!(matches!(err, Error::RevisionConflict { .. }));
+        // Retry with correct hash
+        let done = complete_accept_suggestion(&md, id, 2, b.acceptance_op_id, &h1).unwrap();
+        assert_eq!(
+            done.annotation.disposition,
+            Some(SuggestionDisposition::Accepted)
+        );
     }
 
     #[test]

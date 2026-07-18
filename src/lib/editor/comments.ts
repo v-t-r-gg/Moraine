@@ -163,15 +163,35 @@ export function isAnnotationConflictError(err: unknown): boolean {
     return (
       e.kind === "annotation_conflict" ||
       e.kind === "incomplete_acceptance" ||
-      e.kind === "document_revision_conflict"
+      e.kind === "document_revision_conflict" ||
+      e.kind === "acceptance_document_changed"
     );
   }
   const s = String(err);
   return (
     s.includes("annotation_conflict") ||
     s.includes("incomplete_acceptance") ||
-    s.includes("document_revision_conflict")
+    s.includes("document_revision_conflict") ||
+    s.includes("acceptance_document_changed")
   );
+}
+
+/** Pure recovery mode from disk hashes (not editor buffer). */
+export type AcceptanceRecoveryMode = "cancel_safe" | "finalize_required" | "unknown";
+
+export function acceptanceRecoveryMode(
+  disposition: string | null | undefined,
+  baseHash: string | null | undefined,
+  currentDiskHash: string | null | undefined,
+): AcceptanceRecoveryMode {
+  if (disposition !== "accepting") return "unknown";
+  if (!baseHash || !currentDiskHash) return "unknown";
+  if (baseHash === currentDiskHash) return "cancel_safe";
+  return "finalize_required";
+}
+
+export function shortHash(h: string, n = 12): string {
+  return h.length > n ? `${h.slice(0, n)}…` : h;
 }
 
 export function applyAcceptToText(

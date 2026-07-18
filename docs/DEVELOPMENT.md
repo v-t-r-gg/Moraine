@@ -33,6 +33,18 @@ Prefer several logical commits on the milestone branch over one giant agent comm
 
 Do not merge while the Moraine decision is stale relative to the run record. If implementation changes after approval, update the reviewed commit in the run record and record a new decision.
 
+### Run records and Git SHAs
+
+A committed run record must **not** attempt to contain the SHA of the commit that contains that same record. Record implementation commits in the run record and record the final PR head in pull-request metadata at approval time.
+
+Review gate summary:
+
+* The run record names implementation commits (manually).
+* The human decision is current for the run-record Markdown (mechanically enforced).
+* PR metadata records the approved PR head at approval time.
+* No implementation files change after approval.
+* A sidecar-only approval commit does not require another decision.
+
 ## Recommended branch protection (`main`)
 
 Configure in GitHub settings (requires admin):

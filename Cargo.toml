@@ -3,9 +3,10 @@ resolver = "2"
 members = [
     "crates/moraine-core",
     "crates/moraine-cli",
+    "crates/moraine-server",
     "src-tauri",
 ]
-default-members = ["crates/moraine-cli", "crates/moraine-core"]
+default-members = ["crates/moraine-cli", "crates/moraine-core", "crates/moraine-server"]
 
 [workspace.package]
 version = "0.1.0"

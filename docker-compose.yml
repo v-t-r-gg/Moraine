@@ -1,0 +1,9 @@
+services:
+  moraine-server:
+    build: .
+    ports:
+      - "3099:3099"
+    environment:
+      MORAINE_BIND: "0.0.0.0:3099"
+      RUST_LOG: info
+    restart: unless-stopped

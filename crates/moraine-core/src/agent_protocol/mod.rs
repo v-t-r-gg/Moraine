@@ -11,7 +11,9 @@ mod project;
 mod types;
 
 pub use git::{capture_git_context, GitContextSummary};
-pub use markdown::{extract_human_notes, render_run_markdown_with_id, HUMAN_NOTES_HEADING};
+pub use markdown::{
+    extract_human_notes, human_notes_body_start, render_run_markdown_with_id, HUMAN_NOTES_HEADING,
+};
 pub use ops::{
     run_checkpoint, run_ready, run_resume, run_show, run_start, AgentOpResult, CheckpointInput,
     RunShowOptions, RunShowPacket, RunStartRequest, MAX_JSON_RESPONSE_HINT,

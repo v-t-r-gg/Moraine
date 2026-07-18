@@ -16,39 +16,47 @@ use crate::error::{Error, Result};
 
 pub const HUMAN_NOTES_HEADING: &str = "## Human notes";
 
-/// Extract human notes body (may be empty). Line-aware; rejects missing/duplicate headings.
-pub fn extract_human_notes(markdown: &str) -> Result<String> {
-    let mut heading_line: Option<usize> = None;
-    for (i, line) in markdown.lines().enumerate() {
-        if line.trim_end() == HUMAN_NOTES_HEADING {
-            if heading_line.is_some() {
-                return Err(Error::RunRecordStructureInvalid {
-                    message: "duplicate '## Human notes' headings".into(),
-                });
+/// Byte offset where the Human notes body begins (after the delimiter's line ending).
+///
+/// Only the **first** line that is exactly `## Human notes` (no leading/trailing
+/// spaces on the line content) is the managed delimiter. Later identical lines
+/// inside the body (including fenced code) are human content.
+pub fn human_notes_body_start(markdown: &str) -> Result<usize> {
+    let bytes = markdown.as_bytes();
+    let heading = HUMAN_NOTES_HEADING.as_bytes();
+    let mut line_start = 0usize;
+    let mut i = 0usize;
+    while i <= bytes.len() {
+        if i == bytes.len() || bytes[i] == b'\n' {
+            let mut content_end = i;
+            if content_end > line_start && bytes[content_end - 1] == b'\r' {
+                content_end -= 1;
             }
-            heading_line = Some(i);
+            if &bytes[line_start..content_end] == heading {
+                // Body starts after the original line ending (LF or after CR of CRLF).
+                let body_start = if i < bytes.len() {
+                    i + 1 // skip '\n'
+                } else {
+                    i // delimiter was last line without trailing newline → empty body
+                };
+                return Ok(body_start);
+            }
+            if i == bytes.len() {
+                break;
+            }
+            line_start = i + 1;
         }
+        i += 1;
     }
-    let Some(line_idx) = heading_line else {
-        return Err(Error::RunRecordStructureInvalid {
-            message: "missing required heading '## Human notes'".into(),
-        });
-    };
-    // Reconstruct body after the heading line, preserving line endings style loosely
-    // by joining remaining lines with \n (protocol always renders with \n).
-    let body: String = markdown
-        .lines()
-        .skip(line_idx + 1)
-        .collect::<Vec<_>>()
-        .join("\n");
-    // Preserve a trailing newline if original ended with one after the heading section.
-    if markdown.ends_with('\n') && !body.is_empty() && !body.ends_with('\n') {
-        Ok(format!("{body}\n"))
-    } else if markdown.ends_with('\n') && body.is_empty() {
-        Ok(String::new())
-    } else {
-        Ok(body)
-    }
+    Err(Error::RunRecordStructureInvalid {
+        message: "missing required heading '## Human notes'".into(),
+    })
+}
+
+/// Extract human notes body **byte-for-byte** (LF/CRLF, trailing blanks, no rejoin).
+pub fn extract_human_notes(markdown: &str) -> Result<String> {
+    let start = human_notes_body_start(markdown)?;
+    Ok(markdown[start..].to_string())
 }
 
 /// Render with explicit run id (stored on RunMeta.run.id).
@@ -144,15 +152,8 @@ pub fn render_run_markdown_with_id(
     out.push_str("---\n\n");
     out.push_str(HUMAN_NOTES_HEADING);
     out.push('\n');
-    // Preserve human notes exactly (may be empty).
-    if !human_notes.is_empty() {
-        out.push_str(human_notes);
-        if !human_notes.ends_with('\n') {
-            out.push('\n');
-        }
-    } else {
-        out.push('\n');
-    }
+    // Append Human notes body exactly as stored (may be empty, CRLF, no final NL).
+    out.push_str(human_notes);
     out
 }
 
@@ -301,17 +302,60 @@ mod tests {
     }
 
     #[test]
-    fn human_notes_roundtrip() {
-        let md = render_run_markdown_with_id(Uuid::nil(), &sample_agent(), "Keep me\nexactly\n");
-        let notes = extract_human_notes(&md).unwrap();
-        assert_eq!(notes, "Keep me\nexactly\n");
-        let md2 = render_run_markdown_with_id(Uuid::nil(), &sample_agent(), &notes);
-        assert_eq!(extract_human_notes(&md2).unwrap(), "Keep me\nexactly\n");
-    }
-
-    #[test]
     fn missing_human_notes_errors() {
         let err = extract_human_notes("# x\n").unwrap_err();
         assert!(matches!(err, Error::RunRecordStructureInvalid { .. }));
+    }
+
+    #[test]
+    fn preserves_lf_body_exactly() {
+        let md = "# t\n\n## Human notes\nline1\nline2\n";
+        assert_eq!(extract_human_notes(md).unwrap(), "line1\nline2\n");
+    }
+
+    #[test]
+    fn preserves_crlf_body_exactly() {
+        let md = "# t\r\n\r\n## Human notes\r\nline1\r\nline2\r\n";
+        assert_eq!(extract_human_notes(md).unwrap(), "line1\r\nline2\r\n");
+    }
+
+    #[test]
+    fn preserves_no_final_newline() {
+        let md = "## Human notes\nhello";
+        assert_eq!(extract_human_notes(md).unwrap(), "hello");
+    }
+
+    #[test]
+    fn preserves_one_trailing_blank_line() {
+        let md = "## Human notes\nbody\n\n";
+        assert_eq!(extract_human_notes(md).unwrap(), "body\n\n");
+    }
+
+    #[test]
+    fn preserves_multiple_trailing_blank_lines() {
+        let md = "## Human notes\nbody\n\n\n\n";
+        assert_eq!(extract_human_notes(md).unwrap(), "body\n\n\n\n");
+    }
+
+    #[test]
+    fn fenced_code_with_human_notes_is_content_not_delimiter() {
+        let md = "## Human notes\n```\n## Human notes\ninside fence\n```\n";
+        assert_eq!(
+            extract_human_notes(md).unwrap(),
+            "```\n## Human notes\ninside fence\n```\n"
+        );
+    }
+
+    #[test]
+    fn preserves_unicode() {
+        let md = "## Human notes\ncafé 日本語 🎉\n";
+        assert_eq!(extract_human_notes(md).unwrap(), "café 日本語 🎉\n");
+    }
+
+    #[test]
+    fn roundtrip_append_preserves_notes_bytes() {
+        let notes = "Keep me\r\nexactly\r\n\r\n";
+        let md = render_run_markdown_with_id(Uuid::nil(), &sample_agent(), notes);
+        assert_eq!(extract_human_notes(&md).unwrap(), notes);
     }
 }

@@ -609,12 +609,8 @@ where
             message: "idempotency key is required".into(),
         });
     }
-    // Mutations require an existing project; do not create one for recovery paths.
-    let project = match resolve_existing_project(project) {
-        Ok(p) => p,
-        Err(Error::ProjectNotFound { .. }) => resolve_or_init_project(project)?,
-        Err(e) => return Err(e),
-    };
+    // Mutations never auto-create a project (only `run start` may init).
+    let project = resolve_existing_project(project)?;
     let project_root = project.project_root.clone();
     let (md_path, _) = find_run_by_id(&project_root, run_id)?;
     let side = moraine_sidecar_path(&md_path);
@@ -697,6 +693,13 @@ where
         return Err(Error::RevisionConflict {
             expected: expected_hash.to_string(),
             actual,
+        });
+    }
+
+    // Preflight capacity for a *new* key before any file mutation.
+    if !agent.has_idempotency_capacity_for(idempotency_key) {
+        return Err(Error::IdempotencyIndexFull {
+            max: crate::agent_protocol::types::MAX_IDEMPOTENCY_INDEX,
         });
     }
 
@@ -1365,5 +1368,136 @@ mod tests {
             run_show(Some(dir.path()), Uuid::new_v4(), RunShowOptions::default()).unwrap_err();
         assert!(matches!(err, Error::ProjectNotFound { .. }));
         assert!(!dir.path().join(".moraine").exists());
+    }
+
+    #[test]
+    fn checkpoint_ready_resume_do_not_create_project() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let id = Uuid::new_v4();
+        let err = run_checkpoint(
+            Some(root),
+            id,
+            "abc",
+            "k",
+            CheckpointInput {
+                summary: "x".into(),
+                actions: vec![],
+                rationales: vec![],
+                evidence: vec![],
+                risks: vec![],
+                open_questions: vec![],
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::ProjectNotFound { .. }));
+        let err = run_ready(Some(root), id, "abc", "k", None).unwrap_err();
+        assert!(matches!(err, Error::ProjectNotFound { .. }));
+        let err = run_resume(Some(root), id, "abc", "k", None).unwrap_err();
+        assert!(matches!(err, Error::ProjectNotFound { .. }));
+        assert!(!root.join(".moraine").exists());
+    }
+
+    #[test]
+    fn idempotency_capacity_preflight_leaves_files_unchanged() {
+        use crate::agent_protocol::types::{IdempotencyRecord, MAX_IDEMPOTENCY_INDEX};
+
+        let dir = tempdir().unwrap();
+        let start = run_start(RunStartRequest {
+            objective: "Capacity".into(),
+            idempotency_key: "s".into(),
+            project: Some(dir.path().to_path_buf()),
+        })
+        .unwrap();
+
+        let side = moraine_sidecar_path(&start.absolute_path);
+        let _lock = SidecarLock::acquire(&side).unwrap();
+        let mut meta = load_or_migrate_locked(&start.absolute_path).unwrap();
+        let agent = meta.agent.as_mut().unwrap();
+        let now = Utc::now();
+        let replay_payload = CheckpointInput {
+            summary: "replay".into(),
+            actions: vec![],
+            rationales: vec![],
+            evidence: vec![],
+            risks: vec![],
+            open_questions: vec![],
+        };
+        let replay_hash = hash_payload(&serde_json::to_value(&replay_payload).unwrap());
+        agent.idempotency.clear();
+        for i in 0..(MAX_IDEMPOTENCY_INDEX - 1) {
+            agent.idempotency.insert(
+                format!("fill-{i}"),
+                IdempotencyRecord {
+                    payload_hash: format!("p{i}"),
+                    op_id: Uuid::new_v4(),
+                    kind: "checkpoint".into(),
+                    content_hash: start.content_hash.clone(),
+                    record_revision: 1,
+                    created_at: now,
+                },
+            );
+        }
+        agent.idempotency.insert(
+            "replay-me".into(),
+            IdempotencyRecord {
+                payload_hash: replay_hash,
+                op_id: Uuid::new_v4(),
+                kind: "checkpoint".into(),
+                content_hash: start.content_hash.clone(),
+                record_revision: 1,
+                created_at: now,
+            },
+        );
+        assert_eq!(agent.idempotency.len(), MAX_IDEMPOTENCY_INDEX);
+        let rev_before = agent.record_revision;
+        write_run_meta_unlocked(&start.absolute_path, &meta).unwrap();
+        drop(_lock);
+
+        let md_before = Document::read_file(&start.absolute_path).unwrap();
+        let side_before =
+            std::fs::read_to_string(moraine_sidecar_path(&start.absolute_path)).unwrap();
+
+        let err = run_checkpoint(
+            Some(dir.path()),
+            start.run_id,
+            &start.content_hash,
+            "brand-new-key",
+            CheckpointInput {
+                summary: "overflow".into(),
+                actions: vec![],
+                rationales: vec![],
+                evidence: vec![],
+                risks: vec![],
+                open_questions: vec![],
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::IdempotencyIndexFull { .. }), "{err:?}");
+
+        assert_eq!(
+            Document::read_file(&start.absolute_path).unwrap(),
+            md_before
+        );
+        assert_eq!(
+            std::fs::read_to_string(moraine_sidecar_path(&start.absolute_path)).unwrap(),
+            side_before
+        );
+
+        let meta2 = load_or_migrate_locked(&start.absolute_path).unwrap();
+        let agent2 = meta2.agent.as_ref().unwrap();
+        assert!(agent2.incomplete_op.is_none());
+        assert_eq!(agent2.record_revision, rev_before);
+
+        let replay = run_checkpoint(
+            Some(dir.path()),
+            start.run_id,
+            &start.content_hash,
+            "replay-me",
+            replay_payload,
+        )
+        .unwrap();
+        assert!(replay.idempotent_replay);
+        assert_eq!(replay.content_hash, start.content_hash);
     }
 }

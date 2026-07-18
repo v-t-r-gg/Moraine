@@ -22,7 +22,7 @@
     "lint:rust": "cargo clippy -p moraine-core -p moraine-cli -p moraine-server -- -D warnings",
     "check:all": "bash scripts/check.sh"
   },
-  "license": "MIT OR Apache-2.0",
+  "license": "Apache-2.0",
   "dependencies": {
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2",

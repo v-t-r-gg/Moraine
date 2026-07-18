@@ -4,6 +4,7 @@
   import StatusBar from "$lib/components/StatusBar.svelte";
   import Preview from "$lib/components/Preview.svelte";
   import HistoryPanel from "$lib/components/HistoryPanel.svelte";
+  import CommentsPanel from "$lib/components/CommentsPanel.svelte";
   import Editor from "$lib/components/Editor.svelte";
   import {
     appInfo,
@@ -24,22 +25,25 @@
     roomIdForPath,
     type YjsSession,
   } from "$lib/editor/yjsSession";
+  import {
+    commentsMap,
+    listComments,
+    newCommentId,
+    setResolved,
+    upsertComment,
+    type CommentRecord,
+  } from "$lib/editor/comments";
   import type { DocumentSnapshot, HistoryEntryMeta, ViewMode } from "$lib/types";
 
   const WELCOME_MD = `# Welcome to Moraine
 
-**Moraine** is a local-first, Git-native collaborative Markdown editor.
+Local-first Markdown with collab, host-save policy, and comments.
 
-## Phase 0–1
+## Try
 
-- Rich Markdown editing (Tiptap / ProseMirror)
-- Open / save local \`.md\` files with auto-save
-- Filesystem watcher
-- Yjs multi-tab collab simulation
-- Local edit history
-- CLI: \`moraine cat|edit|history|watch\`
-
-Start typing, toggle **Preview**, or open a file from disk.
+- Share: \`moraine share this-file.md\` then open the join URL
+- Select text → **Comment**
+- With peers: autosave pauses; **Save** still writes the host file
 `;
 
   let doc = $state<DocumentSnapshot | null>(null);
@@ -48,22 +52,29 @@ Start typing, toggle **Preview**, or open a file from disk.
   let saving = $state(false);
   let viewMode = $state<ViewMode>("edit");
   let historyOpen = $state(false);
+  let commentsOpen = $state(false);
+  let showResolvedComments = $state(false);
   let historyEntries = $state<HistoryEntryMeta[]>([]);
   let historyLoading = $state(false);
+  let commentList = $state<CommentRecord[]>([]);
   let status = $state<string | null>(null);
   let session = $state<YjsSession | null>(null);
   let peerCount = $state(0);
   let editorRef = $state<Editor | undefined>(undefined);
   let syncUrl = $state<string | null>(null);
   let forcedRoomId = $state<string | null>(null);
+  let localAuthor = $state("You");
 
   let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
   let unlistenFile: (() => void) | null = null;
+  let unsubComments: (() => void) | null = null;
+  let prevPeerCount = 0;
 
   const title = $derived(doc?.meta.title ?? "Moraine");
   const path = $derived(doc?.meta.path ?? null);
   const wordCount = $derived(countWords(markdown));
   const charCount = $derived(markdown.length);
+  const autosavePaused = $derived(peerCount > 0);
 
   onMount(async () => {
     const collab = collabFromLocation();
@@ -100,6 +111,7 @@ Start typing, toggle **Preview**, or open a file from disk.
   onDestroy(() => {
     if (autosaveTimer) clearTimeout(autosaveTimer);
     unlistenFile?.();
+    unsubComments?.();
     session?.destroy();
   });
 
@@ -157,13 +169,46 @@ Start typing, toggle **Preview**, or open a file from disk.
 
     if (resetSession) {
       session?.destroy();
+      unsubComments?.();
+      unsubComments = null;
       const room = forcedRoomId ?? roomIdForPath(snap.meta.path);
       const s = createYjsSession(room, { syncUrl });
       session = s;
       peerCount = 0;
+      prevPeerCount = 0;
+
+      const user = s.awareness.getLocalState()?.user as { name?: string } | undefined;
+      localAuthor = user?.name ?? "You";
+
+      const cmap = commentsMap(s.doc);
+      const refresh = () => {
+        commentList = listComments(cmap, true);
+      };
+      refresh();
+      cmap.observe(refresh);
+      unsubComments = () => cmap.unobserve(refresh);
+
       s.awareness.on("change", () => {
-        peerCount = Math.max(0, s.awareness.getStates().size - 1);
+        const next = Math.max(0, s.awareness.getStates().size - 1);
+        onPeerCountChange(next);
       });
+    }
+  }
+
+  function onPeerCountChange(next: number) {
+    const was = prevPeerCount;
+    peerCount = next;
+    prevPeerCount = next;
+
+    if (next > 0 && was === 0) {
+      if (autosaveTimer) {
+        clearTimeout(autosaveTimer);
+        autosaveTimer = null;
+      }
+      status = "Autosave paused — remote collaborators present";
+    } else if (next === 0 && was > 0) {
+      status = dirty ? "Peers left; will autosave shortly" : "Peers left; autosave on";
+      if (dirty) scheduleAutosave();
     }
   }
 
@@ -176,6 +221,13 @@ Start typing, toggle **Preview**, or open a file from disk.
 
   function scheduleAutosave() {
     if (!isTauri || !doc) return;
+    if (peerCount > 0) {
+      if (autosaveTimer) {
+        clearTimeout(autosaveTimer);
+        autosaveTimer = null;
+      }
+      return;
+    }
     if (autosaveTimer) clearTimeout(autosaveTimer);
     autosaveTimer = setTimeout(() => {
       void handleSave(true);
@@ -193,6 +245,9 @@ Start typing, toggle **Preview**, or open a file from disk.
 
   async function handleSave(fromAutosave = false) {
     if (!doc) return;
+    // Explicit save always allowed; autosave already gated by scheduleAutosave.
+    if (fromAutosave && peerCount > 0) return;
+
     if (!isTauri) {
       dirty = false;
       status = fromAutosave ? "Autosaved (browser)" : "Saved (browser)";
@@ -205,13 +260,65 @@ Start typing, toggle **Preview**, or open a file from disk.
       doc = snap;
       markdown = snap.content;
       dirty = false;
-      status = fromAutosave ? "Autosaved" : "Saved";
+      status = fromAutosave
+        ? "Autosaved"
+        : peerCount > 0
+          ? "Saved (host write while peers present)"
+          : "Saved";
       if (historyOpen) await refreshHistory();
     } catch (e) {
       status = `Save failed: ${e}`;
     } finally {
       saving = false;
     }
+  }
+
+  function handleComment() {
+    if (!session || !editorRef) return;
+    const quote = editorRef.getSelectionQuote?.();
+    if (!quote) {
+      status = "Select text to comment";
+      return;
+    }
+    const body = window.prompt("Comment", "");
+    if (body == null) return;
+    const text = body.trim();
+    if (!text) return;
+
+    const id = newCommentId();
+    if (!editorRef.applyCommentMark?.(id)) {
+      status = "Could not attach comment mark";
+      return;
+    }
+
+    const record: CommentRecord = {
+      id,
+      body: text,
+      author: localAuthor,
+      quote,
+      createdAt: new Date().toISOString(),
+      resolved: false,
+    };
+    upsertComment(commentsMap(session.doc), record);
+    commentsOpen = true;
+    status = "Comment added";
+  }
+
+  function resolveComment(id: string) {
+    if (!session) return;
+    editorRef?.clearCommentMark?.(id);
+    setResolved(commentsMap(session.doc), id, true);
+    status = "Comment resolved";
+  }
+
+  function reopenComment(id: string) {
+    if (!session) return;
+    setResolved(commentsMap(session.doc), id, false);
+    status = "Comment reopened (mark cleared; quote kept in list)";
+  }
+
+  function focusComment(id: string) {
+    editorRef?.focusComment?.(id);
   }
 
   async function refreshHistory() {
@@ -229,7 +336,15 @@ Start typing, toggle **Preview**, or open a file from disk.
 
   async function toggleHistory() {
     historyOpen = !historyOpen;
-    if (historyOpen) await refreshHistory();
+    if (historyOpen) {
+      commentsOpen = false;
+      await refreshHistory();
+    }
+  }
+
+  function toggleComments() {
+    commentsOpen = !commentsOpen;
+    if (commentsOpen) historyOpen = false;
   }
 
   async function restoreEntry(id: string) {
@@ -265,9 +380,13 @@ Start typing, toggle **Preview**, or open a file from disk.
     {saving}
     {viewMode}
     {historyOpen}
+    commentsOpen={commentsOpen}
+    remotePeers={peerCount}
     {isTauri}
     onOpen={handleOpen}
     onSave={() => handleSave(false)}
+    onComment={handleComment}
+    onToggleComments={toggleComments}
     onToggleHistory={toggleHistory}
     onViewMode={(m) => (viewMode = m)}
   />
@@ -299,6 +418,18 @@ Start typing, toggle **Preview**, or open a file from disk.
       {/if}
     </main>
 
+    {#if commentsOpen}
+      <CommentsPanel
+        comments={commentList}
+        showResolved={showResolvedComments}
+        onToggleShowResolved={() => (showResolvedComments = !showResolvedComments)}
+        onResolve={resolveComment}
+        onReopen={reopenComment}
+        onFocus={focusComment}
+        onClose={() => (commentsOpen = false)}
+      />
+    {/if}
+
     {#if historyOpen}
       <HistoryPanel
         entries={historyEntries}
@@ -315,6 +446,7 @@ Start typing, toggle **Preview**, or open a file from disk.
     {charCount}
     collabPeers={peerCount}
     roomId={session?.roomId ?? null}
+    {autosavePaused}
     message={status}
   />
 </div>

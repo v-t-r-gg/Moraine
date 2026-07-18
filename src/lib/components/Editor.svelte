@@ -6,6 +6,7 @@
   import Collaboration from "@tiptap/extension-collaboration";
   import CollaborationCursor from "@tiptap/extension-collaboration-cursor";
   import { Markdown } from "tiptap-markdown";
+  import { CommentMark } from "$lib/editor/commentMark";
   import type { YjsSession } from "$lib/editor/yjsSession";
 
   interface Props {
@@ -61,6 +62,7 @@
           transformPastedText: true,
           transformCopiedText: true,
         }),
+        CommentMark,
         Collaboration.configure({
           document: s.doc,
         }),
@@ -117,6 +119,41 @@
   export function getMarkdownContent(): string {
     if (!editor) return "";
     return getMarkdown(editor);
+  }
+
+  export function getSelectionQuote(): string | null {
+    if (!editor || editor.state.selection.empty) return null;
+    const { from, to } = editor.state.selection;
+    const text = editor.state.doc.textBetween(from, to, " ");
+    return text.trim() ? text : null;
+  }
+
+  export function applyCommentMark(id: string): boolean {
+    if (!editor || editor.state.selection.empty) return false;
+    return editor.chain().focus().setComment(id).run();
+  }
+
+  export function clearCommentMark(id: string): void {
+    editor?.commands.unsetCommentById(id);
+  }
+
+  export function focusComment(id: string): void {
+    if (!editor) return;
+    const type = editor.schema.marks.comment;
+    if (!type) return;
+    let found: { from: number; to: number } | null = null;
+    editor.state.doc.descendants((node, pos) => {
+      if (found || !node.isText) return;
+      for (const mark of node.marks) {
+        if (mark.type === type && mark.attrs.id === id) {
+          found = { from: pos, to: pos + node.nodeSize };
+          return false;
+        }
+      }
+    });
+    if (found) {
+      editor.chain().focus().setTextSelection(found).scrollIntoView().run();
+    }
   }
 
   onDestroy(() => {

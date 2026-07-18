@@ -4,10 +4,18 @@
     charCount: number;
     collabPeers: number;
     roomId: string | null;
+    autosavePaused: boolean;
     message: string | null;
   }
 
-  let { wordCount, charCount, collabPeers, roomId, message }: Props = $props();
+  let {
+    wordCount,
+    charCount,
+    collabPeers,
+    roomId,
+    autosavePaused,
+    message,
+  }: Props = $props();
 </script>
 
 <footer
@@ -21,6 +29,11 @@
   {/if}
   {#if collabPeers > 0}
     <span class="text-ice-500">{collabPeers} peer{collabPeers === 1 ? "" : "s"}</span>
+  {/if}
+  {#if autosavePaused}
+    <span style="color: #f59e0b;" title="Disk autosave resumes when peers leave">
+      autosave paused
+    </span>
   {/if}
   <span class="ml-auto truncate">{message ?? "Ready"}</span>
 </footer>

@@ -110,7 +110,26 @@ Join URL query params (web UI):
 | `?sync=ws://host:3099` | Custom relay |
 | `?sync=0` | Force offline (no WS) |
 
-Room id is a stable hash of the absolute file path (same in CLI and UI). Relay is in-memory only. Desktop host still owns file autosave.
+Room id is a stable hash of the absolute file path (same in CLI and UI). Relay is in-memory only.
+
+### Host save policy
+
+| Situation | Disk write |
+|-----------|------------|
+| Solo (no remote peers) | Autosave ~1.2s after edits |
+| Remote peers in the room | Autosave paused; status shows it |
+| Explicit **Save** | Always writes (host desktop) |
+| Last peer leaves | Autosave resumes if dirty |
+
+Only the desktop host that opened the file path should treat disk as source of truth. Browser joiners edit the shared Yjs doc.
+
+### Comments
+
+1. Select text in the editor
+2. **Comment** (toolbar) and type a note
+3. Open **Comments** sidebar to resolve / reopen / jump to mark
+
+Threads live in the Yjs doc (`comments` map + inline marks), so they sync across clients in the room. Resolve clears the highlight and marks the thread resolved (still listed if you enable "Show resolved").
 
 ### Relay only
 
@@ -149,8 +168,8 @@ moraine watch ./docs
 | Phase | Focus | Effort (rough) |
 |-------|--------|----------------|
 | 0–1 | Editor, FS, CLI, local Yjs, history | done |
-| 2 | Axum WS server, Docker, share CLI, host-only save policy | relay + share CLI done |
-| 3 | Comments + suggestion mode on Yjs | after multiplayer feels real |
+| 2 | Axum WS server, Docker, share CLI, host-save policy | done (first cut) |
+| 3 | Comments + suggestion mode on Yjs | basic comments done; suggestions later |
 | 4 | SQLite metadata, git2, agent/MCP hooks | later |
 
 **Not in the next slices:** auth, TLS (put a reverse proxy in front if needed), P2P, full Git auto-commit.

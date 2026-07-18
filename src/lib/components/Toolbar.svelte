@@ -8,9 +8,13 @@
     saving: boolean;
     viewMode: ViewMode;
     historyOpen: boolean;
+    commentsOpen: boolean;
+    remotePeers: number;
     isTauri: boolean;
     onOpen: () => void;
     onSave: () => void;
+    onComment: () => void;
+    onToggleComments: () => void;
     onToggleHistory: () => void;
     onViewMode: (mode: ViewMode) => void;
   }
@@ -22,9 +26,13 @@
     saving,
     viewMode,
     historyOpen,
+    commentsOpen,
+    remotePeers,
     isTauri,
     onOpen,
     onSave,
+    onComment,
+    onToggleComments,
     onToggleHistory,
     onViewMode,
   }: Props = $props();
@@ -47,6 +55,15 @@
         <span class="truncate">{title}</span>
         {#if dirty}
           <span class="text-ice-500" title="Unsaved changes">●</span>
+        {/if}
+        {#if remotePeers > 0}
+          <span
+            class="rounded px-1.5 py-0.5 text-[10px] font-medium"
+            style="background: var(--accent-soft); color: var(--accent);"
+            title="Remote collaborators present; autosave paused"
+          >
+            live
+          </span>
         {/if}
       </div>
       {#if path}
@@ -79,12 +96,7 @@
       {/each}
     </div>
 
-    <button
-      type="button"
-      class="btn"
-      onclick={onOpen}
-      title={isTauri ? "Open Markdown file" : "Open (Tauri only)"}
-    >
+    <button type="button" class="btn" onclick={onOpen} title={isTauri ? "Open Markdown file" : "Open (Tauri only)"}>
       Open
     </button>
     <button
@@ -92,8 +104,21 @@
       class="btn btn-primary"
       onclick={onSave}
       disabled={saving || (!dirty && isTauri)}
+      title={remotePeers > 0 ? "Save to disk (autosave paused while peers present)" : "Save"}
     >
       {saving ? "Saving…" : "Save"}
+    </button>
+    <button type="button" class="btn" onclick={onComment} title="Comment on selection">
+      Comment
+    </button>
+    <button
+      type="button"
+      class="btn"
+      class:ring-1={commentsOpen}
+      onclick={onToggleComments}
+      title="Comments"
+    >
+      Comments
     </button>
     <button
       type="button"

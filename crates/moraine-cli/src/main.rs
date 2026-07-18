@@ -205,18 +205,35 @@ fn cmd_edit(path: PathBuf, create: bool, share: bool) -> Result<()> {
 }
 
 fn try_launch_desktop(path: &PathBuf) -> Result<bool> {
-    let candidates = ["moraine-app", "moraine-desktop"];
-    for name in candidates {
-        if which_exists(name)
-            && Command::new(name)
-                .arg(path)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .is_ok()
-        {
-            eprintln!("opened in {name}: {}", path.display());
+    let abs = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+    let mut candidates: Vec<PathBuf> = ["moraine-app", "moraine-desktop"]
+        .into_iter()
+        .filter(|n| which_exists(n))
+        .map(PathBuf::from)
+        .collect();
+
+    // Dev builds from workspace root or crates/
+    for rel in [
+        "target/debug/moraine-app",
+        "target/release/moraine-app",
+        "../target/debug/moraine-app",
+        "../target/release/moraine-app",
+    ] {
+        let p = PathBuf::from(rel);
+        if p.is_file() {
+            candidates.push(p);
+        }
+    }
+
+    for bin in candidates {
+        let mut cmd = Command::new(&bin);
+        cmd.arg(&abs)
+            .env("MORAINE_OPEN", &abs)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        if cmd.spawn().is_ok() {
+            eprintln!("opened in {}: {}", bin.display(), abs.display());
             return Ok(true);
         }
     }

@@ -1,86 +1,95 @@
 # Moraine
 
-**Local-first, Git-native collaborative Markdown editor** — Google Docs for plain `.md` files.
+Local-first, Git-native collaborative Markdown editor. Plain `.md` files on disk, real-time multiplayer via Yjs, history, and a CLI. No mandatory cloud.
 
-Moraine prioritizes files that already live on disk (or in a Git repo), real-time multiplayer via CRDTs (Yjs), comments/suggestions, edit history, and a first-class CLI. No mandatory cloud.
+**Status:** Phase 0–1 MVP is usable. Phase 2 starts with an optional Yjs WebSocket relay (`moraine-server` on port 3099).
 
-> **Status:** Phase 0–1 MVP skeleton — Tauri app + ProseMirror/Tiptap editor, file I/O, watcher, Yjs multi-tab simulation, simple history, and CLI.
+Repo: https://github.com/v-t-r-gg/Moraine
 
-## Features (this MVP)
+## What works today
 
-| Area | What’s included |
-|------|-----------------|
-| Desktop | Tauri 2 + SvelteKit + Tailwind |
-| Editor | Tiptap (ProseMirror) + GFM-oriented Markdown |
-| Files | Open / save / auto-save, atomic writes |
-| Watcher | `notify`-based FS events → UI reload |
-| Collab (local) | Yjs + BroadcastChannel multi-tab simulation |
-| History | Snapshot log under `~/.local/share/moraine/history` |
-| CLI | `moraine` binary: `cat`, `write`, `edit`, `history`, `watch`, `info` |
-| Preview | Live Markdown preview (edit / split / preview) |
+| Area | Notes |
+|------|--------|
+| Desktop | Tauri 2 + SvelteKit + Tailwind (needs WebKitGTK on Linux) |
+| Editor | Tiptap / ProseMirror, edit / split / preview |
+| Files | Open, save, autosave, atomic writes |
+| Watcher | Reload when the file changes on disk (if not dirty) |
+| History | Snapshots under `~/.local/share/moraine/history` |
+| Local collab | Yjs + BroadcastChannel (same origin tabs) |
+| Network collab | Optional `moraine-server` WS relay |
+| CLI | `moraine` cat/write/edit/history/restore/watch/info |
 
-## Repository layout
+## Layout
 
 ```
-Moraine/
-├── Cargo.toml                 # Rust workspace
-├── crates/
-│   ├── moraine-core/          # FS, document model, history, watcher
-│   └── moraine-cli/           # `moraine` CLI binary
-├── src-tauri/                 # Tauri 2 desktop shell (depends on core)
-├── src/                       # SvelteKit frontend (Tiptap + Yjs)
-├── examples/                  # Sample Markdown
-├── scripts/                   # Arch setup + dev helpers
-└── package.json
+crates/moraine-core/     document I/O, history, watcher
+crates/moraine-cli/      moraine binary
+crates/moraine-server/   Yjs WebSocket relay
+src-tauri/               desktop shell
+src/                     Svelte UI
+scripts/                 Arch setup, dev helpers
+docker-compose.yml       server only
 ```
 
-## Prerequisites (Linux / Arch first)
+## Prerequisites (Arch / Linux)
 
-- **Rust** 1.77+ (`rustc`, `cargo`)
-- **Node.js** 20+ and **npm**
-- **Tauri 2 system deps** (WebKitGTK 4.1, GTK3, etc.)
-
-On Arch:
+- Rust 1.77+
+- Node 20+ and npm
+- For desktop: WebKitGTK 4.1, GTK3
 
 ```bash
-chmod +x scripts/setup-arch.sh
 ./scripts/setup-arch.sh
-```
-
-Or install manually:
-
-```bash
+# or:
 sudo pacman -S --needed webkit2gtk-4.1 gtk3 base-devel curl wget \
   openssl appmenu-gtk-module libappindicator-gtk3 librsvg \
   rust nodejs npm
 ```
 
-See also: [Tauri Linux prerequisites](https://v2.tauri.app/start/prerequisites/).
+CLI and server do not need WebKit.
 
 ## Quick start
 
 ```bash
-# Install JS deps
 npm install
 
-# Build & test Rust core + CLI (no WebKit required)
+# Core + CLI (no desktop deps)
 cargo test -p moraine-core
 cargo run -p moraine-cli -- info
 cargo run -p moraine-cli -- cat examples/welcome.md
 
 # Frontend only (browser stubs for file I/O)
 npm run dev
+# optional collab: npm run server  (then open with ?sync=1)
 
-# Full desktop app
+# Desktop
 npm run tauri:dev
+# open a path: MORAINE_OPEN=/path/to/note.md npm run tauri:dev
+# or after build: cargo run -p moraine-cli -- edit /path/to/note.md
 ```
 
-Install the CLI locally:
+Install CLI:
 
 ```bash
 cargo install --path crates/moraine-cli
-moraine --help
 ```
+
+## Collab server (optional)
+
+Relay only. No auth, no disk persistence.
+
+```bash
+./scripts/server-dev.sh
+# or: cargo run -p moraine-server
+# or: docker compose up --build
+
+curl -s http://127.0.0.1:3099/health
+# WS: ws://127.0.0.1:3099/ws/<room_id>
+```
+
+In the UI, enable sync with `?sync=1` (uses `ws://127.0.0.1:3099`) or `?sync=ws://host:3099`.  
+Or set `VITE_MORAINE_SYNC_URL=ws://127.0.0.1:3099` before `npm run dev`.
+
+Room id is derived from the document path (same hash as local multi-tab). Host desktop still owns file autosave.
 
 ## CLI
 
@@ -88,78 +97,42 @@ moraine --help
 moraine info
 moraine cat notes.md
 moraine write notes.md --content "# Hi" --history
-echo "body" | moraine write notes.md
 moraine history notes.md
-moraine history notes.md --json
-moraine restore notes.md <entry-uuid> --write
-moraine edit notes.md              # desktop if available, else $EDITOR
-moraine edit notes.md --share      # reserved for multiplayer (stub)
+moraine restore notes.md <uuid> --write
+moraine edit notes.md          # desktop if found, else $EDITOR
 moraine watch ./docs
 ```
 
-## Desktop usage
+`moraine edit` looks for `moraine-app` on PATH and for `target/debug|release/moraine-app`. It passes the path via argv and `MORAINE_OPEN`.
+
+## Desktop notes
 
 1. `npm run tauri:dev`
-2. First launch opens `/tmp/moraine-welcome.md`
-3. **Open** — pick any `.md` file
-4. Edit with the rich toolbar-free editor; **Save** or wait for auto-save (~1.2s)
-5. **Preview** / **Split** for rendered Markdown
-6. **History** — restore prior snapshots
-7. Open the same file path in a second window/tab to exercise Yjs presence (BroadcastChannel)
-
-## Architecture (MVP)
-
-```
-┌──────────────────────────────────────────────────────────┐
-│  Svelte UI  ·  Tiptap / ProseMirror  ·  Yjs (local)      │
-└─────────────────────────┬────────────────────────────────┘
-                          │ Tauri IPC (invoke / events)
-┌─────────────────────────▼────────────────────────────────┐
-│  src-tauri (moraine-app)                                 │
-│    commands · AppState · file-changed events             │
-└─────────────────────────┬────────────────────────────────┘
-                          │
-┌─────────────────────────▼────────────────────────────────┐
-│  moraine-core                                            │
-│    Document I/O · HistoryStore · FileWatcher (notify)    │
-└──────────────────────────────────────────────────────────┘
-          ▲
-          │ shared
-┌─────────┴────────┐
-│  moraine-cli     │
-└──────────────────┘
-```
-
-**Later phases:** Yjs over WebSockets (Axum), comments/suggestions as shared types, Git (`git2`), SQLite metadata, Docker self-host, MCP/Ollama agent hooks, optional P2P.
-
-## Development scripts
-
-| Command | Purpose |
-|---------|---------|
-| `npm run tauri:dev` | Desktop dev (Vite + Tauri) |
-| `npm run dev` | Frontend only |
-| `npm run cli -- <args>` | Run CLI via cargo |
-| `npm run test:rust` | Core/CLI tests |
-| `npm run lint:rust` | Clippy on core + CLI |
-| `./scripts/dev.sh` | Same as `tauri:dev` |
-| `./scripts/dev.sh cli info` | CLI helper |
-| `./scripts/dev.sh web` | Vite only |
+2. Without a startup path, opens `/tmp/moraine-welcome.md`
+3. Open / Save / History in the toolbar
+4. Same path in two windows uses BroadcastChannel; with server + `?sync=1`, rooms can span processes
 
 ## Roadmap
 
-1. **Phase 0–1 (current)** — skeleton, editor, FS, CLI, local Yjs, history  
-2. **Phase 2** — real-time collab (Axum WebSocket server + auth)  
-3. **Phase 3** — comments, suggestion mode (track changes)  
-4. **Phase 4** — Git integration (auto-commit, branches, PR-friendly diffs)  
-5. **Phase 5** — polish, Docker compose server, agent/MCP hooks  
+| Phase | Focus | Effort (rough) |
+|-------|--------|----------------|
+| 0–1 | Editor, FS, CLI, local Yjs, history | done |
+| 2 | Axum WS server, Docker, share flow, host-only save policy | in progress (relay first cut) |
+| 3 | Comments + suggestion mode on Yjs | after multiplayer feels real |
+| 4 | SQLite metadata, git2, agent/MCP hooks | later |
 
-## Design principles
+**Not in the next slices:** auth, TLS (put a reverse proxy in front if needed), P2P, full Git auto-commit.
 
-- **Files-first** — the `.md` on disk is the source of truth  
-- **Local-first** — no mandatory cloud; self-host optional  
-- **Git-native** — play well with existing repos  
-- **Minimal bloat** — Rust core, thin UI  
-- **Agent-friendly** — CLI + future MCP  
+## Dev scripts
+
+```bash
+npm run tauri:dev
+npm run dev
+npm run server          # cargo run -p moraine-server
+npm run test:rust
+./scripts/dev.sh
+./scripts/server-dev.sh
+```
 
 ## License
 

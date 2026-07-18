@@ -66,6 +66,10 @@ export async function appInfo(): Promise<AppInfo> {
   return invoke("app_info");
 }
 
+export async function takeStartupPath(): Promise<string | null> {
+  return invoke("take_startup_path");
+}
+
 export async function writeFile(path: string, content: string): Promise<void> {
   return invoke("write_file", { path, content });
 }
@@ -125,6 +129,8 @@ function browserStub<T>(cmd: string, args?: Record<string, unknown>): T {
         historyDir: "(browser)",
         configDir: "(browser)",
       } as T;
+    case "take_startup_path":
+      return null as T;
     case "open_document": {
       const path = String(args?.path ?? "untitled.md");
       const existing = [...browserDocs.values()].find((d) => d.meta.path === path);

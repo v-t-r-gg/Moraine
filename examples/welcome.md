@@ -1,41 +1,19 @@
 # Welcome to Moraine
 
-**Moraine** is a local-first, Git-native collaborative Markdown editor —
-think Google Docs, but for plain `.md` files that live in *your* folders
-and repos.
+Local-first Markdown editor: Tauri desktop, CLI, history, and optional multiplayer.
 
-## Phase 0–1 MVP
-
-This build includes:
-
-- **Tauri 2** desktop shell (Linux-first)
-- **ProseMirror / Tiptap** rich Markdown editing
-- **File open / save** with auto-save
-- **Filesystem watcher** (reload when the file changes on disk)
-- **Yjs** local multi-tab collaboration simulation
-- **Edit history** snapshots (SQLite/Git come later)
-- **CLI**: `moraine cat`, `edit`, `write`, `history`, `watch`
-
-## Quick start
+## Try
 
 ```bash
-# CLI
 cargo run -p moraine-cli -- info
-cargo run -p moraine-cli -- cat examples/welcome.md
-
-# Desktop (requires Linux WebKit deps)
-npm install
 npm run tauri:dev
+npm run server          # optional Yjs relay on :3099
 ```
 
-## Roadmap
+Enable network sync in the web UI with `?sync=1` while the server is running.
 
-1. Real-time collab over self-hosted Axum + WebSockets  
-2. Comments + suggestion mode  
-3. Native Git integration  
-4. Agent hooks (MCP / Ollama)  
-5. Optional Docker server mode  
+## Next
 
----
-
-*Edit this file with Moraine — it is just Markdown.*
+1. Real multiplayer polish (share CLI, host-only save)
+2. Comments + suggestions
+3. Git + SQLite

@@ -22,6 +22,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::greet,
             commands::app_info,
+            commands::take_startup_path,
             commands::open_document,
             commands::get_document,
             commands::set_document_content,

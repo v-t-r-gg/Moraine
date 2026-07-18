@@ -15,9 +15,15 @@
     pickMarkdownFile,
     reloadDocument,
     saveDocument,
+    takeStartupPath,
     writeFile,
   } from "$lib/api";
-  import { createYjsSession, roomIdForPath, type YjsSession } from "$lib/editor/yjsSession";
+  import {
+    createYjsSession,
+    defaultSyncUrl,
+    roomIdForPath,
+    type YjsSession,
+  } from "$lib/editor/yjsSession";
   import type { DocumentSnapshot, HistoryEntryMeta, ViewMode } from "$lib/types";
 
   const WELCOME_MD = `# Welcome to Moraine
@@ -48,6 +54,7 @@ Start typing, toggle **Preview**, or open a file from disk.
   let session = $state<YjsSession | null>(null);
   let peerCount = $state(0);
   let editorRef = $state<Editor | undefined>(undefined);
+  let syncUrl = $state<string | null>(null);
 
   let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
   let unlistenFile: (() => void) | null = null;
@@ -58,9 +65,12 @@ Start typing, toggle **Preview**, or open a file from disk.
   const charCount = $derived(markdown.length);
 
   onMount(async () => {
+    syncUrl = defaultSyncUrl();
     try {
       const info = await appInfo();
-      status = `${info.name} ${info.version}` + (isTauri ? "" : " · browser mode");
+      const mode = isTauri ? "" : " · browser";
+      const sync = syncUrl ? ` · sync ${syncUrl}` : "";
+      status = `${info.name} ${info.version}${mode}${sync}`;
     } catch {
       status = "Moraine";
     }
@@ -91,6 +101,11 @@ Start typing, toggle **Preview**, or open a file from disk.
 
   async function loadInitial() {
     if (isTauri) {
+      const startup = await takeStartupPath();
+      if (startup) {
+        await loadPath(startup);
+        return;
+      }
       const demo = "/tmp/moraine-welcome.md";
       try {
         await writeFile(demo, WELCOME_MD);
@@ -139,7 +154,7 @@ Start typing, toggle **Preview**, or open a file from disk.
     if (resetSession) {
       session?.destroy();
       const room = roomIdForPath(snap.meta.path);
-      const s = createYjsSession(room);
+      const s = createYjsSession(room, { syncUrl });
       session = s;
       peerCount = 0;
       s.awareness.on("change", () => {

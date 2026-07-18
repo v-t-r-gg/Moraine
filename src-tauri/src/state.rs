@@ -20,6 +20,7 @@ pub struct AppState {
     watcher: Mutex<Option<FileWatcher>>,
     /// Counter of FS events to ignore per path after our own writes.
     suppress_watch: Mutex<HashMap<PathBuf, u32>>,
+    pending_open: Mutex<Option<PathBuf>>,
 }
 
 impl AppState {
@@ -33,7 +34,13 @@ impl AppState {
             by_path: Mutex::new(HashMap::new()),
             watcher: Mutex::new(None),
             suppress_watch: Mutex::new(HashMap::new()),
+            pending_open: Mutex::new(resolve_startup_path()),
         })
+    }
+
+    /// Path from CLI args or `MORAINE_OPEN` (consumed once by the UI).
+    pub fn take_pending_open(&self) -> Option<PathBuf> {
+        self.pending_open.lock().take()
     }
 
     pub fn open_path(&self, path: PathBuf) -> moraine_core::Result<DocumentSnapshot> {
@@ -215,4 +222,18 @@ struct FileChangedPayload {
     path: String,
     change: String,
     document_id: Option<String>,
+}
+
+fn resolve_startup_path() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("MORAINE_OPEN") {
+        let path = PathBuf::from(p.trim());
+        if !path.as_os_str().is_empty() {
+            return Some(path);
+        }
+    }
+    // Skip binary name; first non-flag arg is a file path.
+    std::env::args()
+        .skip(1)
+        .find(|a| !a.starts_with('-'))
+        .map(PathBuf::from)
 }

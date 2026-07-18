@@ -14,9 +14,10 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "cli": "cargo run -p moraine-cli --",
+    "server": "cargo run -p moraine-server",
     "test:rust": "cargo test --workspace --exclude moraine-app",
     "fmt:rust": "cargo fmt --all",
-    "lint:rust": "cargo clippy -p moraine-core -p moraine-cli -- -D warnings"
+    "lint:rust": "cargo clippy -p moraine-core -p moraine-cli -p moraine-server -- -D warnings"
   },
   "license": "MIT OR Apache-2.0",
   "dependencies": {

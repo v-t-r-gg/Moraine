@@ -24,6 +24,13 @@ pub fn app_info(state: State<'_, AppState>) -> AppInfo {
 }
 
 #[tauri::command]
+pub fn take_startup_path(state: State<'_, AppState>) -> Option<String> {
+    state
+        .take_pending_open()
+        .map(|p| p.display().to_string())
+}
+
+#[tauri::command]
 pub fn greet(name: &str) -> String {
     format!("Moraine is ready, {name}!")
 }

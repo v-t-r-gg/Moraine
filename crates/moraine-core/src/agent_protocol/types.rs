@@ -209,15 +209,20 @@ impl AgentRunState {
         self.idempotency.get(key)
     }
 
+    /// True when a *new* key can be inserted without exceeding the hard ceiling.
+    pub fn has_idempotency_capacity_for(&self, key: &str) -> bool {
+        self.idempotency.contains_key(key) || self.idempotency.len() < MAX_IDEMPOTENCY_INDEX
+    }
+
     pub fn record_idempotency(
         &mut self,
         key: String,
         rec: IdempotencyRecord,
     ) -> Result<(), crate::error::Error> {
-        if self.idempotency.len() >= MAX_IDEMPOTENCY_INDEX && !self.idempotency.contains_key(&key) {
-            return Err(crate::error::Error::other(format!(
-                "idempotency index full ({MAX_IDEMPOTENCY_INDEX} keys); refuse silent eviction"
-            )));
+        if !self.has_idempotency_capacity_for(&key) {
+            return Err(crate::error::Error::IdempotencyIndexFull {
+                max: MAX_IDEMPOTENCY_INDEX,
+            });
         }
         self.idempotency.insert(key, rec);
         Ok(())

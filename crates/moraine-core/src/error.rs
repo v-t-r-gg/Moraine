@@ -98,6 +98,9 @@ pub enum Error {
     #[error("unsupported moraine schema version {version} (max {max})")]
     UnsupportedSchemaVersion { version: u32, max: u32 },
 
+    #[error("idempotency index full (max {max})")]
+    IdempotencyIndexFull { max: usize },
+
     #[error("{0}")]
     Other(String),
 }
@@ -135,6 +138,7 @@ impl Error {
             Self::RunRecordStructureInvalid { .. } => "run_record_structure_invalid",
             Self::OperationRecoveryRequired { .. } => "operation_recovery_required",
             Self::UnsupportedSchemaVersion { .. } => "unsupported_schema_version",
+            Self::IdempotencyIndexFull { .. } => "idempotency_index_full",
             Self::Other(_) => "error",
         }
     }
@@ -271,6 +275,12 @@ impl Error {
                 "version": version,
                 "max": max,
                 "message": format!("Unsupported moraine sidecar schema version {version} (max {max})"),
+            }),
+            Self::IdempotencyIndexFull { max } => serde_json::json!({
+                "code": "idempotency_index_full",
+                "kind": "idempotency_index_full",
+                "max": max,
+                "message": format!("Idempotency index is full (max {max}); refuse silent eviction"),
             }),
             other => serde_json::json!({
                 "code": other.kind_str(),

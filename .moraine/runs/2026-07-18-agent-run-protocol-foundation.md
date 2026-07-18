@@ -137,3 +137,30 @@ Addressed PR #6 merge blockers and high-priority findings:
 11. record_revision uses checked_add.
 
 Remaining for human: desktop GUI enforcement of managed regions; full tauri package build optional.
+
+## Follow-up correction (post request-changes)
+
+Head before this work: `584d452`.
+
+### Remaining findings addressed
+
+1. **Human notes byte-for-byte** — delimiter located by byte offsets; body is a raw slice after the original line ending (LF/CRLF preserved). Later `## Human notes` lines in body are content, not delimiters. Tests cover LF, CRLF, no final NL, trailing blanks, fence, Unicode.
+2. **Idempotency capacity preflight** — new keys fail with `idempotency_index_full` before incomplete intent or Markdown write; existing keys still replay. Regression fills the index to max.
+3. **Desktop Model A enforcement** — `managedRegion` ProseMirror plugin blocks ReplaceSteps in managed content; suggestions targeting managed ranges blocked at create/accept; comments allowed. Protocol detection via Markdown markers.
+4. **Mutations do not auto-init project** — checkpoint/ready/resume use discover-only; tests assert no `.moraine` creation on failure.
+5. **Manual desktop** — `npm run tauri build -- --no-bundle` EXIT 0; release `moraine-app` launched with `MORAINE_OPEN` on a protocol-created run; CLI lifecycle with Human notes survival; full interactive click-through of managed-region typing is limited in this agent session (enforcement covered by unit tests + plugin).
+
+### Commands/results
+
+```
+./scripts/check.sh → EXIT 0
+npm run tauri build -- --no-bundle → EXIT 0 (built target/release/moraine-app)
+cargo test agent_protocol → pass (incl. human notes + capacity + no-init)
+npm test → 32 passed (incl. managedRegion)
+CLI e2e: start → human notes → checkpoint → ready → decide → resume (stale)
+```
+
+### Known limitations
+
+- Full interactive GUI suggestion/comment click-through still benefits from human spot-check.
+- Collaborative multi-peer dirty Human notes + external checkpoint conflict path not re-dogfooded beyond existing disk-watch tests.

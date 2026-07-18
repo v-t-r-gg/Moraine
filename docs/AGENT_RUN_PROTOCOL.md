@@ -10,13 +10,11 @@ work and is not implemented.
 
 | Region | Source of truth | Human GUI editing |
 | ------ | --------------- | ----------------- |
-| Objective, protocol status, Git, checkpoints, risks, questions, lifecycle, ready text | Structured sidecar `agent` state; Markdown is a projection | **Not durable.** Next agent mutation regenerates these sections from sidecar state. Use comments / request-changes; agent issues an amendment checkpoint. |
-| `## Human notes` | Exact text preserved across protocol mutations | Free-form human notes |
+| Objective, protocol status, Git, checkpoints, risks, questions, lifecycle, ready text | Structured sidecar `agent` state; Markdown is a projection | **Read-only in desktop** for protocol records. Comments allowed; suggestion create/accept that rewrites managed text is blocked. |
+| `## Human notes` | Exact bytes preserved (LF/CRLF, trailing blanks, Unicode) | Free-form human notes (editable) |
 
-Accepted suggestion text **inside managed regions will disappear** on the next
-`run checkpoint|ready|resume` unless the agent also updates structured state.
-Until the GUI disables editing of managed regions, reviewers should treat
-managed sections as agent-owned and leave free-form text only under Human notes.
+Protocol records are detected via `## Protocol status` + `## Human notes` and the
+managed-region notice. Legacy Markdown keeps full edit behavior.
 
 Agent `ready_for_review` is **not** human approval.
 

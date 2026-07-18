@@ -68,10 +68,12 @@ fn project_init_and_run_lifecycle_cli() {
     assert!(abs.is_file());
     let md = fs::read_to_string(&abs).unwrap();
     assert!(md.contains("## Human notes"));
-    // external human edit
-    let md2 = md.replace(
-        "## Human notes\n\n",
-        "## Human notes\n\nReviewer note: looks good so far.\n",
+    // external human edit — body is every byte after the first delimiter line ending
+    let delim = "## Human notes\n";
+    let idx = md.find(delim).expect("human notes delimiter");
+    let md2 = format!(
+        "{}Reviewer note: looks good so far.\n",
+        &md[..idx + delim.len()]
     );
     fs::write(&abs, &md2).unwrap();
     let (code, st, _) = run_json(&["status", abs.to_str().unwrap(), "--json"]);

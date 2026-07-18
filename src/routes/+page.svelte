@@ -8,7 +8,9 @@
   import RunReviewPanel from "$lib/components/RunReviewPanel.svelte";
   import Editor from "$lib/components/Editor.svelte";
   import {
+    acceptSuggestion as acceptSuggestionApi,
     appInfo,
+    createAnnotation,
     getRunReview,
     historyList,
     historyRestoreContent,
@@ -18,8 +20,11 @@
     openDocument,
     pickMarkdownFile,
     recordRunDecision,
+    reconcileSessionAnnotations,
+    rejectSuggestion as rejectSuggestionApi,
     reloadDocument,
-    saveComments,
+    reopenAnnotation,
+    resolveAnnotation,
     saveDocument,
     takeStartupPath,
     writeFile,
@@ -34,12 +39,13 @@
     type YjsSession,
   } from "$lib/editor/yjsSession";
   import {
+    applyDurableRecord,
     commentsMap,
     countPending,
+    isAnnotationConflictError,
     listComments,
     mergeDiskIntoMap,
     newCommentId,
-    setResolved,
     upsertComment,
     type CommentRecord,
   } from "$lib/editor/comments";
@@ -360,6 +366,7 @@ See the project README and VISION.md for the full model.
       createdAt: c.createdAt,
       resolved: c.resolved,
       kind: c.kind === "suggestion" ? "suggestion" : "comment",
+      revision: c.revision && c.revision > 0 ? c.revision : 1,
     };
   }
 
@@ -372,16 +379,42 @@ See the project README and VISION.md for the full model.
       createdAt: c.createdAt,
       resolved: c.resolved,
       kind: c.kind,
+      revision: c.revision ?? 1,
     };
   }
 
-  async function persistComments() {
+  async function reconcileCommentsFromSession() {
     if (!isTauri || !doc || !session) return;
     const list = listComments(commentsMap(session.doc), true).map(recordToDto);
     try {
-      await saveComments(doc.meta.path, list);
+      const res = await reconcileSessionAnnotations(doc.meta.path, list);
+      const map = commentsMap(session.doc);
+      for (const c of res.comments) {
+        applyDurableRecord(map, dtoToRecord(c));
+      }
+      if (res.conflicts.length) {
+        status = `Annotation conflict(s): ${res.conflicts.length}. Refreshed durable state; review latest revisions.`;
+      }
     } catch (e) {
-      status = `error: could not write review sidecar (${e})`;
+      status = `error: could not reconcile annotations (${e})`;
+    }
+  }
+
+  async function applyOpResult(op: { annotation: CommentDto }) {
+    if (!session) return;
+    applyDurableRecord(commentsMap(session.doc), dtoToRecord(op.annotation));
+  }
+
+  async function refreshAnnotationsFromDisk() {
+    if (!isTauri || !doc || !session) return;
+    try {
+      const disk = await loadComments(doc.meta.path);
+      const map = commentsMap(session.doc);
+      for (const c of disk) {
+        applyDurableRecord(map, dtoToRecord(c));
+      }
+    } catch {
+      /* ignore */
     }
   }
 
@@ -466,7 +499,7 @@ See the project README and VISION.md for the full model.
         status = "Saved; newer edits still pending";
         scheduleSave();
       }
-      await persistComments();
+      await reconcileCommentsFromSession();
       if (isTauri) await refreshRunReview(doc.meta.path);
       externalConflict = false;
       if (!fromAutosave && isTauri) {
@@ -525,7 +558,7 @@ See the project README and VISION.md for the full model.
       status = "Could not attach highlight";
       return;
     }
-    upsertComment(commentsMap(session.doc), {
+    const provisional: CommentRecord = {
       id,
       body: body.trim(),
       author: localAuthor,
@@ -533,9 +566,30 @@ See the project README and VISION.md for the full model.
       createdAt: new Date().toISOString(),
       resolved: false,
       kind,
-    });
+      revision: 1,
+    };
+    upsertComment(commentsMap(session.doc), provisional);
     commentsOpen = true;
     historyOpen = false;
+
+    if (isTauri && doc) {
+      try {
+        const op = await createAnnotation(
+          doc.meta.path,
+          id,
+          provisional.body,
+          provisional.author,
+          provisional.quote,
+          kind,
+        );
+        await applyOpResult(op);
+      } catch (e) {
+        commentsMap(session.doc).delete(id);
+        editorRef?.clearCommentMark?.(id);
+        status = `error: could not create annotation (${e})`;
+        return;
+      }
+    }
 
     const open = countPending(listComments(commentsMap(session.doc), true));
     if (kind === "suggestion") {
@@ -548,22 +602,57 @@ See the project README and VISION.md for the full model.
         ? `Comment added; ${open.comments} open`
         : `Comment added (browser: session only)`;
     }
-    if (isTauri) await persistComments();
   }
 
   async function resolveComment(id: string) {
     if (!session) return;
+    const rec = commentsMap(session.doc).get(id);
+    if (!rec) return;
+    const prev = { ...rec };
     editorRef?.clearCommentMark?.(id);
-    setResolved(commentsMap(session.doc), id, true);
-    status = "Comment resolved";
-    if (isTauri) await persistComments();
+    if (isTauri && doc) {
+      try {
+        const op = await resolveAnnotation(doc.meta.path, id, rec.revision ?? 1);
+        await applyOpResult(op);
+        status = "Comment resolved";
+      } catch (e) {
+        upsertComment(commentsMap(session.doc), prev);
+        if (isAnnotationConflictError(e)) {
+          await refreshAnnotationsFromDisk();
+          status = "Annotation conflict: refreshed from disk. Resolve again if still needed.";
+        } else {
+          status = `error: could not resolve (${e})`;
+        }
+      }
+    } else {
+      upsertComment(commentsMap(session.doc), { ...rec, resolved: true });
+      status = "Comment resolved";
+    }
   }
 
   async function reopenComment(id: string) {
     if (!session) return;
-    setResolved(commentsMap(session.doc), id, false);
-    status = "Thread reopened";
-    if (isTauri) await persistComments();
+    const rec = commentsMap(session.doc).get(id);
+    if (!rec) return;
+    const prev = { ...rec };
+    if (isTauri && doc) {
+      try {
+        const op = await reopenAnnotation(doc.meta.path, id, rec.revision ?? 1);
+        await applyOpResult(op);
+        status = "Thread reopened";
+      } catch (e) {
+        upsertComment(commentsMap(session.doc), prev);
+        if (isAnnotationConflictError(e)) {
+          await refreshAnnotationsFromDisk();
+          status = "Annotation conflict: refreshed from disk.";
+        } else {
+          status = `error: could not reopen (${e})`;
+        }
+      }
+    } else {
+      upsertComment(commentsMap(session.doc), { ...rec, resolved: false });
+      status = "Thread reopened";
+    }
   }
 
   async function acceptSuggestion(id: string) {
@@ -576,7 +665,28 @@ See the project README and VISION.md for the full model.
       orphanedMarkIds = [...new Set([...orphanedMarkIds, id])];
       return;
     }
-    setResolved(commentsMap(session.doc), id, true);
+    const prev = { ...rec };
+    if (isTauri && doc) {
+      try {
+        const op = await acceptSuggestionApi(doc.meta.path, id, rec.revision ?? 1);
+        await applyOpResult(op);
+      } catch (e) {
+        // Document already changed; durable mark failed — report clearly.
+        upsertComment(commentsMap(session.doc), prev);
+        if (isAnnotationConflictError(e)) {
+          await refreshAnnotationsFromDisk();
+          status =
+            "Document edit applied, but annotation conflict on accept. Refreshed ledger; verify the suggestion state.";
+        } else {
+          status = `Document edit applied, but ledger accept failed (${e})`;
+        }
+        dirty = true;
+        scheduleSave();
+        return;
+      }
+    } else {
+      upsertComment(commentsMap(session.doc), { ...rec, resolved: true });
+    }
     orphanedMarkIds = orphanedMarkIds.filter((x) => x !== id);
     dirty = true;
     scheduleSave();
@@ -585,20 +695,37 @@ See the project README and VISION.md for the full model.
       left > 0
         ? `Suggestion accepted; ${left} still pending`
         : "Suggestion accepted";
-    if (isTauri) await persistComments();
   }
 
   async function rejectSuggestion(id: string) {
     if (!session) return;
+    const rec = commentsMap(session.doc).get(id);
+    if (!rec || rec.kind !== "suggestion") return;
+    const prev = { ...rec };
     editorRef?.clearCommentMark?.(id);
-    setResolved(commentsMap(session.doc), id, true);
+    if (isTauri && doc) {
+      try {
+        const op = await rejectSuggestionApi(doc.meta.path, id, rec.revision ?? 1);
+        await applyOpResult(op);
+      } catch (e) {
+        upsertComment(commentsMap(session.doc), prev);
+        if (isAnnotationConflictError(e)) {
+          await refreshAnnotationsFromDisk();
+          status = "Annotation conflict: refreshed from disk.";
+        } else {
+          status = `error: could not reject (${e})`;
+        }
+        return;
+      }
+    } else {
+      upsertComment(commentsMap(session.doc), { ...rec, resolved: true });
+    }
     orphanedMarkIds = orphanedMarkIds.filter((x) => x !== id);
     const left = countPending(listComments(commentsMap(session.doc), true)).suggestions;
     status =
       left > 0
         ? `Suggestion rejected; ${left} still pending`
         : "Suggestion rejected";
-    if (isTauri) await persistComments();
   }
 
   function focusComment(id: string) {

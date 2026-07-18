@@ -14,6 +14,8 @@ export interface CommentRecord {
   createdAt: string;
   resolved: boolean;
   kind: AnnotationKind;
+  /** Durable concurrency token from the ledger (default 1). */
+  revision: number;
 }
 
 export type CommentMap = Y.Map<CommentRecord>;
@@ -37,7 +39,17 @@ function normalize(value: CommentRecord): CommentRecord {
   return {
     ...value,
     kind: value.kind === "suggestion" ? "suggestion" : "comment",
+    revision: value.revision && value.revision > 0 ? value.revision : 1,
   };
+}
+
+/** Apply durable op result into the Yjs map (source of truth after host mutation). */
+export function applyDurableRecord(map: CommentMap, record: CommentRecord): void {
+  map.set(record.id, normalize(record));
+}
+
+export function isAnnotationConflictError(err: unknown): boolean {
+  return String(err).includes("annotation_conflict");
 }
 
 export function upsertComment(map: CommentMap, record: CommentRecord): void {

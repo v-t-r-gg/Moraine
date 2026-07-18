@@ -6,14 +6,26 @@ rewriting the whole document on every step.
 **This document describes current CLI capabilities.** MCP transport is future
 work and is not implemented.
 
+## Authority model A (current)
+
+| Region | Source of truth | Human GUI editing |
+| ------ | --------------- | ----------------- |
+| Objective, protocol status, Git, checkpoints, risks, questions, lifecycle, ready text | Structured sidecar `agent` state; Markdown is a projection | **Not durable.** Next agent mutation regenerates these sections from sidecar state. Use comments / request-changes; agent issues an amendment checkpoint. |
+| `## Human notes` | Exact text preserved across protocol mutations | Free-form human notes |
+
+Accepted suggestion text **inside managed regions will disappear** on the next
+`run checkpoint|ready|resume` unless the agent also updates structured state.
+Until the GUI disables editing of managed regions, reviewers should treat
+managed sections as agent-owned and leave free-form text only under Human notes.
+
+Agent `ready_for_review` is **not** human approval.
+
 ## Authority boundary
 
 | Actor | Can do | Cannot do |
 | ----- | ------ | --------- |
 | Agent (`moraine run …`) | start, checkpoint, ready, resume, show, open | `approved` / `changes_requested` / `rejected`, reviewer identity |
-| Human (`moraine decide`, GUI) | review decisions, annotations, suggestions | agent lifecycle (except by editing Markdown) |
-
-Agent `ready_for_review` is **not** human approval.
+| Human (`moraine decide`, GUI) | review decisions, annotations, suggestions | agent lifecycle commands |
 
 ## Commands
 
@@ -48,6 +60,8 @@ decision **stale** (content-hash bound).
 - Does **not** modify the repository root `.gitignore` by default.
 - Never ignores durable run records or their sidecars.
 - `run start` auto-initializes the minimal project structure when absent.
+- `run show` and `run open` **discover** only; they return `project_not_found`
+  without creating `.moraine`.
 - No central database. Git is optional.
 
 ## Checkpoint schema
@@ -71,27 +85,47 @@ decision **stale** (content-hash bound).
 }
 ```
 
-- `summary` required; size limits apply to fields and collections.
-- Agent-reported command results are **not** Moraine-captured evidence.
+- Scalar fields reject CR/LF and control characters (structure-injection safety).
+- Agent evidence cannot claim `moraine_captured` (rejected).
 - Moraine attaches Git context mechanically at checkpoint time.
-- No full Markdown replacement; no polished prose required.
+- Size limits apply to fields and collection lengths.
 
 ## Persistence and recovery
 
 - Structured agent state lives in the sidecar `agent` object (schema **v4**).
 - Markdown is a deterministic projection plus a preserved `## Human notes`
-  region (plain headings/lists so desktop Markdown round-trips keep structure).
+  region (plain headings/lists for Tiptap `html: false`).
 - Mutations after start require `--expected-hash` (exact UTF-8 SHA-256).
 - Per-record exclusive lock; re-read; hash check; idempotency; one logical
-  mutation; atomic write.
-- Incomplete ops use a two-phase sidecar mark → Markdown write → finalize path.
-  Ambiguous external change returns `operation_recovery_required`.
+  mutation.
+
+### Two-phase commit (Markdown + sidecar)
+
+1. **Committed** `agent` state remains unchanged except an `incomplete_op` intent
+   that holds `pending_agent` (the next state) plus base/expected hashes.
+2. Write projected Markdown.
+3. On success, **promote** `pending_agent` to committed and record idempotency.
+4. Recovery:
+   - disk hash == base → discard pending (no mutation committed)
+   - disk hash == expected → promote pending exactly once
+   - neither → `operation_recovery_required`
+
+A failed Markdown write must **not** leave checkpoints or lifecycle changes
+committed.
+
+### Start idempotency
+
+Under the project lock, start **reserves** `run_id`, path, and payload hash with
+status `pending` before creating files, then marks `complete` after files exist.
+Retries recover the reservation; concurrent same-key starts share one run.
 
 ## Idempotency
 
 - Every mutating agent op requires `--idempotency-key`.
 - Same key + same logical payload → original success (no duplicate content).
 - Same key + different payload → `idempotency_conflict`.
+- Compact lifetime index on the run sidecar; no silent eviction of keys.
+- If the index reaches a hard ceiling, further new keys fail closed.
 
 ## Errors
 
@@ -111,7 +145,7 @@ JSON envelope:
 Codes include: `project_not_found`, `run_not_found`, `invalid_checkpoint`,
 `revision_conflict`, `idempotency_conflict`, `run_state_conflict`,
 `run_record_structure_invalid`, `operation_recovery_required`,
-`unsupported_schema_version`.
+`unsupported_schema_version`, `desktop_launch_failed`.
 
 With `--json`, diagnostics go to stderr; stdout is only the JSON object.
 
@@ -119,7 +153,8 @@ With `--json`, diagnostics go to stderr; stdout is only the JSON object.
 
 - Mutations and default `run show` omit full Markdown.
 - Use `--include-markdown` only when necessary.
-- Recent checkpoint summaries are capped; aggregate counts are returned.
+- Recent checkpoint summaries, risks, and open questions are capped; totals
+  are returned for full counts.
 - Target: typical success responses under ~2 KiB serialized JSON.
 
 ## Honest limitations
@@ -129,9 +164,12 @@ With `--json`, diagnostics go to stderr; stdout is only the JSON object.
 - Markdown + sidecar are not one ACID transaction; recovery is explicit.
 - Desktop open scans project sidecars; no review inbox.
 - MCP is not implemented.
+- GUI does not yet hard-disable edits inside managed Markdown regions (Model A
+  is documented; enforcement is process/UI follow-up).
 
 ## Future work
 
 - MCP transport over the same core operations
 - Review inbox / multi-run views
+- GUI enforcement of managed vs Human notes regions
 - Richer evidence capture (optional, explicit)

@@ -18,10 +18,11 @@ pub use ops::{
 };
 pub use project::{
     discover_project_root, ensure_project, find_run_by_id, init_project, project_meta_path,
-    resolve_or_init_project, ProjectInitResult, ProjectMeta, PROJECT_SCHEMA_VERSION,
+    resolve_existing_project, resolve_or_init_project, ProjectInitResult, ProjectMeta,
+    StartOpIndex, StartOpStatus, PROJECT_SCHEMA_VERSION,
 };
 pub use types::{
-    AgentRunState, CheckpointRecord, CompletedOp, EvidenceItem, EvidenceKind, EvidenceProvenance,
-    IncompleteOp, LifecycleEvent, RationalItem, RunLifecycle, MAX_CHECKPOINT_ITEMS,
-    MAX_FIELD_CHARS, MAX_SUMMARY_CHARS,
+    AgentRunState, CheckpointRecord, EvidenceItem, EvidenceKind, EvidenceProvenance,
+    IdempotencyRecord, IncompleteOp, LifecycleEvent, RationalItem, RunLifecycle,
+    MAX_CHECKPOINT_ITEMS, MAX_FIELD_CHARS, MAX_SUMMARY_CHARS,
 };

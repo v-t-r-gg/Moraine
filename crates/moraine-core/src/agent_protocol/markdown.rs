@@ -1,8 +1,12 @@
 //! Deterministic Markdown projection for agent runs.
 //!
 //! Uses ordinary ATX headings and lists so Tiptap (`html: false`) round-trips
-//! preserve structure. Human-authored free text lives only under
-//! `## Human notes` and is preserved byte-for-byte between mutations.
+//! preserve structure.
+//!
+//! **Authority model A:** Moraine-managed sections are projections of structured
+//! sidecar state. Human-authored free text that survives agent mutations lives
+//! only under `## Human notes`. Edits outside that region are not preserved on
+//! the next protocol operation.
 
 use chrono::{DateTime, Utc};
 
@@ -11,37 +15,40 @@ use super::types::{AgentRunState, CheckpointRecord, LifecycleEvent, RunLifecycle
 use crate::error::{Error, Result};
 
 pub const HUMAN_NOTES_HEADING: &str = "## Human notes";
-const HUMAN_MARKER: &str = "\n## Human notes\n";
 
-/// Extract human notes body (may be empty). Errors if the heading is missing or duplicated.
+/// Extract human notes body (may be empty). Line-aware; rejects missing/duplicate headings.
 pub fn extract_human_notes(markdown: &str) -> Result<String> {
-    let count = markdown
-        .lines()
-        .filter(|l| l.trim_end() == HUMAN_NOTES_HEADING)
-        .count();
-    if count == 0 {
+    let mut heading_line: Option<usize> = None;
+    for (i, line) in markdown.lines().enumerate() {
+        if line.trim_end() == HUMAN_NOTES_HEADING {
+            if heading_line.is_some() {
+                return Err(Error::RunRecordStructureInvalid {
+                    message: "duplicate '## Human notes' headings".into(),
+                });
+            }
+            heading_line = Some(i);
+        }
+    }
+    let Some(line_idx) = heading_line else {
         return Err(Error::RunRecordStructureInvalid {
             message: "missing required heading '## Human notes'".into(),
         });
+    };
+    // Reconstruct body after the heading line, preserving line endings style loosely
+    // by joining remaining lines with \n (protocol always renders with \n).
+    let body: String = markdown
+        .lines()
+        .skip(line_idx + 1)
+        .collect::<Vec<_>>()
+        .join("\n");
+    // Preserve a trailing newline if original ended with one after the heading section.
+    if markdown.ends_with('\n') && !body.is_empty() && !body.ends_with('\n') {
+        Ok(format!("{body}\n"))
+    } else if markdown.ends_with('\n') && body.is_empty() {
+        Ok(String::new())
+    } else {
+        Ok(body)
     }
-    if count > 1 {
-        return Err(Error::RunRecordStructureInvalid {
-            message: "duplicate '## Human notes' headings".into(),
-        });
-    }
-    if let Some(idx) = markdown.find(HUMAN_MARKER) {
-        let after = &markdown[idx + HUMAN_MARKER.len()..];
-        return Ok(after.to_string());
-    }
-    // Heading at BOF or without the usual preceding blank line.
-    if let Some(pos) = markdown.find(HUMAN_NOTES_HEADING) {
-        let after = &markdown[pos + HUMAN_NOTES_HEADING.len()..];
-        let after = after.strip_prefix('\n').unwrap_or(after);
-        return Ok(after.to_string());
-    }
-    Err(Error::RunRecordStructureInvalid {
-        message: "could not locate Human notes section body".into(),
-    })
 }
 
 /// Render with explicit run id (stored on RunMeta.run.id).
@@ -58,6 +65,9 @@ pub fn render_run_markdown_with_id(
     out.push_str("\n\n");
 
     out.push_str("## Protocol status\n\n");
+    out.push_str(
+        "> **Managed regions:** Everything above `## Human notes` is regenerated from Moraine structured state. Human free-form edits and accepted suggestion text outside Human notes are **not** preserved on the next agent operation. Review managed content with comments / request-changes; put free-form notes only under Human notes.\n\n",
+    );
     out.push_str(&format!("- **Run ID:** `{run_id}`\n"));
     out.push_str(&format!(
         "- **Lifecycle:** `{}`\n",
@@ -283,7 +293,7 @@ mod tests {
             checkpoints: vec![],
             lifecycle_events: vec![],
             ready_summary: None,
-            completed_ops: vec![],
+            idempotency: Default::default(),
             incomplete_op: None,
             risks: vec![],
             open_questions: vec![],

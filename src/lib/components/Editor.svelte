@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { Editor } from "@tiptap/core";
+  import { Editor, Extension } from "@tiptap/core";
   import StarterKit from "@tiptap/starter-kit";
   import Placeholder from "@tiptap/extension-placeholder";
   import Collaboration from "@tiptap/extension-collaboration";
@@ -9,6 +9,11 @@
   import { CommentMark, findMarkRange, type MarkKind } from "$lib/editor/commentMark";
   import { findQuoteRangeInDoc, type CommentRecord } from "$lib/editor/comments";
   import type { YjsSession } from "$lib/editor/yjsSession";
+  import {
+    createManagedRegionPlugin,
+    isProtocolRunMarkdown,
+    suggestionAcceptTouchesManaged,
+  } from "$lib/editor/managedRegion";
 
   interface Props {
     session: YjsSession | null;
@@ -29,6 +34,8 @@
   let element: HTMLDivElement | undefined = $state();
   let editor: Editor | null = null;
   let lastRoom: string | null = null;
+  /** Protocol Model A: managed region text is read-only when true. */
+  let protocolMode = $state(false);
 
   $effect(() => {
     const s = session;
@@ -40,12 +47,20 @@
     editor?.destroy();
     editor = null;
     lastRoom = s.roomId;
+    protocolMode = isProtocolRunMarkdown(initialMarkdown);
 
     const user = s.awareness.getLocalState()?.user as
       | { name: string; color: string }
       | undefined;
 
     let seeded = false;
+
+    const ManagedRegionExt = Extension.create({
+      name: "moraineManagedRegion",
+      addProseMirrorPlugins() {
+        return [createManagedRegionPlugin(() => protocolMode)];
+      },
+    });
 
     editor = new Editor({
       element: el,
@@ -64,6 +79,7 @@
           transformCopiedText: true,
         }),
         CommentMark,
+        ManagedRegionExt,
         Collaboration.configure({
           document: s.doc,
         }),
@@ -88,6 +104,7 @@
         if (fragment.length === 0 && initialMarkdown && !seeded) {
           seeded = true;
           ed.commands.setContent(initialMarkdown);
+          protocolMode = isProtocolRunMarkdown(initialMarkdown);
         }
         onReady?.(ed);
       },
@@ -114,12 +131,24 @@
 
   export function setMarkdown(md: string) {
     if (!editor) return;
+    protocolMode = isProtocolRunMarkdown(md);
     editor.commands.setContent(md);
   }
 
   export function getMarkdownContent(): string {
     if (!editor) return "";
     return getMarkdown(editor);
+  }
+
+  export function isProtocolMode(): boolean {
+    return protocolMode;
+  }
+
+  /** Selection or range touches Moraine-managed projection (not Human notes). */
+  export function selectionTouchesManagedRegion(): boolean {
+    if (!editor || !protocolMode) return false;
+    const { from, to } = editor.state.selection;
+    return suggestionAcceptTouchesManaged(editor.state.doc, from, to);
   }
 
   export type ViewportState = {
@@ -180,13 +209,36 @@
     }
   }
 
-  /** Replace marked range (or first quote match) with replacement text. */
+  /**
+   * Whether accepting this suggestion would rewrite managed projection content.
+   * Does not mutate the document.
+   */
+  export function suggestionTargetsManagedRegion(
+    id: string,
+    quote?: string,
+  ): boolean {
+    if (!editor || !protocolMode) return false;
+    let range = findMarkRange(editor.state, id);
+    if (!range && quote) {
+      range = findQuoteRangeInDoc(editor.state.doc, quote);
+    }
+    if (!range) return false;
+    return suggestionAcceptTouchesManaged(editor.state.doc, range.from, range.to);
+  }
+
+  /**
+   * Replace marked range (or first quote match) with replacement text.
+   * Protocol Model A: refuses ranges that touch managed projection content.
+   */
   export function acceptSuggestion(
     id: string,
     replacement: string,
     quote?: string,
   ): boolean {
     if (!editor) return false;
+    if (suggestionTargetsManagedRegion(id, quote)) {
+      return false;
+    }
     let range = findMarkRange(editor.state, id);
     if (!range && quote) {
       range = findQuoteRangeInDoc(editor.state.doc, quote);

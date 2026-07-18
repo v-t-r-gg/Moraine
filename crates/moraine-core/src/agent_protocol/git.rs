@@ -1,0 +1,107 @@
+use std::path::Path;
+use std::process::Command;
+
+use serde::{Deserialize, Serialize};
+
+/// Mechanically captured Git facts. Never agent-authored prose.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GitContextSummary {
+    pub available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository_root: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detached: Option<bool>,
+    /// clean | dirty | unknown
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_tree: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_file_count: Option<usize>,
+}
+
+const MAX_CHANGED_FILES: usize = 20;
+
+/// Capture Git context for `cwd` when a repository is present.
+pub fn capture_git_context(cwd: &Path) -> GitContextSummary {
+    let root = git_stdout(cwd, &["rev-parse", "--show-toplevel"]);
+    let Some(root) = root else {
+        return GitContextSummary {
+            available: false,
+            ..Default::default()
+        };
+    };
+    let root = root.trim().to_string();
+    let head = git_stdout(cwd, &["rev-parse", "HEAD"]).map(|s| s.trim().to_string());
+    let abbrev = git_stdout(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    let detached = abbrev == "HEAD";
+    let branch = if detached || abbrev.is_empty() {
+        None
+    } else {
+        Some(abbrev)
+    };
+    let upstream = git_stdout(
+        cwd,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    )
+    .map(|s| s.trim().to_string());
+    let status = git_stdout(cwd, &["status", "--porcelain"]);
+    let (working_tree, changed_files, changed_file_count) = match status {
+        None => (Some("unknown".into()), Vec::new(), None),
+        Some(s) if s.trim().is_empty() => (Some("clean".into()), Vec::new(), Some(0)),
+        Some(s) => {
+            let mut files: Vec<String> = s
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(|l| {
+                    let line = l.trim_start();
+                    // porcelain: XY PATH or XY ORIG -> PATH
+                    if line.len() >= 3 {
+                        line[3..].trim().replace(" -> ", "→").to_string()
+                    } else {
+                        line.to_string()
+                    }
+                })
+                .collect();
+            let count = files.len();
+            if files.len() > MAX_CHANGED_FILES {
+                files.truncate(MAX_CHANGED_FILES);
+                files.push(format!("…and {} more", count - MAX_CHANGED_FILES));
+            }
+            (Some("dirty".into()), files, Some(count))
+        }
+    };
+
+    GitContextSummary {
+        available: true,
+        repository_root: Some(root),
+        branch,
+        head,
+        upstream,
+        detached: Some(detached),
+        working_tree,
+        changed_files,
+        changed_file_count,
+    }
+}
+
+fn git_stdout(cwd: &Path, args: &[&str]) -> Option<String> {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8(out.stdout).ok()
+}

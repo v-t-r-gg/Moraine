@@ -62,7 +62,7 @@
           <span
             class="rounded px-1.5 py-0.5 text-[10px] font-medium"
             style="background: var(--accent-soft); color: var(--accent);"
-            title="Remote collaborators present; autosave paused"
+            title="Remote peers in the review session; host autosave paused"
           >
             live
           </span>

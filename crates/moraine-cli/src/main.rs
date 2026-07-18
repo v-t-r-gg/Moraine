@@ -1,4 +1,4 @@
-//! CLI entry. Fail-fast share unless `--start`. JSON-friendly for agents.
+//! CLI for agent run records and review helpers. Fail-fast share unless `--start`.
 
 mod relay;
 
@@ -31,8 +31,8 @@ const EXIT_RELAY: i32 = 3;
 #[command(
     name = "moraine",
     version,
-    about = "Moraine: local-first collaborative Markdown editor (CLI)",
-    long_about = "Work with plain .md files, share collab rooms, and inspect review sidecars.\n\
+    about = "Moraine CLI: run records and review helpers for agents and scripts",
+    long_about = "Create and inspect Markdown run records, share live review rooms, and read sidecar status.\n\
                   Exit codes: 0 ok, 1 error, 2 not found, 3 relay down.\n\
                   Prefer --json on share/status/info/join when calling from scripts."
 )]

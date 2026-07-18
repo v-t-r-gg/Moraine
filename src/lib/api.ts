@@ -166,11 +166,11 @@ function browserStub<T>(cmd: string, args?: Record<string, unknown>): T {
           byteLen: 0,
         },
         content:
-          "# Welcome to Moraine\n\n" +
-          "Browser-only mode: open via **Tauri** for real file I/O.\n\n" +
-          "- Edit Markdown with the rich editor\n" +
-          "- Toggle **Preview**\n" +
-          "- Yjs powers local multi-tab collab simulation\n",
+          "# Agent run record (browser stub)\n\n" +
+          "Browser-only mode has no real host disk. Use the **Tauri** desktop app for file I/O and sidecar persistence.\n\n" +
+          "- Open a real run-record path in desktop via `MORAINE_OPEN` or Open\n" +
+          "- **Comment** / **Suggest** for human review\n" +
+          "- Live share needs `moraine-server` and `?room=`\n",
       };
       snap.meta.byteLen = snap.content.length;
       browserDocs.set(id, snap);

@@ -15,6 +15,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/v-t-r-gg/Moraine"
 authors = ["Moraine Contributors"]
 rust-version = "1.77"
+description = "Local-first review ledger for autonomous agent work"
 
 [workspace.dependencies]
 moraine-core = { path = "crates/moraine-core" }

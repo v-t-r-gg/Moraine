@@ -7,7 +7,7 @@ Agents write durable Markdown **run records** (what they did, decided, verified,
 Early-stage local-first project. Not a production hosted collaboration service and not a compliance-grade audit system.
 
 Repo: https://github.com/v-t-r-gg/Moraine  
-[VISION.md](./VISION.md) · [ARCHITECTURE.md](./ARCHITECTURE.md)
+[VISION.md](./VISION.md) · [ARCHITECTURE.md](./ARCHITECTURE.md) · [ROADMAP.md](./ROADMAP.md)
 
 ## Who uses what
 
@@ -161,4 +161,4 @@ Not a general knowledge-management workspace, full agent observability stack, Gi
 
 ## License
 
-MIT OR Apache-2.0
+Dual-licensed under **MIT OR Apache-2.0**. See [LICENSE-MIT](./LICENSE-MIT) and [LICENSE-APACHE](./LICENSE-APACHE).

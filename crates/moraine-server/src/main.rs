@@ -1,5 +1,5 @@
-//! Yjs WebSocket relay. In-memory rooms only; no auth, no disk.
-//! Protocol must stay compatible with src/lib/editor/yjsSession.ts.
+//! Optional live review relay (Yjs WebSocket). In-memory only; no auth, no disk.
+//! Wire format must stay compatible with src/lib/editor/yjsSession.ts.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -26,7 +26,7 @@ const BROADCAST_CAPACITY: usize = 256;
 #[command(
     name = "moraine-server",
     version,
-    about = "Moraine Yjs WebSocket relay"
+    about = "Optional live review relay for Moraine (in-memory Yjs WebSocket)"
 )]
 struct Args {
     #[arg(long, env = "MORAINE_BIND", default_value = DEFAULT_BIND)]

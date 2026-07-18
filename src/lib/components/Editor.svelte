@@ -56,7 +56,7 @@
           history: false,
         }),
         Placeholder.configure({
-          placeholder: "Start writing Markdown…",
+          placeholder: "Write or review the agent run record…",
         }),
         Markdown.configure({
           html: false,

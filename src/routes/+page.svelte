@@ -47,11 +47,18 @@
   } from "$lib/editor/hostSave";
   import type { DocumentSnapshot, HistoryEntryMeta, ViewMode } from "$lib/types";
 
-  const WELCOME_MD = `# Welcome to Moraine
+  const WELCOME_MD = `# Agent run record
 
-One file, one room. Share with \`moraine share path.md\` (relay must be running).
+This is a **run record**: a durable Markdown log of agent work for human review.
 
-Review: Comment or Suggest on a selection. Sidecar: \`file.md.comments.json\`.
+## How to use
+
+1. Agents write or update \`.md\` files (CLI or any tool).
+2. Optional live room: \`moraine share this-file.md\` (relay must be running).
+3. Humans open the file or join URL, then **Comment** / **Suggest**, **Review**, **Save**.
+4. Annotations persist in \`file.md.comments.json\` on host Save.
+
+See the project README and VISION.md for the full model.
 `;
 
   let doc = $state<DocumentSnapshot | null>(null);

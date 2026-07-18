@@ -1,6 +1,6 @@
-//! Shared library for CLI, desktop, and tests. No Tauri / Axum / UI deps.
+//! Domain library for Moraine run records. No Tauri / Axum / UI deps.
 //!
-//! One markdown file = one collab room. No multi-file workspace in core.
+//! One Markdown run record path maps to one live review room.
 
 pub mod comments;
 pub mod document;

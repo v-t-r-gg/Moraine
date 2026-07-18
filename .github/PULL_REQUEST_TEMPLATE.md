@@ -33,8 +33,23 @@ Closes #
 
 ## Review-ledger state
 
-- [ ] Run record is complete
-- [ ] Human decision is current
-- [ ] Decision applies to the listed implementation commit
+- [ ] The run record names the reviewed implementation commit.
+- [ ] The Moraine decision is current for the run-record Markdown.
+- [ ] No implementation files changed after the reviewed commit.
+- [ ] Any implementation or run-record Markdown change after approval was reviewed again.
 
-Do not merge while the Moraine run-level decision is **stale** relative to the implementation commit listed above.
+A sidecar-only commit that records the human decision does not itself
+require another decision.
+
+Do not merge while the Moraine decision is stale relative to the run
+record. If implementation changes after approval, update the reviewed
+commit in the run record and record a new decision.
+
+### Guarantee boundary (current product)
+
+| Guarantee | Current status |
+| --------- | -------------- |
+| Decision applies to exact run-record Markdown | Mechanically enforced |
+| Run record names an implementation commit | Manually recorded |
+| Implementation commit has not changed | Process-enforced |
+| Decision cryptographically applies to source tree | Not implemented |

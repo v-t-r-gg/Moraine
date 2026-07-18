@@ -59,6 +59,7 @@
     remotePeerCount,
   } from "$lib/editor/hostSave";
   import { isRevisionConflictError } from "$lib/editor/reviewGate";
+  import { classifyDiskEvent, type ViewportState } from "$lib/editor/diskWatch";
   import type { DocumentSnapshot, HistoryEntryMeta, ViewMode } from "$lib/types";
 
   const WELCOME_MD = `# Agent run record
@@ -104,13 +105,20 @@ See the project README and VISION.md for the full model.
   let externalConflict = $state(false);
   /** Local text preserved when an external conflict blocks overwrite. */
   let conflictLocalMarkdown = $state<string | null>(null);
+  /** Last external disk hash we already handled (dedupe reload/conflict). */
+  let lastHandledExternalHash = $state<string | null>(null);
 
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let unlistenFile: (() => void) | null = null;
   let unsubComments: (() => void) | null = null;
-  let ignoreNextEditorSync = false;
+  /** Generation token for programmatic editor updates (reload/open). */
+  let programmaticUpdateGen = 0;
+  let ignoreProgrammaticUpdates = false;
   let prevPeers = 0;
   let pendingRehydrate = false;
+  /** Serialize watcher handlers for one document. */
+  let watchInFlight: Promise<void> | null = null;
+  let watchGeneration = 0;
 
   const title = $derived(doc?.meta.title ?? "Moraine");
   const path = $derived(doc?.meta.path ?? null);
@@ -130,25 +138,69 @@ See the project README and VISION.md for the full model.
       status = "Moraine";
     }
     await loadInitial();
-    unlistenFile = onFileChanged(async (ev) => {
+    unlistenFile = onFileChanged((ev) => {
+      void handleDiskWatchEvent(ev);
+    });
+  });
+
+  async function handleDiskWatchEvent(ev: import("$lib/types").FileChangedEvent) {
+    // Serialize handlers so bursts do not stack reloads.
+    const run = async () => {
+      const gen = ++watchGeneration;
       if (!doc || !ev.documentId || ev.documentId !== doc.meta.id) return;
-      externalConflict = true;
-      if (dirty || saving) {
-        conflictLocalMarkdown = editorRef?.getMarkdownContent?.() ?? markdown;
-        status =
-          "File changed on disk while you have local edits. Reload from disk or copy your text before Save.";
+
+      const kind = classifyDiskEvent({
+        event: ev,
+        openDocumentId: doc.meta.id,
+        knownPersistedHash: baseContentHash,
+        lastHandledExternalHash,
+        dirty,
+        saving,
+      });
+
+      if (
+        kind === "ignore_same_hash" ||
+        kind === "ignore_duplicate" ||
+        kind === "ignore_sidecar" ||
+        kind === "ignore_while_saving"
+      ) {
         return;
       }
+
+      const diskHash = ev.diskContentHash ?? null;
+      if (diskHash) lastHandledExternalHash = diskHash;
+
+      if (kind === "external_dirty") {
+        // Stable conflict: set once, no auto-reload, no session reset.
+        if (!externalConflict) {
+          externalConflict = true;
+          conflictLocalMarkdown = editorRef?.getMarkdownContent?.() ?? markdown;
+          status =
+            "File changed on disk while you have local edits. Reload from disk or copy your text before Save.";
+        }
+        return;
+      }
+
+      // external_clean: reload once in place without conflict language
+      if (gen !== watchGeneration) return;
       try {
-        applyDocument(await reloadDocument(doc.meta.id), true);
-        externalConflict = false;
-        conflictLocalMarkdown = null;
-        status = "Reloaded from disk";
+        const snap = await reloadDocument(doc.meta.id);
+        if (gen !== watchGeneration) return;
+        applyDocumentInPlace(snap);
+        status = "Updated from disk";
       } catch (e) {
         status = `Reload failed: ${e}`;
       }
+    };
+
+    if (watchInFlight) {
+      await watchInFlight;
+    }
+    watchInFlight = run().finally(() => {
+      watchInFlight = null;
     });
-  });
+    await watchInFlight;
+  }
 
   onDestroy(() => {
     clearSaveTimer();
@@ -203,13 +255,22 @@ See the project README and VISION.md for the full model.
     }
   }
 
+  function hashFromSnap(snap: DocumentSnapshot): string | null {
+    if (snap.contentHash && snap.contentHash.length === 64) return snap.contentHash;
+    return null;
+  }
+
+  /** Open a different document (or first open): may reset collab session. */
   function applyDocument(snap: DocumentSnapshot, resetSession: boolean) {
-    ignoreNextEditorSync = true;
+    beginProgrammaticUpdate();
     doc = snap;
     markdown = snap.content;
     dirty = snap.meta.dirty;
     externalConflict = false;
     conflictLocalMarkdown = null;
+    const h = hashFromSnap(snap);
+    if (h) baseContentHash = h;
+    lastHandledExternalHash = null;
 
     if (resetSession) {
       session?.destroy();
@@ -250,20 +311,66 @@ See the project README and VISION.md for the full model.
       void refreshRunReview(snap.meta.path);
     }
 
+    endProgrammaticUpdateSoon();
+  }
+
+  /**
+   * Same-file revision reload: keep Yjs session, avoid reseeding, restore viewport.
+   */
+  function applyDocumentInPlace(snap: DocumentSnapshot) {
+    const samePath = doc?.meta.path === snap.meta.path;
+    if (!samePath || !session) {
+      applyDocument(snap, true);
+      return;
+    }
+    const vp: ViewportState | undefined = editorRef?.getViewportState?.();
+    beginProgrammaticUpdate();
+    doc = snap;
+    markdown = snap.content;
+    dirty = false;
+    externalConflict = false;
+    conflictLocalMarkdown = null;
+    const h = hashFromSnap(snap);
+    if (h) baseContentHash = h;
+    editorRef?.setMarkdown?.(snap.content);
+    void refreshRunReview(snap.meta.path);
+    // Rehydrate marks for open annotations without destroying session.
+    pendingRehydrate = true;
     queueMicrotask(() => {
-      ignoreNextEditorSync = false;
+      tryRehydrateMarks();
+      if (vp) editorRef?.restoreViewportState?.(vp);
+      endProgrammaticUpdateSoon();
+    });
+  }
+
+  function beginProgrammaticUpdate() {
+    programmaticUpdateGen += 1;
+    ignoreProgrammaticUpdates = true;
+  }
+
+  function endProgrammaticUpdateSoon() {
+    const gen = programmaticUpdateGen;
+    // Editor may emit updates async; hold suppression across a couple of frames.
+    queueMicrotask(() => {
+      requestAnimationFrame(() => {
+        if (gen === programmaticUpdateGen) {
+          ignoreProgrammaticUpdates = false;
+        }
+      });
     });
   }
 
   async function refreshRunReview(filePath: string) {
     if (!isTauri) {
       runReview = null;
-      baseContentHash = null;
       return;
     }
     try {
       runReview = await getRunReview(filePath);
-      baseContentHash = runReview.contentHash;
+      // Do not overwrite a fresher base from Save with a racey stale read.
+      if (runReview.contentHash) {
+        baseContentHash = runReview.contentHash;
+      }
     } catch (e) {
       status = `error: could not load run review (${e})`;
     }
@@ -311,12 +418,12 @@ See the project README and VISION.md for the full model.
     if (!doc || !isTauri) return;
     conflictLocalMarkdown = editorRef?.getMarkdownContent?.() ?? markdown;
     try {
-      applyDocument(await reloadDocument(doc.meta.id), true);
-      await refreshRunReview(doc.meta.path);
-      externalConflict = false;
+      const snap = await reloadDocument(doc.meta.id);
+      // Same path: keep session; do not force conflict language.
+      applyDocumentInPlace(snap);
       status = conflictLocalMarkdown
         ? "Reloaded from disk. Your previous local text is kept in memory for copy (conflict buffer)."
-        : "Reloaded from disk";
+        : "Updated from disk";
     } catch (e) {
       status = `Reload failed: ${e}`;
     }
@@ -435,7 +542,7 @@ See the project README and VISION.md for the full model.
   }
 
   function onEditorUpdate(md: string) {
-    if (ignoreNextEditorSync) return;
+    if (ignoreProgrammaticUpdates) return;
     if (md === markdown) return;
     markdown = md;
     dirty = true;
@@ -500,6 +607,12 @@ See the project README and VISION.md for the full model.
         baseContentHash,
       );
       doc = snap;
+      // Authoritative saved hash from backend before watcher classification.
+      const savedHash = hashFromSnap(snap);
+      if (savedHash) {
+        baseContentHash = savedHash;
+        lastHandledExternalHash = null;
+      }
       const now = editorRef?.getMarkdownContent?.() ?? markdown;
       if (now === md) {
         markdown = snap.content;
@@ -516,7 +629,14 @@ See the project README and VISION.md for the full model.
         scheduleSave();
       }
       await reconcileCommentsFromSession();
-      if (isTauri) await refreshRunReview(doc.meta.path);
+      // Review state refresh; base hash already set from Save.
+      if (isTauri) {
+        try {
+          runReview = await getRunReview(doc.meta.path);
+        } catch {
+          /* non-fatal */
+        }
+      }
       externalConflict = false;
       if (!fromAutosave && isTauri) {
         status = `${status}; ledger: ${doc.meta.path}.moraine.json`;

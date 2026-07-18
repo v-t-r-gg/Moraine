@@ -1,16 +1,17 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 use std::thread;
 use std::time::Duration;
 
 use moraine_core::history::HistorySource;
 use moraine_core::{
-    Document, DocumentId, DocumentSnapshot, FileWatcher, HistoryStore, MorainePaths, WatchEvent,
+    content_hash, Document, DocumentId, DocumentSnapshot, FileWatcher, HistoryStore, MorainePaths,
+    WatchEvent,
 };
 use parking_lot::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 pub struct AppState {
     pub paths: MorainePaths,
@@ -18,8 +19,12 @@ pub struct AppState {
     documents: Mutex<HashMap<DocumentId, Document>>,
     by_path: Mutex<HashMap<PathBuf, DocumentId>>,
     watcher: Mutex<Option<FileWatcher>>,
-    /// Counter of FS events to ignore per path after our own writes.
+    /// Soft suppress for FS bursts after our own writes (optimization only).
     suppress_watch: Mutex<HashMap<PathBuf, u32>>,
+    /// Last known persisted Markdown content hash per path (authoritative after open/save/reload).
+    known_content_hash: Mutex<HashMap<PathBuf, String>>,
+    /// Last external hash we already emitted for this path (dedupe).
+    last_emitted_external_hash: Mutex<HashMap<PathBuf, String>>,
     pending_open: Mutex<Option<PathBuf>>,
 }
 
@@ -34,20 +39,28 @@ impl AppState {
             by_path: Mutex::new(HashMap::new()),
             watcher: Mutex::new(None),
             suppress_watch: Mutex::new(HashMap::new()),
+            known_content_hash: Mutex::new(HashMap::new()),
+            last_emitted_external_hash: Mutex::new(HashMap::new()),
             pending_open: Mutex::new(resolve_startup_path()),
         })
     }
 
-    /// Path from CLI args or `MORAINE_OPEN` (consumed once by the UI).
     pub fn take_pending_open(&self) -> Option<PathBuf> {
         self.pending_open.lock().take()
+    }
+
+    fn remember_hash(&self, path: &Path, hash: &str) {
+        let abs = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        self.known_content_hash.lock().insert(abs, hash.to_string());
     }
 
     pub fn open_path(&self, path: PathBuf) -> moraine_core::Result<DocumentSnapshot> {
         let abs = std::fs::canonicalize(&path).unwrap_or(path);
         if let Some(id) = self.by_path.lock().get(&abs).copied() {
             if let Some(doc) = self.documents.lock().get(&id) {
-                return Ok(doc.snapshot());
+                let snap = doc.snapshot();
+                self.remember_hash(doc.path(), &snap.content_hash);
+                return Ok(snap);
             }
         }
 
@@ -60,6 +73,7 @@ impl AppState {
         let snap = doc.snapshot();
         let id = doc.id();
         let path = doc.path().to_path_buf();
+        self.remember_hash(&path, &snap.content_hash);
 
         self.history
             .push(&path, doc.content(), HistorySource::Open, None)?;
@@ -110,7 +124,8 @@ impl AppState {
         }
 
         let path = doc.path().to_path_buf();
-        self.bump_suppress(&path);
+        // Soft suppress a burst of FS events from atomic replace (not the correctness boundary).
+        self.bump_suppress(&path, 8);
         if let Some(expected) = expected_content_hash.as_deref() {
             if !expected.is_empty() {
                 doc.save_if_base_matches(expected)?;
@@ -126,7 +141,15 @@ impl AppState {
                 .push(&path, doc.content(), HistorySource::AutoSave, None)?;
         }
 
-        Ok(doc.snapshot())
+        let snap = doc.snapshot();
+        // Establish new base hash before watcher classification can race.
+        self.remember_hash(&path, &snap.content_hash);
+        debug!(
+            path = %path.display(),
+            hash = %&snap.content_hash[..12.min(snap.content_hash.len())],
+            "save completed; known hash updated"
+        );
+        Ok(snap)
     }
 
     pub fn reload(&self, id: DocumentId) -> moraine_core::Result<DocumentSnapshot> {
@@ -135,12 +158,17 @@ impl AppState {
             .get_mut(&id)
             .ok_or_else(|| moraine_core::Error::other(format!("document {id} not open")))?;
         doc.reload()?;
-        Ok(doc.snapshot())
+        let snap = doc.snapshot();
+        self.remember_hash(doc.path(), &snap.content_hash);
+        Ok(snap)
     }
 
     pub fn close(&self, id: DocumentId) {
         if let Some(doc) = self.documents.lock().remove(&id) {
-            self.by_path.lock().remove(doc.path());
+            let path = doc.path().to_path_buf();
+            self.by_path.lock().remove(&path);
+            self.known_content_hash.lock().remove(&path);
+            self.last_emitted_external_hash.lock().remove(&path);
         }
     }
 
@@ -152,28 +180,20 @@ impl AppState {
             .collect()
     }
 
-    fn bump_suppress(&self, path: &std::path::Path) {
+    fn bump_suppress(&self, path: &Path, n: u32) {
         let mut map = self.suppress_watch.lock();
-        *map.entry(path.to_path_buf()).or_insert(0) += 1;
+        let abs = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        *map.entry(abs).or_insert(0) += n;
     }
 
-    fn should_suppress(&self, path: &std::path::Path) -> bool {
+    fn should_suppress(&self, path: &Path) -> bool {
         let mut map = self.suppress_watch.lock();
-        if let Some(count) = map.get_mut(path) {
+        let abs = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        if let Some(count) = map.get_mut(&abs) {
             if *count > 0 {
                 *count -= 1;
                 if *count == 0 {
-                    map.remove(path);
-                }
-                return true;
-            }
-        }
-        let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-        if let Some(count) = map.get_mut(&canon) {
-            if *count > 0 {
-                *count -= 1;
-                if *count == 0 {
-                    map.remove(&canon);
+                    map.remove(&abs);
                 }
                 return true;
             }
@@ -196,26 +216,83 @@ impl AppState {
     }
 }
 
+fn is_sidecar_path(path: &Path) -> bool {
+    let s = path.to_string_lossy();
+    s.ends_with(".moraine.json")
+        || s.ends_with(".moraine.json.lock")
+        || s.ends_with(".comments.json")
+        || s.ends_with(".comments.json.migrated")
+        || s.contains(".tmp")
+}
+
 fn spawn_watch_bridge(app: AppHandle, rx: Receiver<WatchEvent>) {
     thread::Builder::new()
         .name("moraine-watch-bridge".into())
         .spawn(move || {
             while let Ok(event) = rx.recv() {
-                // Let save's suppress token land before we process the event.
+                // Soft delay so save's suppress tokens and known-hash update can land.
                 thread::sleep(Duration::from_millis(30));
                 let state = app.state::<AppState>();
-                if state.should_suppress(&event.path) {
+
+                if is_sidecar_path(&event.path) {
+                    debug!(path = %event.path.display(), "ignore sidecar watch event");
                     continue;
                 }
 
+                let soft_suppressed = state.should_suppress(&event.path);
+
                 let abs = std::fs::canonicalize(&event.path).unwrap_or(event.path.clone());
                 let open_id = state.by_path.lock().get(&abs).copied();
+
+                // Only open Markdown documents participate in content classification.
+                let disk_hash = match Document::read_file(&abs) {
+                    Ok(body) => content_hash(&body),
+                    Err(e) => {
+                        debug!(path = %abs.display(), error = %e, "watch: cannot read path");
+                        continue;
+                    }
+                };
+
+                let known = state.known_content_hash.lock().get(&abs).cloned();
+                let content_changed = known.as_ref() != Some(&disk_hash);
+
+                if !content_changed {
+                    debug!(
+                        path = %abs.display(),
+                        hash = %&disk_hash[..12.min(disk_hash.len())],
+                        soft_suppressed,
+                        "watch: same hash as known; ignore"
+                    );
+                    continue;
+                }
+
+                if let Some(prev) = state.last_emitted_external_hash.lock().get(&abs) {
+                    if prev == &disk_hash {
+                        debug!(path = %abs.display(), "watch: duplicate external hash; ignore");
+                        continue;
+                    }
+                }
+
+                state
+                    .last_emitted_external_hash
+                    .lock()
+                    .insert(abs.clone(), disk_hash.clone());
 
                 let payload = FileChangedPayload {
                     path: event.path.display().to_string(),
                     change: format!("{:?}", event.change).to_lowercase(),
                     document_id: open_id.map(|id| id.to_string()),
+                    disk_content_hash: Some(disk_hash.clone()),
+                    known_content_hash: known,
+                    content_changed: true,
                 };
+
+                debug!(
+                    path = %payload.path,
+                    content_changed = payload.content_changed,
+                    soft_suppressed,
+                    "watch: emit revision change"
+                );
 
                 if let Err(e) = app.emit("file-changed", &payload) {
                     warn!("emit file-changed failed: {e}");
@@ -231,6 +308,9 @@ struct FileChangedPayload {
     path: String,
     change: String,
     document_id: Option<String>,
+    disk_content_hash: Option<String>,
+    known_content_hash: Option<String>,
+    content_changed: bool,
 }
 
 fn resolve_startup_path() -> Option<PathBuf> {
@@ -240,7 +320,6 @@ fn resolve_startup_path() -> Option<PathBuf> {
             return Some(path);
         }
     }
-    // Skip binary name; first non-flag arg is a file path.
     std::env::args()
         .skip(1)
         .find(|a| !a.starts_with('-'))

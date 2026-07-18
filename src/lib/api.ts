@@ -351,6 +351,12 @@ function browserStub<T>(cmd: string, args?: Record<string, unknown>): T {
       if (existing) return existing as T;
       const id = crypto.randomUUID();
       const title = path.split(/[/\\]/).pop() ?? "untitled.md";
+      const content =
+        "# Agent run record (browser stub)\n\n" +
+        "Browser-only mode has no real host disk. Use the **Tauri** desktop app for file I/O and sidecar persistence.\n\n" +
+        "- Open a real run-record path in desktop via `MORAINE_OPEN` or Open\n" +
+        "- **Comment** / **Suggest** for human review\n" +
+        "- Live share needs `moraine-server` and `?room=`\n";
       const snap: DocumentSnapshot = {
         meta: {
           id,
@@ -359,16 +365,11 @@ function browserStub<T>(cmd: string, args?: Record<string, unknown>): T {
           dirty: false,
           lastSavedAt: new Date().toISOString(),
           lastModifiedOnDisk: null,
-          byteLen: 0,
+          byteLen: content.length,
         },
-        content:
-          "# Agent run record (browser stub)\n\n" +
-          "Browser-only mode has no real host disk. Use the **Tauri** desktop app for file I/O and sidecar persistence.\n\n" +
-          "- Open a real run-record path in desktop via `MORAINE_OPEN` or Open\n" +
-          "- **Comment** / **Suggest** for human review\n" +
-          "- Live share needs `moraine-server` and `?room=`\n",
+        content,
+        contentHash: "0".repeat(64),
       };
-      snap.meta.byteLen = snap.content.length;
       browserDocs.set(id, snap);
       return snap as T;
     }
@@ -382,6 +383,7 @@ function browserStub<T>(cmd: string, args?: Record<string, unknown>): T {
       }
       doc.meta.dirty = false;
       doc.meta.lastSavedAt = new Date().toISOString();
+      doc.contentHash = "0".repeat(64);
       return doc as T;
     }
     case "set_document_content": {

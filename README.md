@@ -168,7 +168,7 @@ Early-stage MVP. Useful for local experiments and dogfooding, not a production m
 | Reviewer identity | User-provided label only (not authenticated) |
 | Evidence | Manual links in Markdown only |
 | Git | Not integrated (no auto-commit/PR) |
-| Annotations | `.moraine.json` + best-effort mark rehydration |
+| Annotations | Operation-based mutations with per-annotation revision; full-list replace removed |
 | Run decisions | Append-only; stale when content hash mismatches |
 | Concurrent external editors | Limited handling; host Save and dirty flags |
 | Security | Do not expose the relay to untrusted networks |

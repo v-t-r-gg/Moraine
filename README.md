@@ -73,23 +73,53 @@ Install CLI:
 cargo install --path crates/moraine-cli
 ```
 
-## Collab server (optional)
+## Share a file (local multiplayer)
 
-Relay only. No auth, no disk persistence.
+```bash
+# builds the room id from the absolute path, starts moraine-server if needed
+cargo run -p moraine-cli -- share examples/welcome.md
+
+# stdout is the join URL, e.g.
+# http://localhost:1420/?room=doc_a1b2c3d4
+```
+
+Then:
+
+```bash
+npm run dev
+# open the printed URL (second browser/tab joins the same Yjs room)
+```
+
+Options:
+
+```bash
+moraine share notes.md --watch          # keep process open, print FS events
+moraine share notes.md --open           # also launch desktop if available
+moraine share notes.md --no-start       # fail if relay is down (do not spawn)
+moraine share notes.md --json
+moraine share notes.md --ui http://localhost:1420 --server http://127.0.0.1:3099
+moraine edit notes.md --share           # print share URL then open editor
+```
+
+Join URL query params (web UI):
+
+| Param | Effect |
+|-------|--------|
+| `?room=doc_…` | Join that room; enables WS to `ws://127.0.0.1:3099` |
+| `?sync=1` | Enable default relay without forcing a room |
+| `?sync=ws://host:3099` | Custom relay |
+| `?sync=0` | Force offline (no WS) |
+
+Room id is a stable hash of the absolute file path (same in CLI and UI). Relay is in-memory only. Desktop host still owns file autosave.
+
+### Relay only
 
 ```bash
 ./scripts/server-dev.sh
 # or: cargo run -p moraine-server
 # or: docker compose up --build
-
 curl -s http://127.0.0.1:3099/health
-# WS: ws://127.0.0.1:3099/ws/<room_id>
 ```
-
-In the UI, enable sync with `?sync=1` (uses `ws://127.0.0.1:3099`) or `?sync=ws://host:3099`.  
-Or set `VITE_MORAINE_SYNC_URL=ws://127.0.0.1:3099` before `npm run dev`.
-
-Room id is derived from the document path (same hash as local multi-tab). Host desktop still owns file autosave.
 
 ## CLI
 
@@ -99,7 +129,9 @@ moraine cat notes.md
 moraine write notes.md --content "# Hi" --history
 moraine history notes.md
 moraine restore notes.md <uuid> --write
+moraine share notes.md
 moraine edit notes.md          # desktop if found, else $EDITOR
+moraine edit notes.md --share
 moraine watch ./docs
 ```
 
@@ -110,14 +142,14 @@ moraine watch ./docs
 1. `npm run tauri:dev`
 2. Without a startup path, opens `/tmp/moraine-welcome.md`
 3. Open / Save / History in the toolbar
-4. Same path in two windows uses BroadcastChannel; with server + `?sync=1`, rooms can span processes
+4. Same path in two windows uses BroadcastChannel; `moraine share` + join URL uses the WS relay
 
 ## Roadmap
 
 | Phase | Focus | Effort (rough) |
 |-------|--------|----------------|
 | 0–1 | Editor, FS, CLI, local Yjs, history | done |
-| 2 | Axum WS server, Docker, share flow, host-only save policy | in progress (relay first cut) |
+| 2 | Axum WS server, Docker, share CLI, host-only save policy | relay + share CLI done |
 | 3 | Comments + suggestion mode on Yjs | after multiplayer feels real |
 | 4 | SQLite metadata, git2, agent/MCP hooks | later |
 

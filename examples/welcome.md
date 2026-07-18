@@ -6,11 +6,10 @@ Local-first Markdown editor: Tauri desktop, CLI, history, and optional multiplay
 
 ```bash
 cargo run -p moraine-cli -- info
+cargo run -p moraine-cli -- share examples/welcome.md
+npm run dev             # open the printed ?room= URL
 npm run tauri:dev
-npm run server          # optional Yjs relay on :3099
 ```
-
-Enable network sync in the web UI with `?sync=1` while the server is running.
 
 ## Next
 

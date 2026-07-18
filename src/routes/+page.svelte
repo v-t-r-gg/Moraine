@@ -19,8 +19,8 @@
     writeFile,
   } from "$lib/api";
   import {
+    collabFromLocation,
     createYjsSession,
-    defaultSyncUrl,
     roomIdForPath,
     type YjsSession,
   } from "$lib/editor/yjsSession";
@@ -55,6 +55,7 @@ Start typing, toggle **Preview**, or open a file from disk.
   let peerCount = $state(0);
   let editorRef = $state<Editor | undefined>(undefined);
   let syncUrl = $state<string | null>(null);
+  let forcedRoomId = $state<string | null>(null);
 
   let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
   let unlistenFile: (() => void) | null = null;
@@ -65,12 +66,15 @@ Start typing, toggle **Preview**, or open a file from disk.
   const charCount = $derived(markdown.length);
 
   onMount(async () => {
-    syncUrl = defaultSyncUrl();
+    const collab = collabFromLocation();
+    syncUrl = collab.syncUrl;
+    forcedRoomId = collab.roomId;
     try {
       const info = await appInfo();
       const mode = isTauri ? "" : " · browser";
+      const room = forcedRoomId ? ` · room ${forcedRoomId}` : "";
       const sync = syncUrl ? ` · sync ${syncUrl}` : "";
-      status = `${info.name} ${info.version}${mode}${sync}`;
+      status = `${info.name} ${info.version}${mode}${room}${sync}`;
     } catch {
       status = "Moraine";
     }
@@ -153,7 +157,7 @@ Start typing, toggle **Preview**, or open a file from disk.
 
     if (resetSession) {
       session?.destroy();
-      const room = roomIdForPath(snap.meta.path);
+      const room = forcedRoomId ?? roomIdForPath(snap.meta.path);
       const s = createYjsSession(room, { syncUrl });
       session = s;
       peerCount = 0;

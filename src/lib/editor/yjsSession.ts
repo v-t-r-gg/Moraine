@@ -1,6 +1,6 @@
 /**
- * Yjs session: BroadcastChannel for same-origin tabs, optional WS relay for real multiplayer.
- * Wire format matches moraine-server (JSON text: update | awareness | sync-request).
+ * Yjs session: BroadcastChannel locally; optional WS relay (moraine-server).
+ * Wire format: JSON text { type: update|awareness|sync-request, ... }.
  */
 
 import * as Y from "yjs";
@@ -11,7 +11,7 @@ import {
 } from "y-protocols/awareness";
 
 const CHANNEL_PREFIX = "moraine-yjs:";
-const DEFAULT_SYNC_URL = "ws://127.0.0.1:3099";
+export const DEFAULT_SYNC_URL = "ws://127.0.0.1:3099";
 
 export interface YjsSession {
   doc: Y.Doc;
@@ -22,10 +22,15 @@ export interface YjsSession {
 
 export interface YjsSessionOptions {
   userName?: string;
-  /** Base URL like ws://127.0.0.1:3099. Empty/false skips WebSocket. */
   syncUrl?: string | null;
 }
 
+export interface CollabBootstrap {
+  roomId: string | null;
+  syncUrl: string | null;
+}
+
+/** Same algorithm as moraine_core::room_id_for_str (UTF-16 units, Java-style hash). */
 export function roomIdForPath(path: string): string {
   let h = 0;
   for (let i = 0; i < path.length; i++) {
@@ -34,17 +39,43 @@ export function roomIdForPath(path: string): string {
   return `doc_${(h >>> 0).toString(16)}`;
 }
 
-export function defaultSyncUrl(): string | null {
-  if (typeof window === "undefined") return null;
-  const fromQuery = new URLSearchParams(window.location.search).get("sync");
+export function collabFromLocation(
+  search: string = typeof window !== "undefined" ? window.location.search : "",
+): CollabBootstrap {
+  const q = new URLSearchParams(search.startsWith("?") ? search : `?${search}`);
+
+  let roomId = q.get("room");
+  if (!roomId) {
+    const syncParam = q.get("sync");
+    if (syncParam?.startsWith("room=")) {
+      roomId = syncParam.slice("room=".length) || null;
+    }
+  }
+
+  let syncUrl = syncUrlFromQuery(q);
+  if (roomId && syncUrl === null && q.get("sync") !== "0" && q.get("sync") !== "off") {
+    syncUrl = DEFAULT_SYNC_URL;
+  }
+
+  return { roomId, syncUrl };
+}
+
+function syncUrlFromQuery(q: URLSearchParams): string | null {
+  const fromQuery = q.get("sync");
   if (fromQuery === "0" || fromQuery === "off") return null;
   if (fromQuery === "1" || fromQuery === "on") return DEFAULT_SYNC_URL;
-  if (fromQuery && fromQuery.startsWith("ws")) return fromQuery;
-  // Vite: set in .env as VITE_MORAINE_SYNC_URL
+  if (fromQuery?.startsWith("ws")) return fromQuery;
+  if (fromQuery?.startsWith("room=")) return DEFAULT_SYNC_URL;
+
   const env = import.meta.env?.VITE_MORAINE_SYNC_URL as string | undefined;
   if (env === "0" || env === "off") return null;
   if (env) return env;
   return null;
+}
+
+/** @deprecated use collabFromLocation().syncUrl */
+export function defaultSyncUrl(): string | null {
+  return collabFromLocation().syncUrl;
 }
 
 export function createYjsSession(
@@ -100,10 +131,7 @@ export function createYjsSession(
 
   const handlePayload = (data: unknown) => {
     if (!data || typeof data !== "object") return;
-    const msg = data as {
-      type?: string;
-      update?: number[];
-    };
+    const msg = data as { type?: string; update?: number[] };
     if (msg.type === "update" && Array.isArray(msg.update)) {
       Y.applyUpdate(doc, Uint8Array.from(msg.update), "remote");
     } else if (msg.type === "awareness" && Array.isArray(msg.update)) {
@@ -127,7 +155,7 @@ export function createYjsSession(
     channel.postMessage({ type: "sync-request" });
   }
 
-  const syncUrl = opts.syncUrl === undefined ? defaultSyncUrl() : opts.syncUrl;
+  const syncUrl = opts.syncUrl === undefined ? collabFromLocation().syncUrl : opts.syncUrl;
   if (syncUrl) {
     const connect = () => {
       if (closed) return;
@@ -145,7 +173,7 @@ export function createYjsSession(
         try {
           handlePayload(JSON.parse(String(ev.data)));
         } catch {
-          /* ignore bad frames */
+          /* bad frame */
         }
       };
       socket.onclose = () => scheduleReconnect();

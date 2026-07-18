@@ -3,8 +3,17 @@
   "run": {
     "id": "00b38fc4-0483-488b-85c1-8205bc89742b",
     "createdAt": "2026-07-18T03:18:20.587736995Z",
-    "updatedAt": "2026-07-18T03:18:20.587736995Z"
+    "updatedAt": "2026-07-18T03:51:51.891334968Z"
   },
-  "decisions": [],
+  "decisions": [
+    {
+      "id": "ba6fd15d-c270-47db-83b0-ee4dce57b478",
+      "decision": "approved",
+      "reviewerLabel": "v-t-r-gg",
+      "reason": "Reviewed PR #1 implementation, automated checks, GUI conflict behavior, and legacy migration.",
+      "createdAt": "2026-07-18T03:51:51.891333518Z",
+      "contentHash": "6dee0e8ed3c46b2e842c7df8f13ec95c1d299f844e50878d66b008e61543ba76"
+    }
+  ],
   "comments": []
 }

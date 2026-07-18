@@ -3,7 +3,7 @@
 mod relay;
 
 use std::io::{self, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -12,8 +12,9 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use moraine_core::history::HistorySource;
 use moraine_core::{
-    comments_sidecar_path, read_comments_sidecar, room_id_for_path, share_links, AnnotationKind,
-    Document, HistoryStore, MorainePaths, DEFAULT_RELAY_HTTP, DEFAULT_UI,
+    content_hash, ensure_run_meta, moraine_sidecar_path, review_snapshot, room_id_for_path,
+    share_links, write_run_meta, AnnotationKind, DecisionKind, Document, HistoryStore,
+    MorainePaths, ReviewStateKind, DEFAULT_RELAY_HTTP, DEFAULT_UI,
 };
 use serde::Serialize;
 use tracing_subscriber::EnvFilter;
@@ -155,6 +156,24 @@ enum Commands {
 
     /// Watch a path for filesystem events
     Watch { path: PathBuf },
+
+    /// Record a run-level review decision bound to the current Markdown hash
+    #[command(after_help = "Examples:\n  \
+        moraine decide run.md --decision approved --reviewer Alice --json\n  \
+        moraine decide run.md --decision changes_requested --reviewer Bob --reason 'fix outcomes'")]
+    Decide {
+        path: PathBuf,
+        /// approved | changes_requested | rejected
+        #[arg(long)]
+        decision: String,
+        /// Reviewer label (not authenticated identity)
+        #[arg(long)]
+        reviewer: String,
+        #[arg(long)]
+        reason: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() {
@@ -213,6 +232,13 @@ fn run() -> Result<i32> {
             write,
         } => cmd_restore(path, entry_id, write).map(|_| EXIT_OK),
         Commands::Watch { path } => cmd_watch(path).map(|_| EXIT_OK),
+        Commands::Decide {
+            path,
+            decision,
+            reviewer,
+            reason,
+            json,
+        } => cmd_decide(path, decision, reviewer, reason, json),
     }?;
     Ok(code)
 }
@@ -283,6 +309,35 @@ struct StatusOut {
     sidecar: Option<String>,
     sidecar_exists: Option<bool>,
     annotations: Option<AnnotationCounts>,
+    run: Option<RunStatusJson>,
+    review: Option<ReviewStatusJson>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RunStatusJson {
+    id: String,
+    content_hash: String,
+    review_state: String,
+    decision_current: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewStatusJson {
+    latest_decision: Option<DecisionJson>,
+    decision_count: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DecisionJson {
+    id: String,
+    decision: String,
+    reviewer_label: String,
+    reason: Option<String>,
+    created_at: String,
+    content_hash: String,
 }
 
 #[derive(Serialize)]
@@ -317,6 +372,8 @@ fn cmd_status(target: Option<String>, server: String, ui: String, json: bool) ->
         sidecar: None,
         sidecar_exists: None,
         annotations: None,
+        run: None,
+        review: None,
     };
 
     if let Some(t) = target {
@@ -333,16 +390,34 @@ fn cmd_status(target: Option<String>, server: String, ui: String, json: bool) ->
                 ));
             }
             let abs = std::fs::canonicalize(&path).unwrap_or(path);
+            let markdown = match Document::read_file(&abs) {
+                Ok(s) => s,
+                Err(e) => return Ok(emit_err(json, EXIT_ERR, &e.to_string())),
+            };
+            let meta = match ensure_run_meta(&abs) {
+                Ok(m) => m,
+                Err(e) => return Ok(emit_err(json, EXIT_ERR, &e.to_string())),
+            };
+            let snap = review_snapshot(&meta, &markdown);
             let room = room_id_for_path(&abs);
-            let side = comments_sidecar_path(&abs);
-            let counts = annotation_counts(&abs);
+            let side = moraine_sidecar_path(&abs);
             out.path = Some(abs.display().to_string());
             out.room = Some(room.clone());
             out.exists = Some(true);
             out.join_url = Some(format!("{}/?room={room}", ui.trim_end_matches('/')));
             out.sidecar = Some(side.display().to_string());
             out.sidecar_exists = Some(side.exists());
-            out.annotations = Some(counts);
+            out.annotations = Some(annotation_counts_from(&meta.comments));
+            out.run = Some(RunStatusJson {
+                id: snap.run_id.to_string(),
+                content_hash: snap.content_hash.clone(),
+                review_state: review_state_str(snap.state).into(),
+                decision_current: snap.decision_current,
+            });
+            out.review = Some(ReviewStatusJson {
+                latest_decision: snap.latest.as_ref().map(decision_json),
+                decision_count: snap.decision_count,
+            });
         }
     }
 
@@ -360,12 +435,25 @@ fn cmd_status(target: Option<String>, server: String, ui: String, json: bool) ->
         if let Some(r) = &out.room {
             println!("room   {r}");
         }
+        if let Some(run) = &out.run {
+            println!("run    {}", run.id);
+            let short = &run.content_hash[..12.min(run.content_hash.len())];
+            println!("hash   {short}…");
+            if run.decision_current {
+                println!("state  {}", run.review_state);
+            } else {
+                println!(
+                    "state  {} (stale: content changed since decision)",
+                    run.review_state
+                );
+            }
+        }
         if let Some(u) = &out.join_url {
             println!("join   {u}");
         }
         if let Some(a) = &out.annotations {
             println!(
-                "review comments={}/{} suggestions={}/{} (open/resolved)",
+                "notes  comments open={} resolved={} suggestions open={} resolved={}",
                 a.comments_open, a.comments_resolved, a.suggestions_open, a.suggestions_resolved
             );
         }
@@ -373,17 +461,35 @@ fn cmd_status(target: Option<String>, server: String, ui: String, json: bool) ->
     Ok(EXIT_OK)
 }
 
-fn annotation_counts(path: &Path) -> AnnotationCounts {
+fn review_state_str(s: ReviewStateKind) -> &'static str {
+    match s {
+        ReviewStateKind::Unreviewed => "unreviewed",
+        ReviewStateKind::Approved => "approved",
+        ReviewStateKind::ChangesRequested => "changes_requested",
+        ReviewStateKind::Rejected => "rejected",
+        ReviewStateKind::Stale => "stale",
+    }
+}
+
+fn decision_json(d: &moraine_core::ReviewDecision) -> DecisionJson {
+    DecisionJson {
+        id: d.id.to_string(),
+        decision: d.decision.as_str().into(),
+        reviewer_label: d.reviewer_label.clone(),
+        reason: d.reason.clone(),
+        created_at: d.created_at.to_rfc3339(),
+        content_hash: d.content_hash.clone(),
+    }
+}
+
+fn annotation_counts_from(comments: &[moraine_core::CommentRecord]) -> AnnotationCounts {
     let mut c = AnnotationCounts {
         comments_open: 0,
         suggestions_open: 0,
         comments_resolved: 0,
         suggestions_resolved: 0,
     };
-    let Ok(file) = read_comments_sidecar(path) else {
-        return c;
-    };
-    for item in file.comments {
+    for item in comments {
         let sug = item.kind == AnnotationKind::Suggestion;
         match (sug, item.resolved) {
             (false, false) => c.comments_open += 1,
@@ -393,6 +499,79 @@ fn annotation_counts(path: &Path) -> AnnotationCounts {
         }
     }
     c
+}
+
+fn cmd_decide(
+    path: PathBuf,
+    decision: String,
+    reviewer: String,
+    reason: Option<String>,
+    json: bool,
+) -> Result<i32> {
+    if !path.exists() {
+        return Ok(emit_err(
+            json,
+            EXIT_NOT_FOUND,
+            &format!("path not found: {}", path.display()),
+        ));
+    }
+    let kind = match DecisionKind::parse(&decision) {
+        Some(k) => k,
+        None => {
+            return Ok(emit_err(
+                json,
+                EXIT_ERR,
+                "invalid --decision (use approved, changes_requested, or rejected)",
+            ));
+        }
+    };
+    if reviewer.trim().is_empty() {
+        return Ok(emit_err(json, EXIT_ERR, "--reviewer must not be empty"));
+    }
+    let abs = std::fs::canonicalize(&path).unwrap_or(path);
+    let markdown = match Document::read_file(&abs) {
+        Ok(s) => s,
+        Err(e) => return Ok(emit_err(json, EXIT_ERR, &e.to_string())),
+    };
+    let hash = content_hash(&markdown);
+    let mut meta = match ensure_run_meta(&abs) {
+        Ok(m) => m,
+        Err(e) => return Ok(emit_err(json, EXIT_ERR, &e.to_string())),
+    };
+    let recorded = meta
+        .append_decision(kind, reviewer.trim(), reason, hash)
+        .clone();
+    if let Err(e) = write_run_meta(&abs, &meta) {
+        return Ok(emit_err(json, EXIT_ERR, &e.to_string()));
+    }
+    let snap = review_snapshot(&meta, &markdown);
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "ok": true,
+                "run": {
+                    "id": snap.run_id.to_string(),
+                    "contentHash": snap.content_hash,
+                    "reviewState": review_state_str(snap.state),
+                    "decisionCurrent": snap.decision_current,
+                },
+                "review": {
+                    "latestDecision": decision_json(&recorded),
+                    "decisionCount": snap.decision_count,
+                }
+            }))?
+        );
+    } else {
+        println!(
+            "recorded {} by {} on run {}",
+            recorded.decision.as_str(),
+            recorded.reviewer_label,
+            snap.run_id
+        );
+        println!("content hash {}", recorded.content_hash);
+    }
+    Ok(EXIT_OK)
 }
 
 fn cmd_cat(path: PathBuf) -> Result<()> {

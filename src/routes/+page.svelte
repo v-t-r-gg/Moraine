@@ -5,9 +5,11 @@
   import Preview from "$lib/components/Preview.svelte";
   import HistoryPanel from "$lib/components/HistoryPanel.svelte";
   import CommentsPanel from "$lib/components/CommentsPanel.svelte";
+  import RunReviewPanel from "$lib/components/RunReviewPanel.svelte";
   import Editor from "$lib/components/Editor.svelte";
   import {
     appInfo,
+    getRunReview,
     historyList,
     historyRestoreContent,
     isTauri,
@@ -15,12 +17,14 @@
     onFileChanged,
     openDocument,
     pickMarkdownFile,
+    recordRunDecision,
     reloadDocument,
     saveComments,
     saveDocument,
     takeStartupPath,
     writeFile,
     type CommentDto,
+    type RunReviewDto,
   } from "$lib/api";
   import {
     createYjsSession,
@@ -56,7 +60,8 @@ This is a **run record**: a durable Markdown log of agent work for human review.
 1. Agents write or update \`.md\` files (CLI or any tool).
 2. Optional live room: \`moraine share this-file.md\` (relay must be running).
 3. Humans open the file or join URL, then **Comment** / **Suggest**, **Review**, **Save**.
-4. Annotations persist in \`file.md.comments.json\` on host Save.
+4. Use **Run review** (Approve / Request changes / Reject) for the whole record.
+5. Annotations + decisions persist in \`file.md.moraine.json\` on host Save.
 
 See the project README and VISION.md for the full model.
 `;
@@ -80,6 +85,8 @@ See the project README and VISION.md for the full model.
   let editorRef = $state<Editor | undefined>(undefined);
   let sessionCfg = $state<SessionConfig>({ roomId: null, syncUrl: null });
   let localAuthor = $state("You");
+  let runReview = $state<RunReviewDto | null>(null);
+  let reviewBusy = $state(false);
 
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let unlistenFile: (() => void) | null = null;
@@ -216,11 +223,42 @@ See the project README and VISION.md for the full model.
       });
 
       void seedCommentsFromDisk(snap.meta.path, cmap);
+      void refreshRunReview(snap.meta.path);
     }
 
     queueMicrotask(() => {
       ignoreNextEditorSync = false;
     });
+  }
+
+  async function refreshRunReview(filePath: string) {
+    if (!isTauri) {
+      runReview = null;
+      return;
+    }
+    try {
+      runReview = await getRunReview(filePath);
+    } catch (e) {
+      status = `error: could not load run review (${e})`;
+    }
+  }
+
+  async function onRunDecide(decision: string, reviewer: string, reason: string) {
+    if (!doc || !isTauri) return;
+    reviewBusy = true;
+    try {
+      runReview = await recordRunDecision(
+        doc.meta.path,
+        decision,
+        reviewer,
+        reason || null,
+      );
+      status = `Run decision recorded: ${decision}`;
+    } catch (e) {
+      status = `error: could not record decision (${e})`;
+    } finally {
+      reviewBusy = false;
+    }
   }
 
   async function seedCommentsFromDisk(filePath: string, cmap: ReturnType<typeof commentsMap>) {
@@ -301,6 +339,13 @@ See the project README and VISION.md for the full model.
     if (md === markdown) return;
     markdown = md;
     dirty = true;
+    if (runReview?.decisionCurrent && runReview.latest) {
+      runReview = {
+        ...runReview,
+        decisionCurrent: false,
+        reviewState: "stale",
+      };
+    }
     scheduleSave();
   }
 
@@ -359,8 +404,9 @@ See the project README and VISION.md for the full model.
         scheduleSave();
       }
       await persistComments();
+      if (isTauri) await refreshRunReview(doc.meta.path);
       if (!fromAutosave && isTauri) {
-        status = `${status}; comments: ${doc.meta.path}.comments.json`;
+        status = `${status}; ledger: ${doc.meta.path}.moraine.json`;
       }
       if (historyOpen) await refreshHistory();
     } catch (e) {
@@ -558,6 +604,14 @@ See the project README and VISION.md for the full model.
     onToggleHistory={toggleHistory}
     onViewMode={(m) => (viewMode = m)}
   />
+
+  {#if isTauri}
+    <RunReviewPanel
+      review={runReview}
+      busy={reviewBusy}
+      onDecide={onRunDecide}
+    />
+  {/if}
 
   <div class="flex min-h-0 flex-1">
     <main class="flex min-w-0 flex-1">

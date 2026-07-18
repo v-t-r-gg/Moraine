@@ -57,6 +57,7 @@ fn status_json_for_path() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("note.md");
     fs::write(&path, "# hi\n").unwrap();
+    // Legacy sidecar is migrated on status/ensure
     let side = format!("{}.comments.json", path.display());
     fs::write(
         &side,
@@ -77,6 +78,104 @@ fn status_json_for_path() {
     assert_eq!(v["ok"], true);
     assert!(v["room"].as_str().unwrap().starts_with("doc_"));
     assert_eq!(v["annotations"]["suggestionsOpen"], 1);
+    assert!(v["run"]["id"].as_str().unwrap().len() > 8);
+    assert_eq!(v["run"]["reviewState"], "unreviewed");
+    assert_eq!(v["run"]["decisionCurrent"], true);
+    assert_eq!(v["review"]["decisionCount"], 0);
+    assert!(v["run"]["contentHash"].as_str().unwrap().len() == 64);
+    // Migrated ledger exists
+    assert!(
+        path.with_extension("md.moraine.json").exists()
+            || PathBuf::from(format!("{}.moraine.json", path.display())).exists()
+    );
+}
+
+#[test]
+fn decide_and_stale_after_edit() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("run.md");
+    fs::write(&path, "v1\n").unwrap();
+
+    let out = Command::new(cli_bin())
+        .args([
+            "decide",
+            path.to_str().unwrap(),
+            "--decision",
+            "approved",
+            "--reviewer",
+            "Ada",
+            "--reason",
+            "looks good",
+            "--json",
+        ])
+        .output()
+        .expect("decide");
+    assert!(
+        out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["run"]["reviewState"], "approved");
+    assert_eq!(v["run"]["decisionCurrent"], true);
+    assert_eq!(v["review"]["decisionCount"], 1);
+    assert_eq!(v["review"]["latestDecision"]["decision"], "approved");
+    assert_eq!(v["review"]["latestDecision"]["reviewerLabel"], "Ada");
+    let run_id = v["run"]["id"].as_str().unwrap().to_string();
+    let hash1 = v["run"]["contentHash"].as_str().unwrap().to_string();
+
+    // Content change -> stale
+    fs::write(&path, "v2\n").unwrap();
+    let st = Command::new(cli_bin())
+        .args(["status", path.to_str().unwrap(), "--json"])
+        .output()
+        .expect("status after edit");
+    assert!(st.status.success());
+    let s: serde_json::Value = serde_json::from_slice(&st.stdout).unwrap();
+    assert_eq!(s["run"]["id"], run_id);
+    assert_eq!(s["run"]["reviewState"], "stale");
+    assert_eq!(s["run"]["decisionCurrent"], false);
+    assert_ne!(s["run"]["contentHash"].as_str().unwrap(), hash1);
+    assert_eq!(s["review"]["decisionCount"], 1);
+    assert_eq!(s["review"]["latestDecision"]["contentHash"], hash1);
+
+    // New decision supersedes
+    let out2 = Command::new(cli_bin())
+        .args([
+            "decide",
+            path.to_str().unwrap(),
+            "--decision",
+            "changes_requested",
+            "--reviewer",
+            "Bob",
+            "--json",
+        ])
+        .output()
+        .expect("decide2");
+    assert!(out2.status.success());
+    let v2: serde_json::Value = serde_json::from_slice(&out2.stdout).unwrap();
+    assert_eq!(v2["run"]["reviewState"], "changes_requested");
+    assert_eq!(v2["run"]["decisionCurrent"], true);
+    assert_eq!(v2["review"]["decisionCount"], 2);
+    assert_eq!(v2["run"]["id"], run_id);
+
+    // Invalid decision
+    let bad = Command::new(cli_bin())
+        .args([
+            "decide",
+            path.to_str().unwrap(),
+            "--decision",
+            "maybe",
+            "--reviewer",
+            "X",
+            "--json",
+        ])
+        .output()
+        .expect("bad decide");
+    assert_eq!(bad.status.code(), Some(1));
+    let err: serde_json::Value = serde_json::from_slice(&bad.stdout).unwrap();
+    assert_eq!(err["ok"], false);
 }
 
 #[test]

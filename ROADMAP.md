@@ -2,25 +2,26 @@
 
 High-level direction only. Details live in [VISION.md](./VISION.md) and [ARCHITECTURE.md](./ARCHITECTURE.md).
 
-## Now (v0.1)
+## Now (v0.1 / v0.2 foundation)
 
-* Run records as Markdown + annotation sidecar
-* CLI for agents/scripts (`share`, `status --json`, file helpers)
-* GUI for human review (comments, suggestions, host Save)
+* Run records as Markdown + `*.md.moraine.json` ledger
+* Stable run ID + SHA-256 content hash + append-only decisions
+* CLI: `share`, `status --json`, `decide`, file helpers
+* GUI: comments, suggestions, run-level review panel, host Save
 * Optional in-memory live relay
 * Docs positioned as a review ledger for agent work
 
-## Next (v0.2 target: stronger hindsight review)
+## Next (polish hindsight review)
 
-* More reliable annotation durability and rehydration
+* Stronger annotation durability and rehydration
 * Clearer run-record conventions for agents (templates, examples)
-* Better CLI inspection of review state for automation
-* CI and project hygiene kept green
+* Evidence pointers / capture helpers (still optional)
+* Keep CI green
 
 ## Later (not scheduled)
 
 * Evidence capture / attachment helpers
-* Stronger run identity and structured review decisions
+* Authenticated reviewer identity (not just labels)
 * Optional Git integrations (still user-controlled)
 * Authenticated collaboration
 * Multi-run review inbox

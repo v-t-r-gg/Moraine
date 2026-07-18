@@ -96,6 +96,43 @@ export async function saveComments(path: string, comments: CommentDto[]): Promis
   return invoke("save_comments", { path, comments });
 }
 
+export interface DecisionDto {
+  id: string;
+  decision: string;
+  reviewerLabel: string;
+  reason: string | null;
+  createdAt: string;
+  contentHash: string;
+}
+
+export interface RunReviewDto {
+  runId: string;
+  contentHash: string;
+  reviewState: string;
+  decisionCurrent: boolean;
+  decisionCount: number;
+  latest: DecisionDto | null;
+  sidecar: string;
+}
+
+export async function getRunReview(path: string): Promise<RunReviewDto> {
+  return invoke("get_run_review", { path });
+}
+
+export async function recordRunDecision(
+  path: string,
+  decision: string,
+  reviewerLabel: string,
+  reason?: string | null,
+): Promise<RunReviewDto> {
+  return invoke("record_run_decision", {
+    path,
+    decision,
+    reviewerLabel,
+    reason: reason ?? null,
+  });
+}
+
 export async function pickMarkdownFile(): Promise<string | null> {
   if (!isTauri) {
     return null;
@@ -224,7 +261,36 @@ function browserStub<T>(cmd: string, args?: Record<string, unknown>): T {
     case "save_comments":
       return undefined as T;
     case "comments_sidecar_path_cmd":
-      return `${args?.path ?? ""}.comments.json` as T;
+      return `${args?.path ?? ""}.moraine.json` as T;
+    case "get_run_review":
+      return {
+        runId: "00000000-0000-4000-8000-000000000000",
+        contentHash: "0".repeat(64),
+        reviewState: "unreviewed",
+        decisionCurrent: true,
+        decisionCount: 0,
+        latest: null,
+        sidecar: "(browser)",
+      } as T;
+    case "record_run_decision":
+      return {
+        runId: "00000000-0000-4000-8000-000000000000",
+        contentHash: "0".repeat(64),
+        reviewState: String(args?.decision ?? "approved"),
+        decisionCurrent: true,
+        decisionCount: 1,
+        latest: {
+          id: crypto.randomUUID(),
+          decision: String(args?.decision ?? "approved"),
+          reviewerLabel: String(args?.reviewerLabel ?? "Reviewer"),
+          reason: (args?.reason as string) ?? null,
+          createdAt: new Date().toISOString(),
+          contentHash: "0".repeat(64),
+        },
+        sidecar: "(browser)",
+      } as T;
+    case "ensure_run_id":
+      return "00000000-0000-4000-8000-000000000000" as T;
     default:
       console.warn("[moraine browser stub] unhandled command:", cmd, args);
       return undefined as T;

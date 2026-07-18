@@ -1,6 +1,7 @@
 //! Domain library for Moraine run records. No Tauri / Axum / UI deps.
 //!
 //! One Markdown run record path maps to one live review room.
+//! Structured review state lives in `file.md.moraine.json`.
 
 pub mod comments;
 pub mod document;
@@ -8,6 +9,7 @@ pub mod error;
 pub mod history;
 pub mod paths;
 pub mod room;
+pub mod run_meta;
 pub mod share;
 pub mod watcher;
 
@@ -20,6 +22,11 @@ pub use error::{Error, Result};
 pub use history::{HistoryEntry, HistoryStore};
 pub use paths::MorainePaths;
 pub use room::{room_id_for_path, room_id_for_str};
+pub use run_meta::{
+    content_hash, ensure_run_meta, load_run_meta, moraine_sidecar_path, review_snapshot,
+    write_run_meta, DecisionKind, ReviewDecision, ReviewSnapshot, ReviewStateKind, RunInfo,
+    RunMeta, SCHEMA_VERSION,
+};
 pub use share::{
     bind_from_http, http_to_ws, share_links, ShareLinks, DEFAULT_RELAY_BIND, DEFAULT_RELAY_HTTP,
     DEFAULT_RELAY_WS, DEFAULT_UI,

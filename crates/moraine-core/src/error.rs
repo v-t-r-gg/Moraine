@@ -36,6 +36,30 @@ pub enum Error {
     #[error("ledger busy: {0}")]
     LedgerBusy(String),
 
+    #[error("annotation not found: {id}")]
+    AnnotationNotFound { id: uuid::Uuid },
+
+    #[error("duplicate annotation id: {id}")]
+    DuplicateAnnotation { id: uuid::Uuid },
+
+    #[error(
+        "annotation conflict on {id}: expected revision {expected_revision}, actual {actual_revision}"
+    )]
+    AnnotationConflict {
+        id: uuid::Uuid,
+        expected_revision: u32,
+        actual_revision: u32,
+    },
+
+    #[error("annotation precondition failed: {message}")]
+    AnnotationPrecondition {
+        id: Option<uuid::Uuid>,
+        message: String,
+    },
+
+    #[error("invalid annotation kind for {id}: {message}")]
+    InvalidAnnotationKind { id: uuid::Uuid, message: String },
+
     #[error("{0}")]
     Other(String),
 }
@@ -57,6 +81,11 @@ impl Error {
             Self::History(_) => "history",
             Self::RevisionConflict { .. } => "revision_conflict",
             Self::LedgerBusy(_) => "ledger_busy",
+            Self::AnnotationNotFound { .. } => "annotation_not_found",
+            Self::DuplicateAnnotation { .. } => "duplicate_annotation",
+            Self::AnnotationConflict { .. } => "annotation_conflict",
+            Self::AnnotationPrecondition { .. } => "annotation_precondition",
+            Self::InvalidAnnotationKind { .. } => "invalid_annotation_kind",
             Self::Other(_) => "error",
         }
     }
@@ -73,6 +102,37 @@ impl Error {
             Self::LedgerBusy(msg) => serde_json::json!({
                 "kind": "ledger_busy",
                 "message": msg,
+            }),
+            Self::AnnotationNotFound { id } => serde_json::json!({
+                "kind": "annotation_not_found",
+                "annotationId": id.to_string(),
+                "message": "The annotation was not found in the ledger.",
+            }),
+            Self::DuplicateAnnotation { id } => serde_json::json!({
+                "kind": "duplicate_annotation",
+                "annotationId": id.to_string(),
+                "message": "An annotation with this id already exists.",
+            }),
+            Self::AnnotationConflict {
+                id,
+                expected_revision,
+                actual_revision,
+            } => serde_json::json!({
+                "kind": "annotation_conflict",
+                "annotationId": id.to_string(),
+                "expectedRevision": expected_revision,
+                "actualRevision": actual_revision,
+                "message": "The annotation changed before the operation completed.",
+            }),
+            Self::AnnotationPrecondition { id, message } => serde_json::json!({
+                "kind": "annotation_precondition",
+                "annotationId": id.map(|u| u.to_string()),
+                "message": message,
+            }),
+            Self::InvalidAnnotationKind { id, message } => serde_json::json!({
+                "kind": "invalid_annotation_kind",
+                "annotationId": id.to_string(),
+                "message": message,
             }),
             other => serde_json::json!({
                 "kind": other.kind_str(),

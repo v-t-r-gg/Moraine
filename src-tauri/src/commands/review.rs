@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use moraine_core::{
-    content_hash, ensure_run_meta, load_run_meta, moraine_sidecar_path, review_snapshot,
-    write_run_meta, DecisionKind, Document, ReviewStateKind,
+    ensure_run_meta, moraine_sidecar_path, record_decision, review_snapshot, DecisionKind,
+    Document, Error as CoreError, ReviewStateKind,
 };
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +27,18 @@ pub struct RunReviewDto {
     pub decision_count: usize,
     pub latest: Option<DecisionDto>,
     pub sidecar: String,
+    pub initialized: bool,
+}
+
+fn map_err(e: CoreError) -> String {
+    // Structured string so the UI can detect revision conflicts.
+    match &e {
+        CoreError::RevisionConflict { expected, actual } => {
+            format!("revision_conflict: expected {expected}, actual {actual}")
+        }
+        CoreError::LedgerBusy(msg) => format!("ledger_busy: {msg}"),
+        other => other.to_string(),
+    }
 }
 
 fn state_str(s: ReviewStateKind) -> &'static str {
@@ -50,21 +62,27 @@ fn decision_dto(d: &moraine_core::ReviewDecision) -> DecisionDto {
     }
 }
 
-#[tauri::command]
-pub fn get_run_review(path: String) -> Result<RunReviewDto, String> {
-    let path = PathBuf::from(path);
-    let markdown = Document::read_file(&path).map_err(|e| e.to_string())?;
-    let meta = ensure_run_meta(&path).map_err(|e| e.to_string())?;
-    let snap = review_snapshot(&meta, &markdown);
-    Ok(RunReviewDto {
+fn dto_from_snap(path: &std::path::Path, snap: &moraine_core::ReviewSnapshot) -> RunReviewDto {
+    RunReviewDto {
         run_id: snap.run_id.to_string(),
-        content_hash: snap.content_hash,
+        content_hash: snap.content_hash.clone(),
         review_state: state_str(snap.state).into(),
         decision_current: snap.decision_current,
         decision_count: snap.decision_count,
         latest: snap.latest.as_ref().map(decision_dto),
-        sidecar: moraine_sidecar_path(&path).display().to_string(),
-    })
+        sidecar: moraine_sidecar_path(path).display().to_string(),
+        initialized: snap.initialized,
+    }
+}
+
+/// Load review state; creates the ledger on first open (deliberate GUI init).
+#[tauri::command]
+pub fn get_run_review(path: String) -> Result<RunReviewDto, String> {
+    let path = PathBuf::from(path);
+    let markdown = Document::read_file(&path).map_err(map_err)?;
+    let meta = ensure_run_meta(&path).map_err(map_err)?;
+    let snap = review_snapshot(&meta, &markdown);
+    Ok(dto_from_snap(&path, &snap))
 }
 
 #[tauri::command]
@@ -73,39 +91,31 @@ pub fn record_run_decision(
     decision: String,
     reviewer_label: String,
     reason: Option<String>,
+    expected_content_hash: String,
 ) -> Result<RunReviewDto, String> {
     let kind = DecisionKind::parse(&decision)
         .ok_or_else(|| "invalid decision (approved|changes_requested|rejected)".to_string())?;
     if reviewer_label.trim().is_empty() {
         return Err("reviewer label required".into());
     }
+    if expected_content_hash.trim().is_empty() {
+        return Err("expectedContentHash required (save first)".into());
+    }
     let path = PathBuf::from(path);
-    let markdown = Document::read_file(&path).map_err(|e| e.to_string())?;
-    let hash = content_hash(&markdown);
-    let mut meta = ensure_run_meta(&path).map_err(|e| e.to_string())?;
-    meta.append_decision(kind, reviewer_label.trim(), reason, hash);
-    write_run_meta(&path, &meta).map_err(|e| e.to_string())?;
-    let snap = review_snapshot(&meta, &markdown);
-    Ok(RunReviewDto {
-        run_id: snap.run_id.to_string(),
-        content_hash: snap.content_hash,
-        review_state: state_str(snap.state).into(),
-        decision_current: snap.decision_current,
-        decision_count: snap.decision_count,
-        latest: snap.latest.as_ref().map(decision_dto),
-        sidecar: moraine_sidecar_path(&path).display().to_string(),
-    })
+    let (_meta, _recorded, snap) = record_decision(
+        &path,
+        kind,
+        reviewer_label.trim(),
+        reason,
+        expected_content_hash.trim(),
+    )
+    .map_err(map_err)?;
+    Ok(dto_from_snap(&path, &snap))
 }
 
 #[tauri::command]
 pub fn ensure_run_id(path: String) -> Result<String, String> {
     let path = PathBuf::from(path);
-    let meta = ensure_run_meta(&path).map_err(|e| e.to_string())?;
+    let meta = ensure_run_meta(&path).map_err(map_err)?;
     Ok(meta.run.id.to_string())
-}
-
-#[allow(dead_code)]
-pub fn load_run_meta_cmd(path: String) -> Result<(), String> {
-    let _ = load_run_meta(PathBuf::from(path).as_path()).map_err(|e| e.to_string())?;
-    Ok(())
 }

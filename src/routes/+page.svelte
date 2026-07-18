@@ -49,6 +49,7 @@
     peerNames,
     remotePeerCount,
   } from "$lib/editor/hostSave";
+  import { isRevisionConflictError } from "$lib/editor/reviewGate";
   import type { DocumentSnapshot, HistoryEntryMeta, ViewMode } from "$lib/types";
 
   const WELCOME_MD = `# Agent run record
@@ -87,6 +88,12 @@ See the project README and VISION.md for the full model.
   let localAuthor = $state("You");
   let runReview = $state<RunReviewDto | null>(null);
   let reviewBusy = $state(false);
+  /** Hash of the last known persisted Markdown revision (from disk load/save). */
+  let baseContentHash = $state<string | null>(null);
+  /** External disk change detected while this session holds a different base. */
+  let externalConflict = $state(false);
+  /** Local text preserved when an external conflict blocks overwrite. */
+  let conflictLocalMarkdown = $state<string | null>(null);
 
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let unlistenFile: (() => void) | null = null;
@@ -115,12 +122,17 @@ See the project README and VISION.md for the full model.
     await loadInitial();
     unlistenFile = onFileChanged(async (ev) => {
       if (!doc || !ev.documentId || ev.documentId !== doc.meta.id) return;
+      externalConflict = true;
       if (dirty || saving) {
-        status = "File changed on disk (keeping local edits)";
+        conflictLocalMarkdown = editorRef?.getMarkdownContent?.() ?? markdown;
+        status =
+          "File changed on disk while you have local edits. Reload from disk or copy your text before Save.";
         return;
       }
       try {
         applyDocument(await reloadDocument(doc.meta.id), true);
+        externalConflict = false;
+        conflictLocalMarkdown = null;
         status = "Reloaded from disk";
       } catch (e) {
         status = `Reload failed: ${e}`;
@@ -186,6 +198,8 @@ See the project README and VISION.md for the full model.
     doc = snap;
     markdown = snap.content;
     dirty = snap.meta.dirty;
+    externalConflict = false;
+    conflictLocalMarkdown = null;
 
     if (resetSession) {
       session?.destroy();
@@ -234,10 +248,12 @@ See the project README and VISION.md for the full model.
   async function refreshRunReview(filePath: string) {
     if (!isTauri) {
       runReview = null;
+      baseContentHash = null;
       return;
     }
     try {
       runReview = await getRunReview(filePath);
+      baseContentHash = runReview.contentHash;
     } catch (e) {
       status = `error: could not load run review (${e})`;
     }
@@ -245,6 +261,17 @@ See the project README and VISION.md for the full model.
 
   async function onRunDecide(decision: string, reviewer: string, reason: string) {
     if (!doc || !isTauri) return;
+    if (dirty || externalConflict || saving) {
+      status = dirty
+        ? "Save the current revision before recording a review decision."
+        : "Resolve the external file conflict before recording a decision.";
+      return;
+    }
+    const expected = baseContentHash ?? runReview?.contentHash;
+    if (!expected) {
+      status = "No persisted content hash. Save the file first.";
+      return;
+    }
     reviewBusy = true;
     try {
       runReview = await recordRunDecision(
@@ -252,12 +279,36 @@ See the project README and VISION.md for the full model.
         decision,
         reviewer,
         reason || null,
+        expected,
       );
+      baseContentHash = runReview.contentHash;
       status = `Run decision recorded: ${decision}`;
     } catch (e) {
-      status = `error: could not record decision (${e})`;
+      if (isRevisionConflictError(e)) {
+        externalConflict = true;
+        conflictLocalMarkdown = editorRef?.getMarkdownContent?.() ?? markdown;
+        status =
+          "Revision conflict: Markdown on disk changed. Reload from disk, then decide again.";
+      } else {
+        status = `error: could not record decision (${e})`;
+      }
     } finally {
       reviewBusy = false;
+    }
+  }
+
+  async function reloadFromDiskKeepingLocalCopy() {
+    if (!doc || !isTauri) return;
+    conflictLocalMarkdown = editorRef?.getMarkdownContent?.() ?? markdown;
+    try {
+      applyDocument(await reloadDocument(doc.meta.id), true);
+      await refreshRunReview(doc.meta.path);
+      externalConflict = false;
+      status = conflictLocalMarkdown
+        ? "Reloaded from disk. Your previous local text is kept in memory for copy (conflict buffer)."
+        : "Reloaded from disk";
+    } catch (e) {
+      status = `Reload failed: ${e}`;
     }
   }
 
@@ -383,10 +434,22 @@ See the project README and VISION.md for the full model.
       return;
     }
 
+    if (externalConflict && baseContentHash) {
+      conflictLocalMarkdown = editorRef?.getMarkdownContent?.() ?? markdown;
+      status =
+        "Cannot Save: file changed on disk. Reload from disk (local text kept for recovery) or resolve the conflict.";
+      return;
+    }
+
     const md = editorRef?.getMarkdownContent?.() ?? markdown;
     saving = true;
     try {
-      const snap = await saveDocument(doc.meta.id, md, true);
+      const snap = await saveDocument(
+        doc.meta.id,
+        md,
+        true,
+        baseContentHash,
+      );
       doc = snap;
       const now = editorRef?.getMarkdownContent?.() ?? markdown;
       if (now === md) {
@@ -405,12 +468,20 @@ See the project README and VISION.md for the full model.
       }
       await persistComments();
       if (isTauri) await refreshRunReview(doc.meta.path);
+      externalConflict = false;
       if (!fromAutosave && isTauri) {
         status = `${status}; ledger: ${doc.meta.path}.moraine.json`;
       }
       if (historyOpen) await refreshHistory();
     } catch (e) {
-      status = `error: save failed (${e})`;
+      if (isRevisionConflictError(e)) {
+        externalConflict = true;
+        conflictLocalMarkdown = md;
+        status =
+          "Revision conflict on Save: disk content changed. Reload from disk; local text is retained for recovery.";
+      } else {
+        status = `error: save failed (${e})`;
+      }
     } finally {
       saving = false;
     }
@@ -609,7 +680,11 @@ See the project README and VISION.md for the full model.
     <RunReviewPanel
       review={runReview}
       busy={reviewBusy}
+      dirty={dirty}
+      externalConflict={externalConflict}
+      saving={saving}
       onDecide={onRunDecide}
+      onReload={reloadFromDiskKeepingLocalCopy}
     />
   {/if}
 

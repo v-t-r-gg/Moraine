@@ -74,7 +74,8 @@ Verified commands (from current CLI):
 ```bash
 moraine info [--json]
 moraine status [path|room] [--json|--human]   # JSON default
-moraine decide <path> --decision <kind> --reviewer <label> [--reason TEXT] [--json]
+moraine init <path> [--json]
+moraine decide <path> --decision <kind> --reviewer <label> [--reason TEXT] [--expected-hash HEX] [--json]
 moraine share <path> [--start] [--json] [--open] [--ui URL] [--server URL]
 moraine join <url|room> [--json] [--no-open]
 moraine cat <path>
@@ -131,24 +132,30 @@ Host save: autosave when solo; paused when remote peers are present; explicit Sa
 
 Live multiplayer is a convenience, not the main differentiation.
 
-## Run-level review decisions (v0.2)
+## Run-level review decisions (v0.2 / v0.2.1)
 
-Besides comments/suggestions on selections, a human can record a **run-level** decision for the whole Markdown revision:
+Besides comments/suggestions on selections, a human can record a **run-level** decision for the whole **saved** Markdown revision:
 
 * `approved` / `changes_requested` / `rejected`
 * Bound to a **content hash** (SHA-256 of exact UTF-8 Markdown bytes; no line-ending normalization)
 * Stored append-only in `file.md.moraine.json` with a stable **run ID**
+* Decisions apply only to **persisted** Markdown. The desktop UI disables Approve / Request changes / Reject while the editor is dirty.
 * If the Markdown changes later, the decision stays but is reported as **stale** until a new decision is recorded
+* Concurrent ledger writers take a per-file lock and re-read before mutating. Sidecar writes use temp-file + replace (no truncate fallback).
 
 ```bash
-moraine decide run.md --decision approved --reviewer "Ada" --reason "verified steps" --json
+# status is read-only (does not create .moraine.json)
 moraine status run.md --json
-# run.reviewState, run.decisionCurrent, review.latestDecision, review.decisionCount
+# run.initialized may be false until:
+moraine init run.md --json
+
+moraine decide run.md --decision approved --reviewer "Ada" --reason "verified steps" --json
+# optional: --expected-hash <sha256> rejects if disk content differs (revision_conflict)
 ```
 
-Desktop: **Run review** bar (Approve / Request changes / Reject). This is separate from accepting a text **suggestion**.
+Desktop: **Run review** bar (Approve / Request changes / Reject). This is separate from accepting a text **suggestion**. Save before deciding. External disk edits surface a conflict before Save/Decide.
 
-Legacy `file.md.comments.json` is migrated into `.moraine.json` on first open (annotations preserved).
+Legacy `file.md.comments.json` is migrated into `.moraine.json` on **init**, **decide**, desktop open, or comment save (not on `status`). After a successful migration the legacy file is renamed to `file.md.comments.json.migrated`.
 
 ## Current status and limitations
 

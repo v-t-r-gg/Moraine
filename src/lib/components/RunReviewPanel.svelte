@@ -1,4 +1,10 @@
 <script lang="ts">
+  import {
+    canRecordDecision,
+    decisionGateMessage,
+    type DecisionGateReason,
+  } from "$lib/editor/reviewGate";
+
   export type RunReview = {
     runId: string;
     contentHash: string;
@@ -14,18 +20,35 @@
       contentHash: string;
     } | null;
     sidecar: string;
+    initialized: boolean;
   };
 
   interface Props {
     review: RunReview | null;
     busy: boolean;
+    dirty: boolean;
+    externalConflict: boolean;
+    saving: boolean;
     onDecide: (decision: string, reviewer: string, reason: string) => void;
+    onReload?: () => void;
   }
 
-  let { review, busy, onDecide }: Props = $props();
+  let { review, busy, dirty, externalConflict, saving, onDecide, onReload }: Props = $props();
 
   let reviewer = $state("Reviewer");
   let reason = $state("");
+
+  const gate = $derived(
+    canRecordDecision({
+      dirty,
+      externalConflict,
+      saving: saving || busy,
+      hasReview: !!review,
+      hasPersistedHash: !!(review?.contentHash && review.contentHash.length === 64),
+    }),
+  );
+
+  const gateMsg = $derived(decisionGateMessage(gate.reason as DecisionGateReason));
 
   function shortHash(h: string): string {
     return h.length > 12 ? `${h.slice(0, 12)}…` : h;
@@ -49,6 +72,7 @@
   }
 
   function submit(decision: string) {
+    if (!gate.allowed) return;
     onDecide(decision, reviewer.trim() || "Reviewer", reason.trim());
   }
 </script>
@@ -82,6 +106,7 @@
       </div>
       <div title={review.contentHash}>
         rev <span class="font-mono text-[11px]" style="color: var(--text);">{shortHash(review.contentHash)}</span>
+        <span style="color: var(--muted);"> (saved revision)</span>
       </div>
       {#if review.latest}
         <div>
@@ -103,6 +128,15 @@
       {/if}
     </div>
 
+    {#if gateMsg}
+      <div class="mt-1 font-medium" style="color: #b45309;">
+        {gateMsg}
+        {#if externalConflict && onReload}
+          <button type="button" class="btn ml-1" onclick={() => onReload()}>Reload from disk</button>
+        {/if}
+      </div>
+    {/if}
+
     <div class="mt-2 flex flex-wrap items-end gap-2">
       <label class="flex flex-col gap-0.5">
         <span style="color: var(--muted);">Reviewer label</span>
@@ -110,7 +144,7 @@
           class="rounded border px-2 py-1"
           style="border-color: var(--border); background: var(--bg); color: var(--text);"
           bind:value={reviewer}
-          disabled={busy}
+          disabled={busy || !gate.allowed}
         />
       </label>
       <label class="flex min-w-[12rem] flex-1 flex-col gap-0.5">
@@ -119,16 +153,16 @@
           class="rounded border px-2 py-1"
           style="border-color: var(--border); background: var(--bg); color: var(--text);"
           bind:value={reason}
-          disabled={busy}
+          disabled={busy || !gate.allowed}
         />
       </label>
-      <button type="button" class="btn" disabled={busy} onclick={() => submit("approved")}>
+      <button type="button" class="btn" disabled={busy || !gate.allowed} onclick={() => submit("approved")}>
         Approve
       </button>
-      <button type="button" class="btn" disabled={busy} onclick={() => submit("changes_requested")}>
+      <button type="button" class="btn" disabled={busy || !gate.allowed} onclick={() => submit("changes_requested")}>
         Request changes
       </button>
-      <button type="button" class="btn" disabled={busy} onclick={() => submit("rejected")}>
+      <button type="button" class="btn" disabled={busy || !gate.allowed} onclick={() => submit("rejected")}>
         Reject
       </button>
     </div>
@@ -152,5 +186,8 @@
   }
   .btn:hover:not(:disabled) {
     border-color: var(--accent);
+  }
+  .ml-1 {
+    margin-left: 0.25rem;
   }
 </style>

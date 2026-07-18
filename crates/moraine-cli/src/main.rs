@@ -11,10 +11,11 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use moraine_core::history::HistorySource;
+use moraine_core::Error as CoreError;
 use moraine_core::{
-    content_hash, ensure_run_meta, moraine_sidecar_path, review_snapshot, room_id_for_path,
-    share_links, write_run_meta, AnnotationKind, DecisionKind, Document, HistoryStore,
-    MorainePaths, ReviewStateKind, DEFAULT_RELAY_HTTP, DEFAULT_UI,
+    content_hash, ensure_run_meta, load_run_meta_readonly, moraine_sidecar_path, record_decision,
+    room_id_for_path, share_links, status_snapshot, AnnotationKind, DecisionKind, Document,
+    HistoryStore, MorainePaths, ReviewStateKind, DEFAULT_RELAY_HTTP, DEFAULT_UI,
 };
 use serde::Serialize;
 use tracing_subscriber::EnvFilter;
@@ -157,10 +158,20 @@ enum Commands {
     /// Watch a path for filesystem events
     Watch { path: PathBuf },
 
+    /// Create or migrate the run ledger for a Markdown file (idempotent)
+    #[command(after_help = "Examples:\n  \
+        moraine init run.md --json")]
+    Init {
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Record a run-level review decision bound to the current Markdown hash
     #[command(after_help = "Examples:\n  \
         moraine decide run.md --decision approved --reviewer Alice --json\n  \
-        moraine decide run.md --decision changes_requested --reviewer Bob --reason 'fix outcomes'")]
+        moraine decide run.md --decision changes_requested --reviewer Bob --reason 'fix outcomes'\n  \
+        moraine decide run.md --decision approved --reviewer Ada --expected-hash <sha256> --json")]
     Decide {
         path: PathBuf,
         /// approved | changes_requested | rejected
@@ -171,6 +182,9 @@ enum Commands {
         reviewer: String,
         #[arg(long)]
         reason: Option<String>,
+        /// Optional expected content hash; defaults to current on-disk hash
+        #[arg(long)]
+        expected_hash: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -232,13 +246,15 @@ fn run() -> Result<i32> {
             write,
         } => cmd_restore(path, entry_id, write).map(|_| EXIT_OK),
         Commands::Watch { path } => cmd_watch(path).map(|_| EXIT_OK),
+        Commands::Init { path, json } => cmd_init(path, json),
         Commands::Decide {
             path,
             decision,
             reviewer,
             reason,
+            expected_hash,
             json,
-        } => cmd_decide(path, decision, reviewer, reason, json),
+        } => cmd_decide(path, decision, reviewer, reason, expected_hash, json),
     }?;
     Ok(code)
 }
@@ -267,6 +283,28 @@ fn emit_err(json: bool, code: i32, msg: &str) -> i32 {
         );
     } else {
         eprintln!("error: {msg}");
+    }
+    code
+}
+
+fn emit_core_err(json: bool, err: &CoreError) -> i32 {
+    let code = match err {
+        CoreError::NotFound(_) => EXIT_NOT_FOUND,
+        CoreError::RevisionConflict { .. } | CoreError::LedgerBusy(_) => EXIT_ERR,
+        _ => EXIT_ERR,
+    };
+    if json {
+        let _ = writeln!(
+            io::stdout(),
+            "{}",
+            serde_json::json!({
+                "ok": false,
+                "error": err.to_json_value(),
+                "code": code,
+            })
+        );
+    } else {
+        eprintln!("error: {err}");
     }
     code
 }
@@ -316,7 +354,9 @@ struct StatusOut {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RunStatusJson {
-    id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    initialized: bool,
     content_hash: String,
     review_state: String,
     decision_current: bool,
@@ -325,6 +365,7 @@ struct RunStatusJson {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ReviewStatusJson {
+    review_state: String,
     latest_decision: Option<DecisionJson>,
     decision_count: usize,
 }
@@ -390,15 +431,18 @@ fn cmd_status(target: Option<String>, server: String, ui: String, json: bool) ->
                 ));
             }
             let abs = std::fs::canonicalize(&path).unwrap_or(path);
-            let markdown = match Document::read_file(&abs) {
+            // Read-only: never create or migrate the ledger.
+            let snap = match status_snapshot(&abs) {
                 Ok(s) => s,
-                Err(e) => return Ok(emit_err(json, EXIT_ERR, &e.to_string())),
+                Err(e) => return Ok(emit_core_err(json, &e)),
             };
-            let meta = match ensure_run_meta(&abs) {
-                Ok(m) => m,
-                Err(e) => return Ok(emit_err(json, EXIT_ERR, &e.to_string())),
+            let comments = match load_run_meta_readonly(&abs) {
+                Ok(Some(m)) => m.comments,
+                Ok(None) => moraine_core::read_comments_sidecar(&abs)
+                    .map(|f| f.comments)
+                    .unwrap_or_default(),
+                Err(e) => return Ok(emit_core_err(json, &e)),
             };
-            let snap = review_snapshot(&meta, &markdown);
             let room = room_id_for_path(&abs);
             let side = moraine_sidecar_path(&abs);
             out.path = Some(abs.display().to_string());
@@ -407,14 +451,20 @@ fn cmd_status(target: Option<String>, server: String, ui: String, json: bool) ->
             out.join_url = Some(format!("{}/?room={room}", ui.trim_end_matches('/')));
             out.sidecar = Some(side.display().to_string());
             out.sidecar_exists = Some(side.exists());
-            out.annotations = Some(annotation_counts_from(&meta.comments));
+            out.annotations = Some(annotation_counts_from(&comments));
             out.run = Some(RunStatusJson {
-                id: snap.run_id.to_string(),
+                id: if snap.initialized {
+                    Some(snap.run_id.to_string())
+                } else {
+                    None
+                },
+                initialized: snap.initialized,
                 content_hash: snap.content_hash.clone(),
                 review_state: review_state_str(snap.state).into(),
                 decision_current: snap.decision_current,
             });
             out.review = Some(ReviewStatusJson {
+                review_state: review_state_str(snap.state).into(),
                 latest_decision: snap.latest.as_ref().map(decision_json),
                 decision_count: snap.decision_count,
             });
@@ -436,7 +486,13 @@ fn cmd_status(target: Option<String>, server: String, ui: String, json: bool) ->
             println!("room   {r}");
         }
         if let Some(run) = &out.run {
-            println!("run    {}", run.id);
+            if run.initialized {
+                if let Some(id) = &run.id {
+                    println!("run    {id}");
+                }
+            } else {
+                println!("run    (not initialized; moraine init <file>)");
+            }
             let short = &run.content_hash[..12.min(run.content_hash.len())];
             println!("hash   {short}…");
             if run.decision_current {
@@ -501,11 +557,50 @@ fn annotation_counts_from(comments: &[moraine_core::CommentRecord]) -> Annotatio
     c
 }
 
+fn cmd_init(path: PathBuf, json: bool) -> Result<i32> {
+    if !path.exists() {
+        return Ok(emit_err(
+            json,
+            EXIT_NOT_FOUND,
+            &format!("path not found: {}", path.display()),
+        ));
+    }
+    let abs = std::fs::canonicalize(&path).unwrap_or(path);
+    let meta = match ensure_run_meta(&abs) {
+        Ok(m) => m,
+        Err(e) => return Ok(emit_core_err(json, &e)),
+    };
+    let markdown = match Document::read_file(&abs) {
+        Ok(s) => s,
+        Err(e) => return Ok(emit_core_err(json, &e)),
+    };
+    let hash = content_hash(&markdown);
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "ok": true,
+                "run": {
+                    "id": meta.run.id.to_string(),
+                    "initialized": true,
+                    "contentHash": hash,
+                },
+                "sidecar": moraine_sidecar_path(&abs).display().to_string(),
+            }))?
+        );
+    } else {
+        println!("initialized run {}", meta.run.id);
+        println!("sidecar {}", moraine_sidecar_path(&abs).display());
+    }
+    Ok(EXIT_OK)
+}
+
 fn cmd_decide(
     path: PathBuf,
     decision: String,
     reviewer: String,
     reason: Option<String>,
+    expected_hash: Option<String>,
     json: bool,
 ) -> Result<i32> {
     if !path.exists() {
@@ -531,20 +626,15 @@ fn cmd_decide(
     let abs = std::fs::canonicalize(&path).unwrap_or(path);
     let markdown = match Document::read_file(&abs) {
         Ok(s) => s,
-        Err(e) => return Ok(emit_err(json, EXIT_ERR, &e.to_string())),
+        Err(e) => return Ok(emit_core_err(json, &e)),
     };
-    let hash = content_hash(&markdown);
-    let mut meta = match ensure_run_meta(&abs) {
-        Ok(m) => m,
-        Err(e) => return Ok(emit_err(json, EXIT_ERR, &e.to_string())),
-    };
-    let recorded = meta
-        .append_decision(kind, reviewer.trim(), reason, hash)
-        .clone();
-    if let Err(e) = write_run_meta(&abs, &meta) {
-        return Ok(emit_err(json, EXIT_ERR, &e.to_string()));
-    }
-    let snap = review_snapshot(&meta, &markdown);
+    let disk_hash = content_hash(&markdown);
+    let expected = expected_hash.unwrap_or_else(|| disk_hash.clone());
+    let (_meta, recorded, snap) =
+        match record_decision(&abs, kind, reviewer.trim(), reason, &expected) {
+            Ok(v) => v,
+            Err(e) => return Ok(emit_core_err(json, &e)),
+        };
     if json {
         println!(
             "{}",
@@ -552,6 +642,7 @@ fn cmd_decide(
                 "ok": true,
                 "run": {
                     "id": snap.run_id.to_string(),
+                    "initialized": true,
                     "contentHash": snap.content_hash,
                     "reviewState": review_state_str(snap.state),
                     "decisionCurrent": snap.decision_current,

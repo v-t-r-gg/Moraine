@@ -3,6 +3,7 @@
 //! One Markdown run record path maps to one live review room.
 //! Structured review state lives in `file.md.moraine.json`.
 
+pub mod atomic;
 pub mod comments;
 pub mod document;
 pub mod error;
@@ -23,9 +24,10 @@ pub use history::{HistoryEntry, HistoryStore};
 pub use paths::MorainePaths;
 pub use room::{room_id_for_path, room_id_for_str};
 pub use run_meta::{
-    content_hash, ensure_run_meta, load_run_meta, moraine_sidecar_path, review_snapshot,
-    write_run_meta, DecisionKind, ReviewDecision, ReviewSnapshot, ReviewStateKind, RunInfo,
-    RunMeta, SCHEMA_VERSION,
+    assert_disk_revision, comments_migrated_path, content_hash, content_hash_file, ensure_run_meta,
+    load_run_meta, load_run_meta_readonly, moraine_sidecar_path, record_decision, review_snapshot,
+    status_snapshot, write_run_meta, DecisionKind, ReviewDecision, ReviewSnapshot, ReviewStateKind,
+    RunInfo, RunMeta, SCHEMA_VERSION,
 };
 pub use share::{
     bind_from_http, http_to_ws, share_links, ShareLinks, DEFAULT_RELAY_BIND, DEFAULT_RELAY_HTTP,

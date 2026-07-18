@@ -53,11 +53,11 @@ fn share_fails_when_relay_down() {
 }
 
 #[test]
-fn status_json_for_path() {
+fn status_json_for_path_is_readonly() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("note.md");
     fs::write(&path, "# hi\n").unwrap();
-    // Legacy sidecar is migrated on status/ensure
+    // Legacy sidecar: status must read counts without migrating or creating ledger
     let side = format!("{}.comments.json", path.display());
     fs::write(
         &side,
@@ -78,16 +78,44 @@ fn status_json_for_path() {
     assert_eq!(v["ok"], true);
     assert!(v["room"].as_str().unwrap().starts_with("doc_"));
     assert_eq!(v["annotations"]["suggestionsOpen"], 1);
-    assert!(v["run"]["id"].as_str().unwrap().len() > 8);
+    assert_eq!(v["run"]["initialized"], false);
+    assert!(v["run"]["id"].is_null());
     assert_eq!(v["run"]["reviewState"], "unreviewed");
     assert_eq!(v["run"]["decisionCurrent"], true);
     assert_eq!(v["review"]["decisionCount"], 0);
     assert!(v["run"]["contentHash"].as_str().unwrap().len() == 64);
-    // Migrated ledger exists
+    // Status must not create .moraine.json or archive legacy
+    assert!(!PathBuf::from(format!("{}.moraine.json", path.display())).exists());
+    assert!(PathBuf::from(&side).exists());
+}
+
+#[test]
+fn init_creates_ledger() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("init.md");
+    fs::write(&path, "body\n").unwrap();
+    let out = Command::new(cli_bin())
+        .args(["init", path.to_str().unwrap(), "--json"])
+        .output()
+        .expect("init");
     assert!(
-        path.with_extension("md.moraine.json").exists()
-            || PathBuf::from(format!("{}.moraine.json", path.display())).exists()
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
     );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["run"]["initialized"], true);
+    assert!(v["run"]["id"].as_str().unwrap().len() > 8);
+    assert!(PathBuf::from(format!("{}.moraine.json", path.display())).exists());
+
+    let st = Command::new(cli_bin())
+        .args(["status", path.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    let s: serde_json::Value = serde_json::from_slice(&st.stdout).unwrap();
+    assert_eq!(s["run"]["initialized"], true);
+    assert_eq!(s["run"]["id"], v["run"]["id"]);
 }
 
 #[test]
@@ -176,6 +204,26 @@ fn decide_and_stale_after_edit() {
     assert_eq!(bad.status.code(), Some(1));
     let err: serde_json::Value = serde_json::from_slice(&bad.stdout).unwrap();
     assert_eq!(err["ok"], false);
+
+    // Expected-hash mismatch
+    let conflict = Command::new(cli_bin())
+        .args([
+            "decide",
+            path.to_str().unwrap(),
+            "--decision",
+            "approved",
+            "--reviewer",
+            "Z",
+            "--expected-hash",
+            "0".repeat(64).as_str(),
+            "--json",
+        ])
+        .output()
+        .expect("conflict decide");
+    assert_eq!(conflict.status.code(), Some(1));
+    let c: serde_json::Value = serde_json::from_slice(&conflict.stdout).unwrap();
+    assert_eq!(c["ok"], false);
+    assert_eq!(c["error"]["kind"], "revision_conflict");
 }
 
 #[test]

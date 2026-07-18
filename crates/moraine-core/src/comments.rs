@@ -54,10 +54,8 @@ impl Default for CommentsFile {
 }
 
 pub fn read_comments_sidecar(md_path: &Path) -> Result<CommentsFile> {
-    // Prefer unified ledger when present.
-    let moraine = crate::run_meta::moraine_sidecar_path(md_path);
-    if moraine.exists() {
-        let meta = crate::run_meta::load_run_meta(md_path)?;
+    // Prefer unified ledger when present (read-only; does not migrate).
+    if let Some(meta) = crate::run_meta::load_run_meta_readonly(md_path)? {
         return Ok(crate::run_meta::comments_from_meta(&meta));
     }
     let path = comments_sidecar_path(md_path);

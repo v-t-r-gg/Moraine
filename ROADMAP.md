@@ -2,11 +2,13 @@
 
 High-level direction only. Details live in [VISION.md](./VISION.md) and [ARCHITECTURE.md](./ARCHITECTURE.md).
 
-## Now (v0.1 / v0.2 foundation)
+## Now (v0.1 / v0.2 foundation + v0.2.1 correctness)
 
 * Run records as Markdown + `*.md.moraine.json` ledger
 * Stable run ID + SHA-256 content hash + append-only decisions
-* CLI: `share`, `status --json`, `decide`, file helpers
+* Decisions only against saved Markdown; revision preconditions; read-only status
+* Per-document ledger lock + safe atomic replace; deterministic legacy migration
+* CLI: `share`, `status --json`, `init`, `decide`, file helpers
 * GUI: comments, suggestions, run-level review panel, host Save
 * Optional in-memory live relay
 * Docs positioned as a review ledger for agent work

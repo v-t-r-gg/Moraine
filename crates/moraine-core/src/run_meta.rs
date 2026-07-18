@@ -2,9 +2,11 @@
 //!
 //! Content hash: SHA-256 of exact UTF-8 bytes of the Markdown string as held in memory
 //! (same bytes Moraine writes to disk; no line-ending normalization).
+//!
+//! Mutations (ensure, decide, set comments, migration) take a per-sidecar exclusive lock,
+//! re-read after lock, then write via safe atomic replace.
 
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -12,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::atomic::{write_atomic, SidecarLock};
 use crate::comments::{comments_sidecar_path, CommentRecord, CommentsFile};
 use crate::error::{Error, Result};
 
@@ -24,11 +27,24 @@ pub fn moraine_sidecar_path(md_path: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
+/// Archival name after a successful legacy comments migration.
+pub fn comments_migrated_path(md_path: &Path) -> PathBuf {
+    let mut s = comments_sidecar_path(md_path).into_os_string();
+    s.push(".migrated");
+    PathBuf::from(s)
+}
+
 /// SHA-256 hex of exact UTF-8 bytes of `markdown` (no normalization).
 pub fn content_hash(markdown: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(markdown.as_bytes());
     hex::encode(hasher.finalize())
+}
+
+/// SHA-256 of file bytes on disk (exact UTF-8 content after decode).
+pub fn content_hash_file(md_path: &Path) -> Result<String> {
+    let markdown = crate::document::Document::read_file(md_path)?;
+    Ok(content_hash(&markdown))
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -157,9 +173,15 @@ pub struct ReviewSnapshot {
     pub latest: Option<ReviewDecision>,
     pub content_hash: String,
     pub run_id: Uuid,
+    /// False when no durable ledger exists on disk yet.
+    pub initialized: bool,
 }
 
 pub fn review_snapshot(meta: &RunMeta, markdown: &str) -> ReviewSnapshot {
+    review_snapshot_init(meta, markdown, true)
+}
+
+fn review_snapshot_init(meta: &RunMeta, markdown: &str, initialized: bool) -> ReviewSnapshot {
     let hash = content_hash(markdown);
     let latest = meta.latest_decision().cloned();
     let decision_count = meta.decisions.len();
@@ -182,51 +204,149 @@ pub fn review_snapshot(meta: &RunMeta, markdown: &str) -> ReviewSnapshot {
         latest,
         content_hash: hash,
         run_id: meta.run.id,
+        initialized,
     }
 }
 
-/// Load run meta: prefer `.moraine.json`, else migrate legacy `.comments.json`.
-pub fn load_run_meta(md_path: &Path) -> Result<RunMeta> {
-    let path = moraine_sidecar_path(md_path);
-    if path.exists() {
-        let raw = fs::read_to_string(&path)?;
-        let meta: RunMeta = serde_json::from_str(&raw)?;
-        if meta.schema_version > SCHEMA_VERSION {
-            return Err(Error::other(format!(
-                "unsupported moraine sidecar schema version {} (max {})",
-                meta.schema_version, SCHEMA_VERSION
-            )));
-        }
-        return Ok(meta);
+fn parse_meta_raw(raw: &str) -> Result<RunMeta> {
+    let meta: RunMeta = serde_json::from_str(raw)?;
+    if meta.schema_version > SCHEMA_VERSION {
+        return Err(Error::other(format!(
+            "unsupported moraine sidecar schema version {} (max {})",
+            meta.schema_version, SCHEMA_VERSION
+        )));
     }
+    Ok(meta)
+}
 
+fn read_moraine_file(path: &Path) -> Result<RunMeta> {
+    let raw = fs::read_to_string(path)?;
+    parse_meta_raw(&raw)
+}
+
+/// Read-only: load existing `.moraine.json` only. Never creates or migrates files.
+pub fn load_run_meta_readonly(md_path: &Path) -> Result<Option<RunMeta>> {
+    let path = moraine_sidecar_path(md_path);
+    if !path.exists() {
+        return Ok(None);
+    }
+    Ok(Some(read_moraine_file(&path)?))
+}
+
+/// Read-only review status from disk (no sidecar creation).
+pub fn status_snapshot(md_path: &Path) -> Result<ReviewSnapshot> {
+    let markdown = crate::document::Document::read_file(md_path)?;
+    if let Some(meta) = load_run_meta_readonly(md_path)? {
+        return Ok(review_snapshot_init(&meta, &markdown, true));
+    }
+    // Legacy comments only: surface annotation counts via ephemeral meta, not initialized.
     let legacy = comments_sidecar_path(md_path);
     if legacy.exists() {
         let raw = fs::read_to_string(&legacy)?;
         let file: CommentsFile = serde_json::from_str(&raw)?;
         let mut meta = RunMeta::new_run();
         meta.comments = file.comments;
-        meta.schema_version = SCHEMA_VERSION;
-        write_run_meta(md_path, &meta)?;
+        let mut snap = review_snapshot_init(&meta, &markdown, false);
+        // Uninitialized: do not treat ephemeral UUID as durable.
+        snap.run_id = Uuid::nil();
+        return Ok(snap);
+    }
+    let meta = RunMeta::new_run();
+    let mut snap = review_snapshot_init(&meta, &markdown, false);
+    snap.run_id = Uuid::nil();
+    Ok(snap)
+}
+
+/// Load meta for mutation paths: prefer `.moraine.json`; migrate legacy under caller-held lock.
+/// Does not create a new ledger when nothing exists (use `ensure_run_meta`).
+fn load_or_migrate_locked(md_path: &Path) -> Result<RunMeta> {
+    let path = moraine_sidecar_path(md_path);
+    if path.exists() {
+        let meta = read_moraine_file(&path)?;
+        // If both exist, archive legacy without re-import (deterministic, non-repeating).
+        archive_legacy_if_present(md_path)?;
         return Ok(meta);
     }
 
-    Ok(RunMeta::new_run())
+    let legacy = comments_sidecar_path(md_path);
+    if legacy.exists() {
+        return migrate_legacy_locked(md_path, &legacy);
+    }
+
+    Err(Error::other(
+        "run ledger not initialized (use moraine init or open in the desktop app)",
+    ))
 }
 
-/// Load or create and ensure sidecar exists (assigns stable run id on first write).
-pub fn ensure_run_meta(md_path: &Path) -> Result<RunMeta> {
-    let path = moraine_sidecar_path(md_path);
-    let legacy = comments_sidecar_path(md_path);
-    if path.exists() || legacy.exists() {
-        return load_run_meta(md_path);
-    }
-    let meta = RunMeta::new_run();
-    write_run_meta(md_path, &meta)?;
+fn migrate_legacy_locked(md_path: &Path, legacy: &Path) -> Result<RunMeta> {
+    let raw = fs::read_to_string(legacy)?;
+    let file: CommentsFile = serde_json::from_str(&raw).map_err(|e| {
+        Error::other(format!(
+            "malformed legacy comments sidecar {}: {e}",
+            legacy.display()
+        ))
+    })?;
+    let mut meta = RunMeta::new_run();
+    meta.comments = file.comments;
+    meta.schema_version = SCHEMA_VERSION;
+    write_run_meta_unlocked(md_path, &meta)?;
+    archive_legacy_path(legacy)?;
     Ok(meta)
 }
 
-pub fn write_run_meta(md_path: &Path, meta: &RunMeta) -> Result<()> {
+fn archive_legacy_if_present(md_path: &Path) -> Result<()> {
+    let legacy = comments_sidecar_path(md_path);
+    if legacy.exists() {
+        archive_legacy_path(&legacy)?;
+    }
+    Ok(())
+}
+
+fn archive_legacy_path(legacy: &Path) -> Result<()> {
+    let dest = {
+        let mut s = legacy.as_os_str().to_os_string();
+        s.push(".migrated");
+        PathBuf::from(s)
+    };
+    if dest.exists() {
+        // Already archived once: keep a unique residual archive rather than re-import.
+        let alt = {
+            let mut s = dest.into_os_string();
+            s.push(format!(".{}", Uuid::new_v4()));
+            PathBuf::from(s)
+        };
+        fs::rename(legacy, &alt)?;
+    } else {
+        fs::rename(legacy, &dest)?;
+    }
+    Ok(())
+}
+
+/// Load existing ledger, migrating legacy if needed. Does **not** create an empty ledger.
+/// Prefer `load_run_meta_readonly` for pure inspection.
+pub fn load_run_meta(md_path: &Path) -> Result<RunMeta> {
+    let side = moraine_sidecar_path(md_path);
+    let _lock = SidecarLock::acquire(&side)?;
+    load_or_migrate_locked(md_path)
+}
+
+/// Load or create durable ledger (assigns stable run id on first write). Migrates legacy once.
+pub fn ensure_run_meta(md_path: &Path) -> Result<RunMeta> {
+    let side = moraine_sidecar_path(md_path);
+    let _lock = SidecarLock::acquire(&side)?;
+    match load_or_migrate_locked(md_path) {
+        Ok(m) => Ok(m),
+        Err(_) if !side.exists() && !comments_sidecar_path(md_path).exists() => {
+            let meta = RunMeta::new_run();
+            write_run_meta_unlocked(md_path, &meta)?;
+            Ok(meta)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Write ledger without taking a lock (caller must hold `SidecarLock`).
+fn write_run_meta_unlocked(md_path: &Path, meta: &RunMeta) -> Result<()> {
     let path = moraine_sidecar_path(md_path);
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -234,34 +354,66 @@ pub fn write_run_meta(md_path: &Path, meta: &RunMeta) -> Result<()> {
         }
     }
     let raw = serde_json::to_string_pretty(meta)?;
-    atomic_write(&path, raw.as_bytes())?;
-    Ok(())
+    write_atomic(&path, raw.as_bytes())
 }
 
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
-    let tmp = path.with_extension(format!(
-        "{}.tmp",
-        path.extension().and_then(|e| e.to_str()).unwrap_or("json")
-    ));
-    {
-        let mut f = fs::File::create(&tmp)?;
-        f.write_all(bytes)?;
-        f.sync_all()?;
+/// Write ledger under exclusive lock (re-read is caller's responsibility for RMW).
+pub fn write_run_meta(md_path: &Path, meta: &RunMeta) -> Result<()> {
+    let side = moraine_sidecar_path(md_path);
+    let _lock = SidecarLock::acquire(&side)?;
+    write_run_meta_unlocked(md_path, meta)
+}
+
+/// Record a decision only if on-disk Markdown hash matches `expected_content_hash`.
+pub fn record_decision(
+    md_path: &Path,
+    kind: DecisionKind,
+    reviewer_label: impl Into<String>,
+    reason: Option<String>,
+    expected_content_hash: &str,
+) -> Result<(RunMeta, ReviewDecision, ReviewSnapshot)> {
+    let side = moraine_sidecar_path(md_path);
+    let _lock = SidecarLock::acquire(&side)?;
+
+    let markdown = crate::document::Document::read_file(md_path)?;
+    let actual = content_hash(&markdown);
+    if actual != expected_content_hash {
+        return Err(Error::RevisionConflict {
+            expected: expected_content_hash.to_string(),
+            actual,
+        });
     }
-    fs::rename(&tmp, path).or_else(|_| {
-        fs::write(path, bytes)?;
-        let _ = fs::remove_file(&tmp);
-        Ok::<(), std::io::Error>(())
-    })?;
-    Ok(())
+
+    let mut meta = match load_or_migrate_locked(md_path) {
+        Ok(m) => m,
+        Err(_) if !side.exists() && !comments_sidecar_path(md_path).exists() => {
+            let m = RunMeta::new_run();
+            write_run_meta_unlocked(md_path, &m)?;
+            m
+        }
+        Err(e) => return Err(e),
+    };
+
+    let recorded = meta
+        .append_decision(kind, reviewer_label, reason, actual.clone())
+        .clone();
+    write_run_meta_unlocked(md_path, &meta)?;
+    let snap = review_snapshot_init(&meta, &markdown, true);
+    Ok((meta, recorded, snap))
 }
 
-/// Replace annotations in meta and persist (used by comment save path).
+/// Replace annotations under lock (re-read after lock).
 pub fn set_comments_and_save(md_path: &Path, comments: Vec<CommentRecord>) -> Result<RunMeta> {
-    let mut meta = load_run_meta(md_path)?;
+    let side = moraine_sidecar_path(md_path);
+    let _lock = SidecarLock::acquire(&side)?;
+    let mut meta = match load_or_migrate_locked(md_path) {
+        Ok(m) => m,
+        Err(_) if !side.exists() && !comments_sidecar_path(md_path).exists() => RunMeta::new_run(),
+        Err(e) => return Err(e),
+    };
     meta.comments = comments;
     meta.touch();
-    write_run_meta(md_path, &meta)?;
+    write_run_meta_unlocked(md_path, &meta)?;
     Ok(meta)
 }
 
@@ -272,14 +424,37 @@ pub fn comments_from_meta(meta: &RunMeta) -> CommentsFile {
     }
 }
 
-/// Compatibility: read annotations (moraine or legacy).
+/// Compatibility: read annotations (moraine or legacy), without creating a new empty ledger.
 pub fn read_annotations(md_path: &Path) -> Result<Vec<CommentRecord>> {
-    Ok(load_run_meta(md_path)?.comments)
+    if let Some(meta) = load_run_meta_readonly(md_path)? {
+        return Ok(meta.comments);
+    }
+    let legacy = comments_sidecar_path(md_path);
+    if legacy.exists() {
+        let raw = fs::read_to_string(&legacy)?;
+        let file: CommentsFile = serde_json::from_str(&raw)?;
+        return Ok(file.comments);
+    }
+    Ok(Vec::new())
+}
+
+/// Verify Markdown on disk still matches `expected_content_hash`.
+pub fn assert_disk_revision(md_path: &Path, expected_content_hash: &str) -> Result<String> {
+    let actual = content_hash_file(md_path)?;
+    if actual != expected_content_hash {
+        return Err(Error::RevisionConflict {
+            expected: expected_content_hash.to_string(),
+            actual,
+        });
+    }
+    Ok(actual)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
     use tempfile::tempdir;
 
     #[test]
@@ -302,12 +477,24 @@ mod tests {
         let md = dir.path().join("run.md");
         fs::write(&md, "# run\n").unwrap();
         let a = ensure_run_meta(&md).unwrap();
-        let b = load_run_meta(&md).unwrap();
+        let b = load_run_meta_readonly(&md).unwrap().unwrap();
         assert_eq!(a.run.id, b.run.id);
     }
 
     #[test]
-    fn migrate_legacy_comments() {
+    fn status_readonly_does_not_create_sidecar() {
+        let dir = tempdir().unwrap();
+        let md = dir.path().join("plain.md");
+        fs::write(&md, "plain\n").unwrap();
+        let snap = status_snapshot(&md).unwrap();
+        assert!(!snap.initialized);
+        assert!(!moraine_sidecar_path(&md).exists());
+        assert_eq!(snap.state, ReviewStateKind::Unreviewed);
+        assert_eq!(snap.content_hash, content_hash("plain\n"));
+    }
+
+    #[test]
+    fn migrate_legacy_comments_archives() {
         let dir = tempdir().unwrap();
         let md = dir.path().join("legacy.md");
         fs::write(&md, "body\n").unwrap();
@@ -318,14 +505,70 @@ mod tests {
         )
         .unwrap();
         assert!(!moraine_sidecar_path(&md).exists());
-        let meta = load_run_meta(&md).unwrap();
+        let meta = ensure_run_meta(&md).unwrap();
         assert_eq!(meta.comments.len(), 1);
         assert_eq!(meta.comments[0].body, "note");
         assert!(moraine_sidecar_path(&md).exists());
-        // Reopen retains same run id and comments
-        let again = load_run_meta(&md).unwrap();
+        assert!(!legacy_path.exists());
+        assert!(comments_migrated_path(&md).exists());
+
+        // Reopen does not re-import or change run id
+        let again = load_run_meta_readonly(&md).unwrap().unwrap();
         assert_eq!(again.run.id, meta.run.id);
         assert_eq!(again.comments.len(), 1);
+
+        // Touch archived file: still ignored
+        fs::write(
+            comments_migrated_path(&md),
+            r#"{"version":1,"comments":[]}"#,
+        )
+        .unwrap();
+        let third = load_run_meta_readonly(&md).unwrap().unwrap();
+        assert_eq!(third.comments.len(), 1);
+        assert_eq!(third.comments[0].body, "note");
+    }
+
+    #[test]
+    fn both_sidecars_prefers_moraine_archives_legacy() {
+        let dir = tempdir().unwrap();
+        let md = dir.path().join("both.md");
+        fs::write(&md, "x\n").unwrap();
+        let mut meta = RunMeta::new_run();
+        meta.comments.push(CommentRecord {
+            id: Uuid::new_v4(),
+            body: "from-moraine".into(),
+            author: "A".into(),
+            quote: "x".into(),
+            created_at: Utc::now(),
+            resolved: false,
+            kind: crate::AnnotationKind::Comment,
+        });
+        write_run_meta(&md, &meta).unwrap();
+        let legacy = comments_sidecar_path(&md);
+        fs::write(
+            &legacy,
+            r#"{"version":1,"comments":[{"id":"00000000-0000-4000-8000-000000000001","body":"from-legacy","author":"B","quote":"x","createdAt":"2020-01-01T00:00:00Z","resolved":false,"kind":"comment"}]}"#,
+        )
+        .unwrap();
+        let loaded = load_run_meta(&md).unwrap();
+        assert_eq!(loaded.comments.len(), 1);
+        assert_eq!(loaded.comments[0].body, "from-moraine");
+        assert!(!legacy.exists());
+        assert!(comments_migrated_path(&md).exists());
+    }
+
+    #[test]
+    fn malformed_legacy_errors() {
+        let dir = tempdir().unwrap();
+        let md = dir.path().join("badleg.md");
+        fs::write(&md, "x\n").unwrap();
+        fs::write(comments_sidecar_path(&md), "{nope").unwrap();
+        let err = ensure_run_meta(&md).unwrap_err();
+        assert!(
+            err.to_string().contains("malformed")
+                || err.to_string().contains("serde")
+                || err.to_string().contains("expected")
+        );
     }
 
     #[test]
@@ -333,36 +576,43 @@ mod tests {
         let dir = tempdir().unwrap();
         let md = dir.path().join("d.md");
         fs::write(&md, "v1\n").unwrap();
-        let mut meta = ensure_run_meta(&md).unwrap();
         let h1 = content_hash("v1\n");
-        meta.append_decision(
-            DecisionKind::Approved,
-            "Alice",
-            Some("ok".into()),
-            h1.clone(),
-        );
-        write_run_meta(&md, &meta).unwrap();
-
-        let snap = review_snapshot(&meta, "v1\n");
+        let (_, _, snap) =
+            record_decision(&md, DecisionKind::Approved, "Alice", Some("ok".into()), &h1).unwrap();
         assert_eq!(snap.state, ReviewStateKind::Approved);
         assert!(snap.decision_current);
 
+        fs::write(&md, "v2\n").unwrap();
+        let meta = load_run_meta_readonly(&md).unwrap().unwrap();
         let snap2 = review_snapshot(&meta, "v2\n");
         assert_eq!(snap2.state, ReviewStateKind::Stale);
         assert!(!snap2.decision_current);
         assert_eq!(snap2.decision_count, 1);
 
-        meta.append_decision(
-            DecisionKind::ChangesRequested,
-            "Bob",
-            None,
-            content_hash("v2\n"),
-        );
-        let snap3 = review_snapshot(&meta, "v2\n");
+        let h2 = content_hash("v2\n");
+        let (_, _, snap3) =
+            record_decision(&md, DecisionKind::ChangesRequested, "Bob", None, &h2).unwrap();
         assert_eq!(snap3.state, ReviewStateKind::ChangesRequested);
         assert!(snap3.decision_current);
         assert_eq!(snap3.decision_count, 2);
-        assert_eq!(meta.decisions[0].decision, DecisionKind::Approved);
+    }
+
+    #[test]
+    fn decision_revision_conflict() {
+        let dir = tempdir().unwrap();
+        let md = dir.path().join("c.md");
+        fs::write(&md, "v1\n").unwrap();
+        let wrong = content_hash("other\n");
+        let err = record_decision(&md, DecisionKind::Approved, "A", None, &wrong).unwrap_err();
+        match err {
+            Error::RevisionConflict { expected, actual } => {
+                assert_eq!(expected, wrong);
+                assert_eq!(actual, content_hash("v1\n"));
+            }
+            other => panic!("expected conflict, got {other}"),
+        }
+        // No decision persisted
+        assert!(load_run_meta_readonly(&md).unwrap().is_none());
     }
 
     #[test]
@@ -376,7 +626,7 @@ mod tests {
             r#"{"schemaVersion":99,"run":{"id":"00000000-0000-4000-8000-000000000001","createdAt":"2020-01-01T00:00:00Z","updatedAt":"2020-01-01T00:00:00Z"},"decisions":[],"comments":[]}"#,
         )
         .unwrap();
-        let err = load_run_meta(&md).unwrap_err();
+        let err = load_run_meta_readonly(&md).unwrap_err();
         assert!(err.to_string().contains("unsupported"));
     }
 
@@ -413,7 +663,7 @@ mod tests {
         fs::write(&md, "x\n").unwrap();
         let path = moraine_sidecar_path(&md);
         fs::write(&path, "{not json").unwrap();
-        assert!(load_run_meta(&md).is_err());
+        assert!(load_run_meta_readonly(&md).is_err());
     }
 
     #[test]
@@ -440,7 +690,103 @@ mod tests {
         let side2 = moraine_sidecar_path(&md2);
         fs::rename(&md, &md2).unwrap();
         fs::rename(&side, &side2).unwrap();
-        let loaded = load_run_meta(&md2).unwrap();
+        let loaded = load_run_meta_readonly(&md2).unwrap().unwrap();
         assert_eq!(loaded.run.id, id);
+    }
+
+    #[test]
+    fn concurrent_decisions_both_survive() {
+        let dir = tempdir().unwrap();
+        let md = dir.path().join("conc.md");
+        fs::write(&md, "body\n").unwrap();
+        ensure_run_meta(&md).unwrap();
+        let h = content_hash("body\n");
+        let barrier = Arc::new(Barrier::new(2));
+        let md1 = md.clone();
+        let md2 = md.clone();
+        let h1 = h.clone();
+        let h2 = h.clone();
+        let b1 = barrier.clone();
+        let b2 = barrier;
+
+        let t1 = thread::spawn(move || {
+            b1.wait();
+            record_decision(&md1, DecisionKind::Approved, "A", None, &h1).unwrap()
+        });
+        let t2 = thread::spawn(move || {
+            b2.wait();
+            record_decision(&md2, DecisionKind::Rejected, "B", None, &h2).unwrap()
+        });
+        t1.join().unwrap();
+        t2.join().unwrap();
+        let meta = load_run_meta_readonly(&md).unwrap().unwrap();
+        assert_eq!(meta.decisions.len(), 2);
+        let labels: Vec<_> = meta
+            .decisions
+            .iter()
+            .map(|d| d.reviewer_label.as_str())
+            .collect();
+        assert!(labels.contains(&"A"));
+        assert!(labels.contains(&"B"));
+    }
+
+    #[test]
+    fn concurrent_comment_updates_no_torn_json() {
+        let dir = tempdir().unwrap();
+        let md = dir.path().join("ann.md");
+        fs::write(&md, "t\n").unwrap();
+        ensure_run_meta(&md).unwrap();
+        let barrier = Arc::new(Barrier::new(2));
+        let md1 = md.clone();
+        let md2 = md.clone();
+        let b1 = barrier.clone();
+        let b2 = barrier;
+
+        // Full-list replace is host semantics; lock prevents torn writes. Append under lock
+        // so concurrent hosts both contribute rather than silent last-writer-wins loss.
+        let t1 = thread::spawn(move || {
+            b1.wait();
+            for i in 0..20 {
+                let side = moraine_sidecar_path(&md1);
+                let _lock = crate::atomic::SidecarLock::acquire(&side).unwrap();
+                let mut meta = load_or_migrate_locked(&md1).unwrap();
+                meta.comments.push(CommentRecord {
+                    id: Uuid::new_v4(),
+                    body: format!("w1-{i}"),
+                    author: "W1".into(),
+                    quote: "t".into(),
+                    created_at: Utc::now(),
+                    resolved: false,
+                    kind: crate::AnnotationKind::Comment,
+                });
+                meta.touch();
+                write_run_meta_unlocked(&md1, &meta).unwrap();
+            }
+        });
+        let t2 = thread::spawn(move || {
+            b2.wait();
+            for i in 0..20 {
+                let side = moraine_sidecar_path(&md2);
+                let _lock = crate::atomic::SidecarLock::acquire(&side).unwrap();
+                let mut meta = load_or_migrate_locked(&md2).unwrap();
+                meta.comments.push(CommentRecord {
+                    id: Uuid::new_v4(),
+                    body: format!("w2-{i}"),
+                    author: "W2".into(),
+                    quote: "t".into(),
+                    created_at: Utc::now(),
+                    resolved: false,
+                    kind: crate::AnnotationKind::Comment,
+                });
+                meta.touch();
+                write_run_meta_unlocked(&md2, &meta).unwrap();
+            }
+        });
+        t1.join().unwrap();
+        t2.join().unwrap();
+        let meta = load_run_meta_readonly(&md).unwrap().unwrap();
+        assert_eq!(meta.comments.len(), 40);
+        // Valid round-trip
+        let _ = serde_json::to_string(&meta).unwrap();
     }
 }

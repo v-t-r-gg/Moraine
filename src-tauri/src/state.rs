@@ -98,6 +98,7 @@ impl AppState {
         id: DocumentId,
         content: Option<String>,
         record_history: bool,
+        expected_content_hash: Option<String>,
     ) -> moraine_core::Result<DocumentSnapshot> {
         let mut docs = self.documents.lock();
         let doc = docs
@@ -110,7 +111,15 @@ impl AppState {
 
         let path = doc.path().to_path_buf();
         self.bump_suppress(&path);
-        doc.save()?;
+        if let Some(expected) = expected_content_hash.as_deref() {
+            if !expected.is_empty() {
+                doc.save_if_base_matches(expected)?;
+            } else {
+                doc.save()?;
+            }
+        } else {
+            doc.save()?;
+        }
 
         if record_history {
             self.history

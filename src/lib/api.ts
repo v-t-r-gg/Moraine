@@ -34,8 +34,14 @@ export async function saveDocument(
   id: string,
   content?: string,
   recordHistory = true,
+  expectedContentHash?: string | null,
 ): Promise<DocumentSnapshot> {
-  return invoke("save_document", { id, content: content ?? null, recordHistory });
+  return invoke("save_document", {
+    id,
+    content: content ?? null,
+    recordHistory,
+    expectedContentHash: expectedContentHash ?? null,
+  });
 }
 
 export async function reloadDocument(id: string): Promise<DocumentSnapshot> {
@@ -113,6 +119,7 @@ export interface RunReviewDto {
   decisionCount: number;
   latest: DecisionDto | null;
   sidecar: string;
+  initialized: boolean;
 }
 
 export async function getRunReview(path: string): Promise<RunReviewDto> {
@@ -123,13 +130,15 @@ export async function recordRunDecision(
   path: string,
   decision: string,
   reviewerLabel: string,
-  reason?: string | null,
+  reason: string | null | undefined,
+  expectedContentHash: string,
 ): Promise<RunReviewDto> {
   return invoke("record_run_decision", {
     path,
     decision,
     reviewerLabel,
     reason: reason ?? null,
+    expectedContentHash,
   });
 }
 
@@ -271,11 +280,12 @@ function browserStub<T>(cmd: string, args?: Record<string, unknown>): T {
         decisionCount: 0,
         latest: null,
         sidecar: "(browser)",
+        initialized: true,
       } as T;
     case "record_run_decision":
       return {
         runId: "00000000-0000-4000-8000-000000000000",
-        contentHash: "0".repeat(64),
+        contentHash: String(args?.expectedContentHash ?? "0".repeat(64)),
         reviewState: String(args?.decision ?? "approved"),
         decisionCurrent: true,
         decisionCount: 1,
@@ -285,9 +295,10 @@ function browserStub<T>(cmd: string, args?: Record<string, unknown>): T {
           reviewerLabel: String(args?.reviewerLabel ?? "Reviewer"),
           reason: (args?.reason as string) ?? null,
           createdAt: new Date().toISOString(),
-          contentHash: "0".repeat(64),
+          contentHash: String(args?.expectedContentHash ?? "0".repeat(64)),
         },
         sidecar: "(browser)",
+        initialized: true,
       } as T;
     case "ensure_run_id":
       return "00000000-0000-4000-8000-000000000000" as T;

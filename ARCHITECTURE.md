@@ -104,6 +104,14 @@ Markdown + .moraine.json on disk
 
 Content hash: SHA-256 of exact UTF-8 Markdown bytes (no line-ending normalization).
 
+Ledger mutations (init, decide, annotation save, migration) take a per-document lock file (`*.moraine.json.lock`), re-read after lock, then write via unique temp file + replace. There is no direct truncate-and-rewrite fallback.
+
+`moraine status` is read-only. `moraine init` (or desktop open / decide) creates the ledger.
+
+Legacy migration: copy comments into `.moraine.json`, then rename `.comments.json` to `.comments.json.migrated`.
+
+Durability boundary: temp payload is `sync_all`'d before replace; directory fsync is best-effort on Unix. Not a full durability certification.
+
 One Markdown path maps to one live room id (stable hash of absolute path).
 
 ## Host save policy (desktop)

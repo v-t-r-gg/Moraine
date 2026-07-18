@@ -92,14 +92,97 @@ export interface CommentDto {
   createdAt: string;
   resolved: boolean;
   kind?: string;
+  revision?: number;
+}
+
+export interface AnnotationOpDto {
+  annotation: CommentDto;
+  comments: CommentDto[];
+  runId: string;
+}
+
+export interface ReconcileDto {
+  comments: CommentDto[];
+  created: number;
+  updated: number;
+  conflicts: {
+    annotationId: string;
+    expectedRevision: number;
+    actualRevision: number;
+    message: string;
+  }[];
+  runId: string;
 }
 
 export async function loadComments(path: string): Promise<CommentDto[]> {
   return invoke("load_comments", { path });
 }
 
-export async function saveComments(path: string, comments: CommentDto[]): Promise<void> {
-  return invoke("save_comments", { path, comments });
+export async function createAnnotation(
+  path: string,
+  id: string,
+  body: string,
+  author: string,
+  quote: string,
+  kind: string,
+): Promise<AnnotationOpDto> {
+  return invoke("create_annotation_cmd", { path, id, body, author, quote, kind });
+}
+
+export async function updateAnnotation(
+  path: string,
+  id: string,
+  expectedRevision: number,
+  body?: string | null,
+  author?: string | null,
+): Promise<AnnotationOpDto> {
+  return invoke("update_annotation_cmd", {
+    path,
+    id,
+    expectedRevision,
+    body: body ?? null,
+    author: author ?? null,
+  });
+}
+
+export async function resolveAnnotation(
+  path: string,
+  id: string,
+  expectedRevision: number,
+): Promise<AnnotationOpDto> {
+  return invoke("resolve_annotation_cmd", { path, id, expectedRevision });
+}
+
+export async function reopenAnnotation(
+  path: string,
+  id: string,
+  expectedRevision: number,
+): Promise<AnnotationOpDto> {
+  return invoke("reopen_annotation_cmd", { path, id, expectedRevision });
+}
+
+export async function acceptSuggestion(
+  path: string,
+  id: string,
+  expectedRevision: number,
+): Promise<AnnotationOpDto> {
+  return invoke("accept_suggestion_cmd", { path, id, expectedRevision });
+}
+
+export async function rejectSuggestion(
+  path: string,
+  id: string,
+  expectedRevision: number,
+): Promise<AnnotationOpDto> {
+  return invoke("reject_suggestion_cmd", { path, id, expectedRevision });
+}
+
+/** Host Save: merge live-session annotations without full-list replace or deletes. */
+export async function reconcileSessionAnnotations(
+  path: string,
+  comments: CommentDto[],
+): Promise<ReconcileDto> {
+  return invoke("reconcile_session_annotations_cmd", { path, comments });
 }
 
 export interface DecisionDto {
@@ -267,8 +350,42 @@ function browserStub<T>(cmd: string, args?: Record<string, unknown>): T {
       return undefined as T;
     case "load_comments":
       return [] as T;
-    case "save_comments":
-      return undefined as T;
+    case "create_annotation_cmd":
+    case "update_annotation_cmd":
+    case "resolve_annotation_cmd":
+    case "reopen_annotation_cmd":
+    case "accept_suggestion_cmd":
+    case "reject_suggestion_cmd": {
+      const id = String(args?.id ?? crypto.randomUUID());
+      const kind = String(args?.kind ?? "comment");
+      const expected = Number(args?.expectedRevision ?? 0);
+      const ann = {
+        id,
+        body: String(args?.body ?? ""),
+        author: String(args?.author ?? "You"),
+        quote: String(args?.quote ?? ""),
+        createdAt: new Date().toISOString(),
+        resolved:
+          cmd === "resolve_annotation_cmd" ||
+          cmd === "accept_suggestion_cmd" ||
+          cmd === "reject_suggestion_cmd",
+        kind: kind === "suggestion" ? "suggestion" : "comment",
+        revision: cmd === "create_annotation_cmd" ? 1 : expected + 1 || 1,
+      };
+      return {
+        annotation: ann,
+        comments: [ann],
+        runId: "00000000-0000-4000-8000-000000000000",
+      } as T;
+    }
+    case "reconcile_session_annotations_cmd":
+      return {
+        comments: (args?.comments as CommentDto[]) ?? [],
+        created: 0,
+        updated: 0,
+        conflicts: [],
+        runId: "00000000-0000-4000-8000-000000000000",
+      } as T;
     case "comments_sidecar_path_cmd":
       return `${args?.path ?? ""}.moraine.json` as T;
     case "get_run_review":

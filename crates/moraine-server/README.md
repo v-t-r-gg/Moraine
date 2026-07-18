@@ -1,15 +1,15 @@
 # moraine-server
 
-In-memory Yjs WebSocket relay. No auth, no disk persistence (v1).
+Optional in-memory Yjs WebSocket relay for **live** review sessions. No auth. No durable server-side room state.
 
 ```bash
 cargo run -p moraine-server
-# listens on 127.0.0.1:3099
-# health: GET /health
-# collab: WS  /ws/:room_id
+# 127.0.0.1:3099
+# GET /health
+# WS  /ws/:room_id
 ```
 
-Docker:
+Durable run records remain Markdown (+ sidecar) on disk, not in this process.
 
 ```bash
 docker compose up --build

@@ -20,7 +20,8 @@ use crate::error::{Error, Result};
 
 /// Current sidecar schema. Unknown greater versions are rejected.
 /// v3: suggestion disposition + two-phase acceptance fields.
-pub const SCHEMA_VERSION: u32 = 3;
+/// v4: optional agent-run protocol state (`agent` object).
+pub const SCHEMA_VERSION: u32 = 4;
 
 pub fn moraine_sidecar_path(md_path: &Path) -> PathBuf {
     let mut s = md_path.as_os_str().to_os_string();
@@ -108,6 +109,9 @@ pub struct RunMeta {
     /// Annotations (comments + suggestions). Field name matches legacy CommentsFile.
     #[serde(default)]
     pub comments: Vec<CommentRecord>,
+    /// Agent-run protocol state (schema v4+). Absent on classic init/decide-only ledgers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<crate::agent_protocol::AgentRunState>,
 }
 
 impl RunMeta {
@@ -122,6 +126,23 @@ impl RunMeta {
             },
             decisions: Vec::new(),
             comments: Vec::new(),
+            agent: None,
+        }
+    }
+
+    /// Construct a ledger with a predetermined run id (agent protocol start).
+    pub fn new_run_with_id(id: Uuid) -> Self {
+        let now = Utc::now();
+        Self {
+            schema_version: SCHEMA_VERSION,
+            run: RunInfo {
+                id,
+                created_at: now,
+                updated_at: now,
+            },
+            decisions: Vec::new(),
+            comments: Vec::new(),
+            agent: None,
         }
     }
 
@@ -212,10 +233,10 @@ fn review_snapshot_init(meta: &RunMeta, markdown: &str, initialized: bool) -> Re
 fn parse_meta_raw(raw: &str) -> Result<RunMeta> {
     let mut meta: RunMeta = serde_json::from_str(raw)?;
     if meta.schema_version > SCHEMA_VERSION {
-        return Err(Error::other(format!(
-            "unsupported moraine sidecar schema version {} (max {})",
-            meta.schema_version, SCHEMA_VERSION
-        )));
+        return Err(Error::UnsupportedSchemaVersion {
+            version: meta.schema_version,
+            max: SCHEMA_VERSION,
+        });
     }
     // Normalize comment compatibility fields in memory (disposition defaults).
     for c in &mut meta.comments {

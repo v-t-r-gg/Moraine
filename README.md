@@ -69,12 +69,26 @@ Human opens the join URL or the file as host, uses **Review** for questions and 
 
 ### Agent CLI usage
 
-Verified commands (from current CLI):
+Preferred **agent run protocol** (compact JSON; no full Markdown rewrite):
+
+```bash
+moraine project init [PATH] --json
+moraine run start --objective "…" --idempotency-key "…" [--project PATH] --json
+moraine run checkpoint --run-id UUID --expected-hash HEX --idempotency-key "…" --input FILE|- --json
+moraine run show --run-id UUID [--include-markdown] --json
+moraine run ready --run-id UUID --expected-hash HEX --idempotency-key "…" [--summary "…"] --json
+moraine run resume --run-id UUID --expected-hash HEX --idempotency-key "…" [--reason "…"] --json
+moraine run open --run-id UUID --json
+```
+
+See [docs/AGENT_RUN_PROTOCOL.md](./docs/AGENT_RUN_PROTOCOL.md).
+
+Other verified commands:
 
 ```bash
 moraine info [--json]
 moraine status [path|room] [--json|--human]   # JSON default
-moraine init <path> [--json]
+moraine init <path> [--json]                  # per-file ledger ensure
 moraine decide <path> --decision <kind> --reviewer <label> [--reason TEXT] [--expected-hash HEX] [--json]
 moraine share <path> [--start] [--json] [--open] [--ui URL] [--server URL]
 moraine join <url|room> [--json] [--no-open]
@@ -86,28 +100,22 @@ moraine restore <path> <entry-id> [--write]
 moraine watch <path>
 ```
 
-Decision kinds: `approved`, `changes_requested`, `rejected`.
+Decision kinds (human only): `approved`, `changes_requested`, `rejected`.  
+Agent lifecycle `ready_for_review` is **not** human approval.
 
 Exit codes: `0` ok, `1` error, `2` not found, `3` relay down.  
-With `--json` on share/status/info/join/decide, failures are also JSON: `{"ok":false,"error":"…","code":N}`.
+With `--json`, failures are structured JSON on stdout; diagnostics on stderr.
 
 ```bash
+# Start a protocol run (auto-creates .moraine when needed)
+moraine run start --objective "Fix flaky test" --idempotency-key "run-1" --json
+
 # Machine-friendly share
 moraine share run-record.md --json
-# -> ok, path, room, url, ws, server
 
-# Run review status (run id, content hash, decision state, annotation counts)
-moraine status run-record.md
-# -> room, run.id, run.contentHash, run.reviewState, review.latestDecision, …
-
-# Record a run-level decision bound to the current Markdown revision
+# Human decision bound to current Markdown revision
 moraine decide run-record.md --decision approved --reviewer "Ada" --json
-
-# URL only for another tool
-moraine join doc_abc123 --json --no-open
 ```
-
-There is **no** `moraine run` command. Agents write Markdown with `write`, ordinary tools, or editors.
 
 ### Human GUI review
 

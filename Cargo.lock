@@ -2267,6 +2267,7 @@ dependencies = [
  "clap",
  "moraine-core",
  "serde_json",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
  "uuid",

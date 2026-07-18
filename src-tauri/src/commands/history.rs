@@ -39,12 +39,7 @@ pub fn history_push(
 ) -> Result<HistoryEntry, String> {
     state
         .history
-        .push(
-            &PathBuf::from(path),
-            &content,
-            HistorySource::Manual,
-            label,
-        )
+        .push(&PathBuf::from(path), &content, HistorySource::Manual, label)
         .map_err(|e| e.to_string())
 }
 

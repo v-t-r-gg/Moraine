@@ -11,18 +11,12 @@ fn map_err(e: CoreError) -> String {
 }
 
 #[tauri::command]
-pub fn open_document(
-    path: String,
-    state: State<'_, AppState>,
-) -> Result<DocumentSnapshot, String> {
+pub fn open_document(path: String, state: State<'_, AppState>) -> Result<DocumentSnapshot, String> {
     state.open_path(PathBuf::from(path)).map_err(map_err)
 }
 
 #[tauri::command]
-pub fn get_document(
-    id: String,
-    state: State<'_, AppState>,
-) -> Result<DocumentSnapshot, String> {
+pub fn get_document(id: String, state: State<'_, AppState>) -> Result<DocumentSnapshot, String> {
     let id = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     state.get_snapshot(id).map_err(map_err)
 }
@@ -51,10 +45,7 @@ pub fn save_document(
 }
 
 #[tauri::command]
-pub fn reload_document(
-    id: String,
-    state: State<'_, AppState>,
-) -> Result<DocumentSnapshot, String> {
+pub fn reload_document(id: String, state: State<'_, AppState>) -> Result<DocumentSnapshot, String> {
     let id = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     state.reload(id).map_err(map_err)
 }

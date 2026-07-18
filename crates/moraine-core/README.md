@@ -1,5 +1,5 @@
 # moraine-core
 
-Shared Rust library: document model, filesystem I/O, edit history, and file watching.
+Domain library (no GUI, no HTTP server): documents, history, FS watcher, room ids, share URL helpers.
 
-Used by the Tauri desktop app (`src-tauri`) and the `moraine` CLI.
+Used by `moraine-cli` and `src-tauri`. See repo `ARCHITECTURE.md`.

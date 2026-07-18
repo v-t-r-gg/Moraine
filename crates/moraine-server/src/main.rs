@@ -1,3 +1,6 @@
+//! Yjs WebSocket relay. In-memory rooms only; no auth, no disk.
+//! Protocol must stay compatible with src/lib/editor/yjsSession.ts.
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -20,7 +23,11 @@ const DEFAULT_BIND: &str = "127.0.0.1:3099";
 const BROADCAST_CAPACITY: usize = 256;
 
 #[derive(Debug, Parser)]
-#[command(name = "moraine-server", version, about = "Moraine Yjs WebSocket relay")]
+#[command(
+    name = "moraine-server",
+    version,
+    about = "Moraine Yjs WebSocket relay"
+)]
 struct Args {
     #[arg(long, env = "MORAINE_BIND", default_value = DEFAULT_BIND)]
     bind: String,
@@ -67,13 +74,14 @@ async fn main() -> anyhow::Result<()> {
         .with_state(state);
 
     let addr: SocketAddr = args.bind.parse()?;
-    info!("moraine-server listening on http://{addr}");
-    info!("  GET /health");
-    info!("  WS  /ws/:room_id");
+    info!("moraine-server on http://{addr}  GET /health  WS /ws/:room_id");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(async {
+            let _ = tokio::signal::ctrl_c().await;
+            info!("shutdown");
+        })
         .await?;
     Ok(())
 }
@@ -81,14 +89,7 @@ async fn main() -> anyhow::Result<()> {
 fn init_tracing() {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .try_init();
-}
-
-async fn shutdown_signal() {
-    let _ = tokio::signal::ctrl_c().await;
-    info!("shutdown");
+    let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
 }
 
 async fn health() -> impl IntoResponse {
@@ -109,7 +110,7 @@ async fn ws_handler(
 
 async fn peer_loop(socket: WebSocket, room_id: String, state: AppState) {
     let peer_id = state.next_peer.fetch_add(1, Ordering::Relaxed);
-    info!(%room_id, peer_id, "peer connected");
+    info!(%room_id, peer_id, "connect");
 
     let tx = {
         let mut rooms = state.rooms.write().await;
@@ -120,7 +121,6 @@ async fn peer_loop(socket: WebSocket, room_id: String, state: AppState) {
             .clone()
     };
     let mut rx = tx.subscribe();
-
     let (mut sink, mut stream) = socket.split();
 
     let _ = tx.send(BusMsg {
@@ -137,9 +137,7 @@ async fn peer_loop(socket: WebSocket, room_id: String, state: AppState) {
                             break;
                         }
                     }
-                    Some(Ok(Message::Binary(_))) => {
-                        // Frontend speaks JSON text; ignore bare binary for now.
-                    }
+                    Some(Ok(Message::Binary(_))) => {}
                     Some(Ok(Message::Ping(p))) => {
                         if sink.send(Message::Pong(p)).await.is_err() {
                             break;
@@ -147,7 +145,7 @@ async fn peer_loop(socket: WebSocket, room_id: String, state: AppState) {
                     }
                     Some(Ok(Message::Pong(_))) | Some(Ok(Message::Close(_))) | None => break,
                     Some(Err(e)) => {
-                        warn!(%room_id, peer_id, error = %e, "ws read error");
+                        warn!(%room_id, peer_id, error = %e, "ws read");
                         break;
                     }
                 }
@@ -161,7 +159,7 @@ async fn peer_loop(socket: WebSocket, room_id: String, state: AppState) {
                     }
                     Ok(_) => {}
                     Err(broadcast::error::RecvError::Lagged(n)) => {
-                        warn!(%room_id, peer_id, lagged = n, "peer lagged");
+                        warn!(%room_id, peer_id, lagged = n, "lag");
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
@@ -169,7 +167,7 @@ async fn peer_loop(socket: WebSocket, room_id: String, state: AppState) {
         }
     }
 
-    info!(%room_id, peer_id, "peer disconnected");
+    info!(%room_id, peer_id, "disconnect");
     let mut rooms = state.rooms.write().await;
     if let Some(room) = rooms.get(&room_id) {
         if room.tx.receiver_count() == 0 {

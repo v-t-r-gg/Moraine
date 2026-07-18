@@ -15,9 +15,12 @@
     "tauri:build": "tauri build",
     "cli": "cargo run -p moraine-cli --",
     "server": "cargo run -p moraine-server",
-    "test:rust": "cargo test --workspace --exclude moraine-app",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:rust": "cargo test -p moraine-core && cargo test -p moraine-cli",
     "fmt:rust": "cargo fmt --all",
-    "lint:rust": "cargo clippy -p moraine-core -p moraine-cli -p moraine-server -- -D warnings"
+    "lint:rust": "cargo clippy -p moraine-core -p moraine-cli -p moraine-server -- -D warnings",
+    "check:all": "bash scripts/check.sh"
   },
   "license": "MIT OR Apache-2.0",
   "dependencies": {
@@ -48,7 +51,8 @@
     "svelte-check": "^4.1.4",
     "tailwindcss": "^3.4.17",
     "typescript": "~5.6.3",
-    "vite": "^6.0.11"
+    "vite": "^6.0.11",
+    "vitest": "^3.0.5"
   },
   "allowScripts": {
     "esbuild@0.25.12": true

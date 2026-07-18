@@ -1,0 +1,95 @@
+//! Integration: share CLI against a live moraine-server (if binary is present).
+
+use std::fs;
+use std::net::TcpStream;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use tempfile::tempdir;
+
+fn server_bin() -> Option<PathBuf> {
+    let candidates = [
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/moraine-server"),
+        PathBuf::from("target/debug/moraine-server"),
+    ];
+    candidates.into_iter().find(|p| p.is_file())
+}
+
+fn cli_bin() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_moraine"))
+}
+
+fn free_port_base() -> String {
+    // Prefer a high fixed port for tests; fall back if busy.
+    for port in [3199u16, 3299, 3399] {
+        if TcpStream::connect_timeout(
+            &format!("127.0.0.1:{port}").parse().unwrap(),
+            Duration::from_millis(50),
+        )
+        .is_err()
+        {
+            return format!("http://127.0.0.1:{port}");
+        }
+    }
+    "http://127.0.0.1:3199".into()
+}
+
+#[test]
+fn share_json_with_running_server() {
+    let Some(server) = server_bin() else {
+        eprintln!("skip: build moraine-server first");
+        return;
+    };
+
+    let base = free_port_base();
+    let bind = base.trim_start_matches("http://");
+
+    let mut child = Command::new(&server)
+        .args(["--bind", bind])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn server");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if TcpStream::connect_timeout(&bind.parse().unwrap(), Duration::from_millis(100)).is_ok() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("shared.md");
+    fs::write(&path, "# share test\n").unwrap();
+
+    let out = Command::new(cli_bin())
+        .args([
+            "share",
+            path.to_str().unwrap(),
+            "--json",
+            "--no-start",
+            "--server",
+            &base,
+            "--ui",
+            "http://localhost:1420",
+        ])
+        .output()
+        .expect("run share");
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(
+        out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json");
+    assert!(v["room"].as_str().unwrap().starts_with("doc_"));
+    assert!(v["url"].as_str().unwrap().contains("room="));
+    assert!(v["ws"].as_str().unwrap().contains("/ws/"));
+}

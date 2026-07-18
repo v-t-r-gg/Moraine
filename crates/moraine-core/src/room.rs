@@ -21,7 +21,10 @@ mod tests {
 
     #[test]
     fn stable_ascii() {
-        assert_eq!(room_id_for_str("/tmp/note.md"), room_id_for_str("/tmp/note.md"));
+        assert_eq!(
+            room_id_for_str("/tmp/note.md"),
+            room_id_for_str("/tmp/note.md")
+        );
         assert_ne!(room_id_for_str("/tmp/a.md"), room_id_for_str("/tmp/b.md"));
         assert!(room_id_for_str("/tmp/note.md").starts_with("doc_"));
     }

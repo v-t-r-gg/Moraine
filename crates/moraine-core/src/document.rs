@@ -202,9 +202,7 @@ impl Document {
 
         let tmp = path.with_extension(format!(
             "{}.moraine-tmp",
-            path.extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("md")
+            path.extension().and_then(|e| e.to_str()).unwrap_or("md")
         ));
         fs::write(&tmp, content)?;
         fs::rename(&tmp, path).or_else(|_| {

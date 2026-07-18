@@ -33,6 +33,12 @@
     upsertComment,
     type CommentRecord,
   } from "$lib/editor/comments";
+  import {
+    AUTOSAVE_MS,
+    remotePeerCount,
+    shouldScheduleAutosave,
+    statusForPeerTransition,
+  } from "$lib/editor/hostSave";
   import type { DocumentSnapshot, HistoryEntryMeta, ViewMode } from "$lib/types";
 
   const WELCOME_MD = `# Welcome to Moraine
@@ -41,9 +47,9 @@ Local-first Markdown with collab, host-save policy, and comments.
 
 ## Try
 
-- Share: \`moraine share this-file.md\` then open the join URL
-- Select text → **Comment**
-- With peers: autosave pauses; **Save** still writes the host file
+- \`moraine share this-file.md\` then open the join URL
+- Select text then Comment
+- With peers: autosave pauses; Save still writes the host file
 `;
 
   let doc = $state<DocumentSnapshot | null>(null);
@@ -69,6 +75,8 @@ Local-first Markdown with collab, host-save policy, and comments.
   let unlistenFile: (() => void) | null = null;
   let unsubComments: (() => void) | null = null;
   let prevPeerCount = 0;
+  let suppressEditorDirty = false;
+  let saveToken = 0;
 
   const title = $derived(doc?.meta.title ?? "Moraine");
   const path = $derived(doc?.meta.path ?? null);
@@ -82,10 +90,14 @@ Local-first Markdown with collab, host-save policy, and comments.
     forcedRoomId = collab.roomId;
     try {
       const info = await appInfo();
-      const mode = isTauri ? "" : " · browser";
-      const room = forcedRoomId ? ` · room ${forcedRoomId}` : "";
-      const sync = syncUrl ? ` · sync ${syncUrl}` : "";
-      status = `${info.name} ${info.version}${mode}${room}${sync}`;
+      const bits = [
+        info.name,
+        info.version,
+        !isTauri ? "browser" : null,
+        forcedRoomId ? `room ${forcedRoomId}` : null,
+        syncUrl ? `sync ${syncUrl}` : null,
+      ].filter(Boolean);
+      status = bits.join(" · ");
     } catch {
       status = "Moraine";
     }
@@ -94,8 +106,8 @@ Local-first Markdown with collab, host-save policy, and comments.
 
     unlistenFile = onFileChanged(async (ev) => {
       if (!doc || !ev.documentId || ev.documentId !== doc.meta.id) return;
-      if (dirty) {
-        status = "File changed on disk (unsaved local edits kept)";
+      if (dirty || saving) {
+        status = "File changed on disk (keeping local edits)";
         return;
       }
       try {
@@ -126,7 +138,7 @@ Local-first Markdown with collab, host-save policy, and comments.
       try {
         await writeFile(demo, WELCOME_MD);
       } catch {
-        /* open_document creates missing files */
+        /* create via open */
       }
       await loadPath(demo);
     } else {
@@ -163,6 +175,7 @@ Local-first Markdown with collab, host-save policy, and comments.
   }
 
   function applyDocument(snap: DocumentSnapshot, resetSession: boolean) {
+    suppressEditorDirty = true;
     doc = snap;
     markdown = snap.content;
     dirty = snap.meta.dirty;
@@ -171,6 +184,8 @@ Local-first Markdown with collab, host-save policy, and comments.
       session?.destroy();
       unsubComments?.();
       unsubComments = null;
+      clearAutosaveTimer();
+
       const room = forcedRoomId ?? roomIdForPath(snap.meta.path);
       const s = createYjsSession(room, { syncUrl });
       session = s;
@@ -189,10 +204,13 @@ Local-first Markdown with collab, host-save policy, and comments.
       unsubComments = () => cmap.unobserve(refresh);
 
       s.awareness.on("change", () => {
-        const next = Math.max(0, s.awareness.getStates().size - 1);
-        onPeerCountChange(next);
+        onPeerCountChange(remotePeerCount(s.awareness.getStates().size));
       });
     }
+
+    queueMicrotask(() => {
+      suppressEditorDirty = false;
+    });
   }
 
   function onPeerCountChange(next: number) {
@@ -200,38 +218,46 @@ Local-first Markdown with collab, host-save policy, and comments.
     peerCount = next;
     prevPeerCount = next;
 
-    if (next > 0 && was === 0) {
-      if (autosaveTimer) {
-        clearTimeout(autosaveTimer);
-        autosaveTimer = null;
-      }
-      status = "Autosave paused — remote collaborators present";
-    } else if (next === 0 && was > 0) {
-      status = dirty ? "Peers left; will autosave shortly" : "Peers left; autosave on";
-      if (dirty) scheduleAutosave();
+    const msg = statusForPeerTransition(was, next, dirty);
+    if (msg) status = msg;
+
+    if (next > 0) {
+      clearAutosaveTimer();
+    } else if (was > 0 && dirty) {
+      scheduleAutosave();
     }
   }
 
   function onEditorUpdate(md: string) {
+    if (suppressEditorDirty) return;
     if (md === markdown) return;
     markdown = md;
     dirty = true;
     scheduleAutosave();
   }
 
+  function clearAutosaveTimer() {
+    if (autosaveTimer) {
+      clearTimeout(autosaveTimer);
+      autosaveTimer = null;
+    }
+  }
+
   function scheduleAutosave() {
-    if (!isTauri || !doc) return;
-    if (peerCount > 0) {
-      if (autosaveTimer) {
-        clearTimeout(autosaveTimer);
-        autosaveTimer = null;
-      }
+    clearAutosaveTimer();
+    if (
+      !shouldScheduleAutosave({
+        isHost: isTauri,
+        peerCount,
+        dirty: true,
+        saving,
+      })
+    ) {
       return;
     }
-    if (autosaveTimer) clearTimeout(autosaveTimer);
     autosaveTimer = setTimeout(() => {
       void handleSave(true);
-    }, 1200);
+    }, AUTOSAVE_MS);
   }
 
   async function handleOpen() {
@@ -245,31 +271,44 @@ Local-first Markdown with collab, host-save policy, and comments.
 
   async function handleSave(fromAutosave = false) {
     if (!doc) return;
-    // Explicit save always allowed; autosave already gated by scheduleAutosave.
     if (fromAutosave && peerCount > 0) return;
+    if (fromAutosave && saving) return;
 
     if (!isTauri) {
       dirty = false;
       status = fromAutosave ? "Autosaved (browser)" : "Saved (browser)";
       return;
     }
+
+    const token = ++saveToken;
+    const md = editorRef?.getMarkdownContent?.() ?? markdown;
     saving = true;
     try {
-      const md = editorRef?.getMarkdownContent?.() ?? markdown;
       const snap = await saveDocument(doc.meta.id, md, true);
+      if (token !== saveToken) return;
+
       doc = snap;
-      markdown = snap.content;
-      dirty = false;
-      status = fromAutosave
-        ? "Autosaved"
-        : peerCount > 0
-          ? "Saved (host write while peers present)"
-          : "Saved";
+      // If the user typed during the await, keep dirty and current markdown.
+      const now = editorRef?.getMarkdownContent?.() ?? markdown;
+      if (now === md) {
+        markdown = snap.content;
+        dirty = false;
+        status = fromAutosave
+          ? "Autosaved"
+          : peerCount > 0
+            ? "Saved (host write while peers present)"
+            : "Saved";
+      } else {
+        markdown = now;
+        dirty = true;
+        status = "Saved; newer edits still pending";
+        scheduleAutosave();
+      }
       if (historyOpen) await refreshHistory();
     } catch (e) {
-      status = `Save failed: ${e}`;
+      if (token === saveToken) status = `Save failed: ${e}`;
     } finally {
-      saving = false;
+      if (token === saveToken) saving = false;
     }
   }
 
@@ -291,15 +330,16 @@ Local-first Markdown with collab, host-save policy, and comments.
       return;
     }
 
-    const record: CommentRecord = {
+    // Mark is in the collab doc; metadata is a separate Y.Map (both sync).
+    // Do not mark the host file dirty solely for metadata (map is not in markdown).
+    upsertComment(commentsMap(session.doc), {
       id,
       body: text,
       author: localAuthor,
       quote,
       createdAt: new Date().toISOString(),
       resolved: false,
-    };
-    upsertComment(commentsMap(session.doc), record);
+    });
     commentsOpen = true;
     status = "Comment added";
   }
@@ -314,7 +354,7 @@ Local-first Markdown with collab, host-save policy, and comments.
   function reopenComment(id: string) {
     if (!session) return;
     setResolved(commentsMap(session.doc), id, false);
-    status = "Comment reopened (mark cleared; quote kept in list)";
+    status = "Comment reopened (highlight cleared earlier)";
   }
 
   function focusComment(id: string) {

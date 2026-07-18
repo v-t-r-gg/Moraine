@@ -2266,6 +2266,7 @@ dependencies = [
  "chrono",
  "clap",
  "moraine-core",
+ "serde",
  "serde_json",
  "tempfile",
  "tracing",

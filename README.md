@@ -58,10 +58,31 @@ Stored in the same Yjs map and sidecar (`file.md.comments.json`) with `kind: "co
 ## CLI
 
 ```bash
-moraine info|cat|write|history|restore|watch
+moraine info [--json]
+moraine status [path|room] [--json|--human]   # default --json
 moraine share <path> [--start] [--json] [--open]
-moraine join <url|room>
-moraine edit <path> [--share]
+moraine join <url|room> [--json] [--no-open]
+moraine cat|write|history|restore|watch|edit
+```
+
+### Agent / script notes
+
+Exit codes: `0` ok, `1` error, `2` not found, `3` relay down.
+
+```bash
+# Share (stdout is URL; --json is structured)
+moraine share notes.md --json
+# {"ok":true,"path":"...","room":"doc_…","url":"...","ws":"..."}
+
+# Fail without relay
+moraine share notes.md --json; echo $?   # 3, {"ok":false,"error":"...","code":3}
+
+# Status from sidecar + room id (no live peer count)
+moraine status notes.md
+# annotations.suggestionsOpen, room, joinUrl, relay.ok
+
+# Join without opening a browser
+moraine join doc_abc --json --no-open
 ```
 
 ## Checks

@@ -76,3 +76,41 @@ export function applyAcceptToText(
   if (i < 0 || !quote) return null;
   return fullText.slice(0, i) + replacement + fullText.slice(i + quote.length);
 }
+
+/** Map plain-text index of quote to PM positions (contiguous text only). */
+export function findQuoteRangeInDoc(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  doc: any,
+  quote: string,
+): { from: number; to: number } | null {
+  if (!quote) return null;
+  let plain = "";
+  const indexToPos: number[] = [];
+  doc.descendants((node: { isText?: boolean; text?: string }, pos: number) => {
+    if (!node.isText || !node.text) return;
+    for (let i = 0; i < node.text.length; i++) {
+      indexToPos.push(pos + i);
+      plain += node.text[i];
+    }
+  });
+  const idx = plain.indexOf(quote);
+  if (idx < 0) return null;
+  const from = indexToPos[idx];
+  const last = indexToPos[idx + quote.length - 1];
+  if (from == null || last == null) return null;
+  return { from, to: last + 1 };
+}
+
+export function countPending(records: CommentRecord[]): {
+  comments: number;
+  suggestions: number;
+} {
+  let comments = 0;
+  let suggestions = 0;
+  for (const r of records) {
+    if (r.resolved) continue;
+    if (r.kind === "suggestion") suggestions++;
+    else comments++;
+  }
+  return { comments, suggestions };
+}

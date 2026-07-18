@@ -3,6 +3,8 @@ import * as Y from "yjs";
 import {
   applyAcceptToText,
   commentsMap,
+  countPending,
+  findQuoteRangeInDoc,
   listComments,
   setResolved,
   upsertComment,
@@ -48,5 +50,24 @@ describe("annotations", () => {
     setResolved(map, "s1", true);
     expect(listComments(map, false)).toHaveLength(0);
     expect(map.get("s1")?.resolved).toBe(true);
+  });
+
+  it("countPending and quote range on plain text nodes", () => {
+    const recs = [
+      sample("1", "comment", false),
+      sample("2", "suggestion", false),
+      sample("3", "suggestion", true),
+    ];
+    expect(countPending(recs)).toEqual({ comments: 1, suggestions: 1 });
+
+    // Minimal PM-like walker using a fake doc API via Y is overkill; test pure text helper path
+    // by building a tiny structure that findQuoteRangeInDoc understands.
+    const fakeDoc = {
+      descendants(fn: (node: { isText?: boolean; text?: string }, pos: number) => void) {
+        fn({ isText: true, text: "hello old world" }, 1);
+      },
+    };
+    expect(findQuoteRangeInDoc(fakeDoc, "old")).toEqual({ from: 7, to: 10 });
+    expect(findQuoteRangeInDoc(fakeDoc, "missing")).toBeNull();
   });
 });

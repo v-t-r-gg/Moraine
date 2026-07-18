@@ -3,6 +3,7 @@
 
   interface Props {
     comments: CommentRecord[];
+    orphanedIds: string[];
     showResolved: boolean;
     onToggleShowResolved: () => void;
     onResolve: (id: string) => void;
@@ -15,6 +16,7 @@
 
   let {
     comments,
+    orphanedIds,
     showResolved,
     onToggleShowResolved,
     onResolve,
@@ -24,6 +26,8 @@
     onFocus,
     onClose,
   }: Props = $props();
+
+  const orphanSet = $derived(new Set(orphanedIds));
 
   const visible = $derived(
     showResolved ? comments : comments.filter((c) => !c.resolved),
@@ -64,15 +68,19 @@
       <ul class="space-y-2">
         {#each visible as c (c.id)}
           {@const isSug = c.kind === "suggestion"}
+          {@const orphan = orphanSet.has(c.id)}
           <li
             class="rounded-lg border p-2 text-xs"
-            style="border-color: var(--border); opacity: {c.resolved ? 0.65 : 1};"
+            style="border-color: {orphan ? '#dc2626' : 'var(--border)'}; opacity: {c.resolved ? 0.65 : 1};"
           >
             <button type="button" class="w-full text-left" onclick={() => onFocus(c.id)}>
               <div class="mb-1 text-[10px] font-semibold uppercase tracking-wide"
                 style="color: {isSug ? '#16a34a' : 'var(--accent)'};"
               >
                 {isSug ? "Suggestion" : "Comment"}
+                {#if orphan}
+                  <span style="color: #dc2626;"> · quote not found</span>
+                {/if}
               </div>
               <div class="font-medium" style="color: var(--text);">
                 “{c.quote.slice(0, 80)}{c.quote.length > 80 ? "…" : ""}”

@@ -31,6 +31,7 @@
   } from "$lib/editor/yjsSession";
   import {
     commentsMap,
+    countPending,
     listComments,
     mergeDiskIntoMap,
     newCommentId,
@@ -64,6 +65,7 @@ Review: Comment or Suggest on a selection. Sidecar: \`file.md.comments.json\`.
   let historyEntries = $state<HistoryEntryMeta[]>([]);
   let historyLoading = $state(false);
   let commentList = $state<CommentRecord[]>([]);
+  let orphanedMarkIds = $state<string[]>([]);
   let status = $state<string | null>(null);
   let session = $state<YjsSession | null>(null);
   let peerCount = $state(0);
@@ -77,12 +79,14 @@ Review: Comment or Suggest on a selection. Sidecar: \`file.md.comments.json\`.
   let unsubComments: (() => void) | null = null;
   let ignoreNextEditorSync = false;
   let prevPeers = 0;
+  let pendingRehydrate = false;
 
   const title = $derived(doc?.meta.title ?? "Moraine");
   const path = $derived(doc?.meta.path ?? null);
   const wordCount = $derived(countWords(markdown));
   const charCount = $derived(markdown.length);
   const hasRemotePeers = $derived(peerCount > 0);
+  const pending = $derived(countPending(commentList));
 
   onMount(async () => {
     sessionCfg = resolveSessionConfig();
@@ -219,9 +223,36 @@ Review: Comment or Suggest on a selection. Sidecar: \`file.md.comments.json\`.
       const records: CommentRecord[] = disk.map(dtoToRecord);
       mergeDiskIntoMap(cmap, records);
       commentList = listComments(cmap, true);
+      pendingRehydrate = true;
+      tryRehydrateMarks();
     } catch {
       /* no sidecar */
     }
+  }
+
+  function onEditorReady() {
+    tryRehydrateMarks();
+  }
+
+  function tryRehydrateMarks() {
+    if (!pendingRehydrate || !editorRef?.rehydrateMarks) return;
+    pendingRehydrate = false;
+    const open = commentList.filter((c) => !c.resolved);
+    const { applied, orphaned } = editorRef.rehydrateMarks(open);
+    orphanedMarkIds = orphaned;
+    if (open.length === 0) return;
+    const parts: string[] = [];
+    const pend = countPending(open);
+    if (pend.suggestions) {
+      parts.push(
+        `${pend.suggestions} suggestion${pend.suggestions === 1 ? "" : "s"} pending`,
+      );
+    }
+    if (applied.length) parts.push(`${applied.length} mark(s) restored`);
+    if (orphaned.length) {
+      parts.push(`${orphaned.length} quote(s) not found in text`);
+    }
+    if (parts.length) status = parts.join("; ");
   }
 
   function dtoToRecord(c: CommentDto): CommentRecord {
@@ -388,12 +419,14 @@ Review: Comment or Suggest on a selection. Sidecar: \`file.md.comments.json\`.
     if (!session) return;
     const rec = commentsMap(session.doc).get(id);
     if (!rec || rec.kind !== "suggestion") return;
-    const ok = editorRef?.acceptSuggestion?.(id, rec.body) ?? false;
+    const ok = editorRef?.acceptSuggestion?.(id, rec.body, rec.quote) ?? false;
     if (!ok) {
-      status = "Could not apply suggestion (mark missing?)";
+      status = "Could not apply suggestion (quoted text missing)";
+      orphanedMarkIds = [...new Set([...orphanedMarkIds, id])];
       return;
     }
     setResolved(commentsMap(session.doc), id, true);
+    orphanedMarkIds = orphanedMarkIds.filter((x) => x !== id);
     dirty = true;
     scheduleSave();
     status = "Suggestion accepted";
@@ -404,6 +437,7 @@ Review: Comment or Suggest on a selection. Sidecar: \`file.md.comments.json\`.
     if (!session) return;
     editorRef?.clearCommentMark?.(id);
     setResolved(commentsMap(session.doc), id, true);
+    orphanedMarkIds = orphanedMarkIds.filter((x) => x !== id);
     status = "Suggestion rejected";
     if (isTauri) await persistComments();
   }
@@ -496,6 +530,7 @@ Review: Comment or Suggest on a selection. Sidecar: \`file.md.comments.json\`.
               {session}
               initialMarkdown={markdown}
               onUpdate={onEditorUpdate}
+              onReady={onEditorReady}
             />
           {:else}
             <div class="p-6 text-sm" style="color: var(--muted);">Loading editor…</div>
@@ -513,6 +548,7 @@ Review: Comment or Suggest on a selection. Sidecar: \`file.md.comments.json\`.
     {#if commentsOpen}
       <CommentsPanel
         comments={commentList}
+        orphanedIds={orphanedMarkIds}
         showResolved={showResolvedComments}
         onToggleShowResolved={() => (showResolvedComments = !showResolvedComments)}
         onResolve={resolveComment}
@@ -542,6 +578,9 @@ Review: Comment or Suggest on a selection. Sidecar: \`file.md.comments.json\`.
     peerNames={peerLabel}
     roomId={session?.roomId ?? null}
     autosavePaused={hasRemotePeers}
+    pendingComments={pending.comments}
+    pendingSuggestions={pending.suggestions}
+    orphanedMarks={orphanedMarkIds.length}
     message={status}
   />
 </div>

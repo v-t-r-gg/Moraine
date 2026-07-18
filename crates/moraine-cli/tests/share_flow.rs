@@ -40,14 +40,55 @@ fn share_fails_when_relay_down() {
         .args([
             "share",
             path.to_str().unwrap(),
+            "--json",
             "--server",
             "http://127.0.0.1:1",
         ])
         .output()
         .expect("run share");
-    assert!(!out.status.success());
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("relay not reachable") || err.contains("start it"));
+    assert_eq!(out.status.code(), Some(3));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json err");
+    assert_eq!(v["ok"], false);
+    assert_eq!(v["code"], 3);
+}
+
+#[test]
+fn status_json_for_path() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("note.md");
+    fs::write(&path, "# hi\n").unwrap();
+    let side = format!("{}.comments.json", path.display());
+    fs::write(
+        &side,
+        r#"{"version":1,"comments":[{"id":"00000000-0000-4000-8000-000000000001","body":"n","author":"A","quote":"hi","createdAt":"2020-01-01T00:00:00Z","resolved":false,"kind":"suggestion"}]}"#,
+    )
+    .unwrap();
+
+    let out = Command::new(cli_bin())
+        .args(["status", path.to_str().unwrap(), "--json"])
+        .output()
+        .expect("status");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["ok"], true);
+    assert!(v["room"].as_str().unwrap().starts_with("doc_"));
+    assert_eq!(v["annotations"]["suggestionsOpen"], 1);
+}
+
+#[test]
+fn info_json() {
+    let out = Command::new(cli_bin())
+        .args(["info", "--json"])
+        .output()
+        .expect("info");
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["name"], "moraine");
 }
 
 #[test]

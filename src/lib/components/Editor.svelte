@@ -7,6 +7,7 @@
   import CollaborationCursor from "@tiptap/extension-collaboration-cursor";
   import { Markdown } from "tiptap-markdown";
   import { CommentMark, findMarkRange, type MarkKind } from "$lib/editor/commentMark";
+  import { findQuoteRangeInDoc, type CommentRecord } from "$lib/editor/comments";
   import type { YjsSession } from "$lib/editor/yjsSession";
 
   interface Props {
@@ -145,10 +146,17 @@
     }
   }
 
-  /** Replace marked range with replacement text and drop the mark. */
-  export function acceptSuggestion(id: string, replacement: string): boolean {
+  /** Replace marked range (or first quote match) with replacement text. */
+  export function acceptSuggestion(
+    id: string,
+    replacement: string,
+    quote?: string,
+  ): boolean {
     if (!editor) return false;
-    const range = findMarkRange(editor.state, id);
+    let range = findMarkRange(editor.state, id);
+    if (!range && quote) {
+      range = findQuoteRangeInDoc(editor.state.doc, quote);
+    }
     if (!range) return false;
     const { from, to } = range;
     return editor
@@ -156,7 +164,6 @@
       .focus()
       .command(({ tr, dispatch }) => {
         tr.insertText(replacement, from, to);
-        // Marks on the replaced range are gone with the text; clear any leftover id.
         const type = tr.doc.type.schema.marks.comment;
         if (type) {
           tr.doc.descendants((node, pos) => {
@@ -172,6 +179,39 @@
         return true;
       })
       .run();
+  }
+
+  /**
+   * Re-apply marks from sidecar records by quote search.
+   * Returns ids that could not be placed (quote missing / ambiguous).
+   */
+  export function rehydrateMarks(
+    records: CommentRecord[],
+  ): { applied: string[]; orphaned: string[] } {
+    const applied: string[] = [];
+    const orphaned: string[] = [];
+    if (!editor) return { applied, orphaned };
+
+    for (const r of records) {
+      if (r.resolved) continue;
+      if (findMarkRange(editor.state, r.id)) {
+        applied.push(r.id);
+        continue;
+      }
+      const range = findQuoteRangeInDoc(editor.state.doc, r.quote);
+      if (!range) {
+        orphaned.push(r.id);
+        continue;
+      }
+      const ok = editor
+        .chain()
+        .setTextSelection(range)
+        .setComment(r.id, r.kind === "suggestion" ? "suggestion" : "comment")
+        .run();
+      if (ok) applied.push(r.id);
+      else orphaned.push(r.id);
+    }
+    return { applied, orphaned };
   }
 
   onDestroy(() => {

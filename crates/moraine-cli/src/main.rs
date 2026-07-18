@@ -1,9 +1,9 @@
-//! CLI entry. Fail-fast share unless `--start`.
+//! CLI entry. Fail-fast share unless `--start`. JSON-friendly for agents.
 
 mod relay;
 
 use std::io::{self, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -12,12 +12,20 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use moraine_core::history::HistorySource;
 use moraine_core::{
-    share_links, Document, HistoryStore, MorainePaths, DEFAULT_RELAY_HTTP, DEFAULT_UI,
+    comments_sidecar_path, read_comments_sidecar, room_id_for_path, share_links, AnnotationKind,
+    Document, HistoryStore, MorainePaths, DEFAULT_RELAY_HTTP, DEFAULT_UI,
 };
+use serde::Serialize;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
-use relay::{health_ok, launch_desktop, require_relay, try_spawn_server};
+use relay::{health_ok, launch_desktop, try_spawn_server};
+
+/// Exit codes for scripts/agents.
+const EXIT_OK: i32 = 0;
+const EXIT_ERR: i32 = 1;
+const EXIT_NOT_FOUND: i32 = 2;
+const EXIT_RELAY: i32 = 3;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -35,7 +43,25 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    Info,
+    Info {
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// File / room / relay snapshot for scripts (no live peer list).
+    Status {
+        /// Markdown path or room id (`doc_…`). Omit for relay-only status.
+        target: Option<String>,
+        #[arg(long, env = "MORAINE_SERVER_URL", default_value = DEFAULT_RELAY_HTTP)]
+        server: String,
+        #[arg(long, env = "MORAINE_UI_URL", default_value = DEFAULT_UI)]
+        ui: String,
+        #[arg(long, default_value_t = true)]
+        json: bool,
+        /// Human-readable lines instead of JSON.
+        #[arg(long)]
+        human: bool,
+    },
 
     Cat {
         path: PathBuf,
@@ -53,19 +79,16 @@ enum Commands {
         path: PathBuf,
         #[arg(long, default_value_t = true)]
         create: bool,
-        /// Print share URL (relay must be up) then open editor.
         #[arg(long)]
         share: bool,
     },
 
-    /// Print collab join URL for a file (one file = one room).
     Share {
         path: PathBuf,
         #[arg(long, env = "MORAINE_UI_URL", default_value = DEFAULT_UI)]
         ui: String,
         #[arg(long, env = "MORAINE_SERVER_URL", default_value = DEFAULT_RELAY_HTTP)]
         server: String,
-        /// Spawn moraine-server once if health check fails.
         #[arg(long)]
         start: bool,
         #[arg(long)]
@@ -74,12 +97,15 @@ enum Commands {
         open: bool,
     },
 
-    /// Open a join URL or room id in the browser.
     Join {
-        /// Full UI URL or bare room id (`doc_…`).
         target: String,
         #[arg(long, env = "MORAINE_UI_URL", default_value = DEFAULT_UI)]
         ui: String,
+        #[arg(long)]
+        json: bool,
+        /// Print URL only; do not open a browser.
+        #[arg(long)]
+        no_open: bool,
     },
 
     History {
@@ -103,29 +129,40 @@ enum Commands {
 }
 
 fn main() {
-    if let Err(err) = run() {
-        eprintln!("error: {err:#}");
-        std::process::exit(1);
+    match run() {
+        Ok(code) => std::process::exit(code),
+        Err(err) => {
+            // Non-json fallback for unexpected errors
+            eprintln!("error: {err:#}");
+            std::process::exit(EXIT_ERR);
+        }
     }
 }
 
-fn run() -> Result<()> {
+fn run() -> Result<i32> {
     let cli = Cli::parse();
     init_tracing(cli.verbose);
 
-    match cli.command {
-        Commands::Info => cmd_info(),
-        Commands::Cat { path } => cmd_cat(path),
+    let code = match cli.command {
+        Commands::Info { json } => cmd_info(json),
+        Commands::Status {
+            target,
+            server,
+            ui,
+            json,
+            human,
+        } => cmd_status(target, server, ui, json && !human),
+        Commands::Cat { path } => cmd_cat(path).map(|_| EXIT_OK),
         Commands::Write {
             path,
             content,
             history,
-        } => cmd_write(path, content, history),
+        } => cmd_write(path, content, history).map(|_| EXIT_OK),
         Commands::Edit {
             path,
             create,
             share,
-        } => cmd_edit(path, create, share),
+        } => cmd_edit(path, create, share).map(|_| EXIT_OK),
         Commands::Share {
             path,
             ui,
@@ -134,15 +171,21 @@ fn run() -> Result<()> {
             json,
             open,
         } => cmd_share(path, ui, server, start, json, open),
-        Commands::Join { target, ui } => cmd_join(target, ui),
-        Commands::History { path, json, limit } => cmd_history(path, json, limit),
+        Commands::Join {
+            target,
+            ui,
+            json,
+            no_open,
+        } => cmd_join(target, ui, json, no_open),
+        Commands::History { path, json, limit } => cmd_history(path, json, limit).map(|_| EXIT_OK),
         Commands::Restore {
             path,
             entry_id,
             write,
-        } => cmd_restore(path, entry_id, write),
-        Commands::Watch { path } => cmd_watch(path),
-    }
+        } => cmd_restore(path, entry_id, write).map(|_| EXIT_OK),
+        Commands::Watch { path } => cmd_watch(path).map(|_| EXIT_OK),
+    }?;
+    Ok(code)
 }
 
 fn init_tracing(verbose: u8) {
@@ -159,14 +202,167 @@ fn init_tracing(verbose: u8) {
         .try_init();
 }
 
-fn cmd_info() -> Result<()> {
-    println!("moraine {}", env!("CARGO_PKG_VERSION"));
-    if let Ok(paths) = MorainePaths::default_ensure() {
-        println!("data dir:    {}", paths.data_dir.display());
-        println!("history dir: {}", paths.history_dir.display());
-        println!("config dir:  {}", paths.config_dir.display());
+fn emit_err(json: bool, code: i32, msg: &str) -> i32 {
+    if json {
+        let _ = writeln!(
+            io::stdout(),
+            "{}",
+            serde_json::json!({ "ok": false, "error": msg, "code": code })
+        );
+    } else {
+        eprintln!("error: {msg}");
     }
-    Ok(())
+    code
+}
+
+fn cmd_info(json: bool) -> Result<i32> {
+    let paths = MorainePaths::default_ensure().ok();
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "ok": true,
+                "name": "moraine",
+                "version": env!("CARGO_PKG_VERSION"),
+                "dataDir": paths.as_ref().map(|p| p.data_dir.display().to_string()),
+                "historyDir": paths.as_ref().map(|p| p.history_dir.display().to_string()),
+                "configDir": paths.as_ref().map(|p| p.config_dir.display().to_string()),
+            }))?
+        );
+    } else {
+        println!("moraine {}", env!("CARGO_PKG_VERSION"));
+        if let Some(p) = paths {
+            println!("data dir:    {}", p.data_dir.display());
+            println!("history dir: {}", p.history_dir.display());
+            println!("config dir:  {}", p.config_dir.display());
+        }
+    }
+    Ok(EXIT_OK)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StatusOut {
+    ok: bool,
+    path: Option<String>,
+    room: Option<String>,
+    exists: Option<bool>,
+    relay: RelayStatus,
+    ui: String,
+    join_url: Option<String>,
+    sidecar: Option<String>,
+    sidecar_exists: Option<bool>,
+    annotations: Option<AnnotationCounts>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RelayStatus {
+    url: String,
+    ok: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AnnotationCounts {
+    comments_open: usize,
+    suggestions_open: usize,
+    comments_resolved: usize,
+    suggestions_resolved: usize,
+}
+
+fn cmd_status(target: Option<String>, server: String, ui: String, json: bool) -> Result<i32> {
+    let relay_ok = health_ok(&server);
+    let mut out = StatusOut {
+        ok: true,
+        path: None,
+        room: None,
+        exists: None,
+        relay: RelayStatus {
+            url: server.clone(),
+            ok: relay_ok,
+        },
+        ui: ui.clone(),
+        join_url: None,
+        sidecar: None,
+        sidecar_exists: None,
+        annotations: None,
+    };
+
+    if let Some(t) = target {
+        if t.starts_with("doc_") {
+            out.room = Some(t.clone());
+            out.join_url = Some(format!("{}/?room={t}", ui.trim_end_matches('/')));
+        } else {
+            let path = PathBuf::from(&t);
+            if !path.exists() {
+                return Ok(emit_err(
+                    json,
+                    EXIT_NOT_FOUND,
+                    &format!("path not found: {}", path.display()),
+                ));
+            }
+            let abs = std::fs::canonicalize(&path).unwrap_or(path);
+            let room = room_id_for_path(&abs);
+            let side = comments_sidecar_path(&abs);
+            let counts = annotation_counts(&abs);
+            out.path = Some(abs.display().to_string());
+            out.room = Some(room.clone());
+            out.exists = Some(true);
+            out.join_url = Some(format!("{}/?room={room}", ui.trim_end_matches('/')));
+            out.sidecar = Some(side.display().to_string());
+            out.sidecar_exists = Some(side.exists());
+            out.annotations = Some(counts);
+        }
+    }
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!(
+            "relay  {} ({})",
+            server,
+            if relay_ok { "up" } else { "down" }
+        );
+        if let Some(p) = &out.path {
+            println!("path   {p}");
+        }
+        if let Some(r) = &out.room {
+            println!("room   {r}");
+        }
+        if let Some(u) = &out.join_url {
+            println!("join   {u}");
+        }
+        if let Some(a) = &out.annotations {
+            println!(
+                "review comments={}/{} suggestions={}/{} (open/resolved)",
+                a.comments_open, a.comments_resolved, a.suggestions_open, a.suggestions_resolved
+            );
+        }
+    }
+    Ok(EXIT_OK)
+}
+
+fn annotation_counts(path: &Path) -> AnnotationCounts {
+    let mut c = AnnotationCounts {
+        comments_open: 0,
+        suggestions_open: 0,
+        comments_resolved: 0,
+        suggestions_resolved: 0,
+    };
+    let Ok(file) = read_comments_sidecar(path) else {
+        return c;
+    };
+    for item in file.comments {
+        let sug = item.kind == AnnotationKind::Suggestion;
+        match (sug, item.resolved) {
+            (false, false) => c.comments_open += 1,
+            (false, true) => c.comments_resolved += 1,
+            (true, false) => c.suggestions_open += 1,
+            (true, true) => c.suggestions_resolved += 1,
+        }
+    }
+    c
 }
 
 fn cmd_cat(path: PathBuf) -> Result<()> {
@@ -214,7 +410,7 @@ fn cmd_edit(path: PathBuf, create: bool, share: bool) -> Result<()> {
         }
     }
     if share {
-        cmd_share(
+        let _ = cmd_share(
             path.clone(),
             DEFAULT_UI.into(),
             DEFAULT_RELAY_HTTP.into(),
@@ -249,12 +445,18 @@ fn cmd_share(
     start: bool,
     json: bool,
     open: bool,
-) -> Result<()> {
+) -> Result<i32> {
     if !path.exists() {
-        bail!("file does not exist: {}", path.display());
+        return Ok(emit_err(
+            json,
+            EXIT_NOT_FOUND,
+            &format!("file does not exist: {}", path.display()),
+        ));
     }
     if start && !health_ok(&server) {
-        try_spawn_server(&server)?;
+        if let Err(e) = try_spawn_server(&server) {
+            return Ok(emit_err(json, EXIT_RELAY, &e.to_string()));
+        }
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
             if health_ok(&server) {
@@ -263,10 +465,26 @@ fn cmd_share(
             thread::sleep(Duration::from_millis(100));
         }
     }
-    require_relay(&server)?;
+    if !health_ok(&server) {
+        return Ok(emit_err(
+            json,
+            EXIT_RELAY,
+            &format!("relay not reachable at {server}/health; start: cargo run -p moraine-server"),
+        ));
+    }
     let links = share_links(&path, &ui, &server);
     if json {
-        println!("{}", serde_json::to_string_pretty(&links)?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "ok": true,
+                "path": links.path,
+                "room": links.room,
+                "url": links.url,
+                "ws": links.ws,
+                "server": links.server,
+            }))?
+        );
     } else {
         println!("{}", links.url);
         eprintln!("room   {}", links.room);
@@ -274,29 +492,58 @@ fn cmd_share(
         eprintln!("ws     {}", links.ws);
     }
     if open {
-        launch_desktop(path.as_path())?;
+        let _ = launch_desktop(path.as_path())?;
     }
-    Ok(())
+    Ok(EXIT_OK)
 }
 
-fn cmd_join(target: String, ui: String) -> Result<()> {
+fn cmd_join(target: String, ui: String, json: bool, no_open: bool) -> Result<i32> {
     let url = if target.starts_with("http://") || target.starts_with("https://") {
         target
     } else if target.starts_with("doc_") {
         format!("{}/?room={target}", ui.trim_end_matches('/'))
     } else {
-        bail!("expected a URL or room id (doc_…), got: {target}");
+        return Ok(emit_err(
+            json,
+            EXIT_ERR,
+            &format!("expected a URL or room id (doc_…), got: {target}"),
+        ));
     };
-    eprintln!("opening {url}");
-    let status = Command::new("xdg-open")
-        .arg(&url)
-        .status()
-        .or_else(|_| Command::new("open").arg(&url).status())
-        .with_context(|| "failed to open browser (tried xdg-open / open)")?;
-    if !status.success() {
-        bail!("browser open failed: {status}");
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "ok": true,
+                "url": url,
+            }))?
+        );
+    } else {
+        println!("{url}");
     }
-    Ok(())
+
+    if !no_open {
+        let status = Command::new("xdg-open")
+            .arg(&url)
+            .status()
+            .or_else(|_| Command::new("open").arg(&url).status());
+        match status {
+            Ok(s) if s.success() => {}
+            Ok(s) => {
+                return Ok(emit_err(
+                    json,
+                    EXIT_ERR,
+                    &format!("browser open failed: {s}"),
+                ));
+            }
+            Err(e) => {
+                if !json {
+                    eprintln!("note: could not open browser ({e}); URL printed above");
+                }
+            }
+        }
+    }
+    Ok(EXIT_OK)
 }
 
 fn cmd_history(path: PathBuf, json: bool, limit: usize) -> Result<()> {

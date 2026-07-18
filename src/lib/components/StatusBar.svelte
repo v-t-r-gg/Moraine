@@ -6,6 +6,9 @@
     peerNames: string;
     roomId: string | null;
     autosavePaused: boolean;
+    pendingComments: number;
+    pendingSuggestions: number;
+    orphanedMarks: number;
     message: string | null;
   }
 
@@ -16,6 +19,9 @@
     peerNames,
     roomId,
     autosavePaused,
+    pendingComments,
+    pendingSuggestions,
+    orphanedMarks,
     message,
   }: Props = $props();
 </script>
@@ -35,6 +41,21 @@
       {#if peerNames}
         ({peerNames})
       {/if}
+    </span>
+  {/if}
+  {#if pendingSuggestions > 0}
+    <span style="color: #16a34a; font-weight: 600;">
+      {pendingSuggestions} suggestion{pendingSuggestions === 1 ? "" : "s"} pending
+    </span>
+  {/if}
+  {#if pendingComments > 0}
+    <span style="color: #d97706;">
+      {pendingComments} comment{pendingComments === 1 ? "" : "s"}
+    </span>
+  {/if}
+  {#if orphanedMarks > 0}
+    <span title="Quoted text no longer found in the document" style="color: #dc2626;">
+      {orphanedMarks} mark{orphanedMarks === 1 ? "" : "s"} missing
     </span>
   {/if}
   {#if autosavePaused}

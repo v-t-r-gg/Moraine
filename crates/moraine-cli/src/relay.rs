@@ -11,19 +11,6 @@ use moraine_core::DEFAULT_RELAY_BIND;
 
 const HEALTH_TIMEOUT: Duration = Duration::from_millis(400);
 
-pub fn require_relay(server_http: &str) -> Result<()> {
-    if health_ok(server_http) {
-        return Ok(());
-    }
-    bail!(
-        "relay not reachable at {server_http}/health\n\
-         start it in another terminal:\n\
-           cargo run -p moraine-server\n\
-           npm run server\n\
-           docker compose up --build"
-    );
-}
-
 pub fn health_ok(server_http: &str) -> bool {
     let Some((host, port)) = parse_host_port(server_http) else {
         return false;

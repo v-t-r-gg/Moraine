@@ -25,6 +25,7 @@ function sample(
     resolved,
     kind,
     revision: 1,
+    disposition: kind === "suggestion" ? (resolved ? "resolved_legacy" : "pending") : null,
   };
 }
 

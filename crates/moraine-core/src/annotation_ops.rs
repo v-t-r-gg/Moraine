@@ -1,18 +1,16 @@
 //! Operation-based annotation mutations under the per-document ledger lock.
-//!
-//! Each operation re-reads the latest ledger, validates preconditions (including
-//! per-annotation `revision`), applies one change, and writes via atomic replace.
 
 use std::path::Path;
 
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::atomic::SidecarLock;
-use crate::comments::{AnnotationKind, CommentRecord};
+use crate::comments::{AnnotationKind, CommentRecord, SuggestionDisposition};
 use crate::error::{Error, Result};
 use crate::run_meta::{
-    load_or_migrate_locked, moraine_sidecar_path, write_run_meta_unlocked, RunMeta,
+    content_hash, load_or_migrate_locked, moraine_sidecar_path, write_run_meta_unlocked, RunMeta,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -21,6 +19,16 @@ pub struct AnnotationOpResult {
     pub annotation: CommentRecord,
     pub comments: Vec<CommentRecord>,
     pub run_id: Uuid,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BeginAcceptResult {
+    pub annotation: CommentRecord,
+    pub comments: Vec<CommentRecord>,
+    pub run_id: Uuid,
+    pub acceptance_op_id: Uuid,
+    pub base_content_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -59,8 +67,24 @@ fn find_index(meta: &RunMeta, id: Uuid) -> Option<usize> {
     meta.comments.iter().position(|c| c.id == id)
 }
 
-fn bump(rec: &mut CommentRecord) {
-    rec.revision = rec.revision.saturating_add(1);
+fn bump_checked(rec: &mut CommentRecord) -> Result<()> {
+    let next = rec
+        .revision
+        .checked_add(1)
+        .ok_or(Error::RevisionOverflow { id: rec.id })?;
+    rec.revision = next;
+    Ok(())
+}
+
+fn check_revision(rec: &CommentRecord, expected: u32) -> Result<()> {
+    if rec.revision != expected {
+        return Err(Error::AnnotationConflict {
+            id: rec.id,
+            expected_revision: expected,
+            actual_revision: rec.revision,
+        });
+    }
+    Ok(())
 }
 
 fn finish(md_path: &Path, meta: &mut RunMeta, id: Uuid) -> Result<AnnotationOpResult> {
@@ -79,7 +103,7 @@ fn finish(md_path: &Path, meta: &mut RunMeta, id: Uuid) -> Result<AnnotationOpRe
     })
 }
 
-/// Create a new annotation. Fails if `id` already exists.
+/// Create a new annotation. Fails if `id` already exists. Always revision 1.
 pub fn create_annotation(
     md_path: &Path,
     id: Uuid,
@@ -108,7 +132,6 @@ pub fn create_annotation(
     finish(md_path, &mut meta, id)
 }
 
-/// Update annotation body (and optionally author). Requires matching `expected_revision`.
 pub fn update_annotation(
     md_path: &Path,
     id: Uuid,
@@ -121,12 +144,17 @@ pub fn update_annotation(
     let mut meta = ensure_meta_locked(md_path)?;
     let idx = find_index(&meta, id).ok_or(Error::AnnotationNotFound { id })?;
     let rec = &mut meta.comments[idx];
-    if rec.revision != expected_revision {
-        return Err(Error::AnnotationConflict {
-            id,
-            expected_revision,
-            actual_revision: rec.revision,
-        });
+    check_revision(rec, expected_revision)?;
+    if rec.kind == AnnotationKind::Suggestion {
+        let d = rec
+            .suggestion_disposition()
+            .unwrap_or(SuggestionDisposition::Pending);
+        if d == SuggestionDisposition::Accepting {
+            return Err(Error::IncompleteAcceptance {
+                id,
+                message: "cannot update while acceptance is in progress; cancel first".into(),
+            });
+        }
     }
     if let Some(b) = body {
         if rec.kind == AnnotationKind::Comment && b.trim().is_empty() {
@@ -140,81 +168,26 @@ pub fn update_annotation(
     if let Some(a) = author {
         rec.author = a;
     }
-    bump(rec);
+    bump_checked(rec)?;
     finish(md_path, &mut meta, id)
 }
 
-/// Mark resolved. Already-resolved with matching token is idempotent (no revision bump).
+/// Resolve a comment (not a suggestion disposition). Suggestions should use reject/accept.
 pub fn resolve_annotation(
     md_path: &Path,
     id: Uuid,
     expected_revision: u32,
 ) -> Result<AnnotationOpResult> {
-    set_resolved(md_path, id, expected_revision, true)
-}
-
-/// Mark open. Already-open with matching token is idempotent (no revision bump).
-pub fn reopen_annotation(
-    md_path: &Path,
-    id: Uuid,
-    expected_revision: u32,
-) -> Result<AnnotationOpResult> {
-    set_resolved(md_path, id, expected_revision, false)
-}
-
-fn set_resolved(
-    md_path: &Path,
-    id: Uuid,
-    expected_revision: u32,
-    resolved: bool,
-) -> Result<AnnotationOpResult> {
     let side = moraine_sidecar_path(md_path);
     let _lock = SidecarLock::acquire(&side)?;
     let mut meta = ensure_meta_locked(md_path)?;
     let idx = find_index(&meta, id).ok_or(Error::AnnotationNotFound { id })?;
     let rec = &mut meta.comments[idx];
-    if rec.revision != expected_revision {
-        return Err(Error::AnnotationConflict {
-            id,
-            expected_revision,
-            actual_revision: rec.revision,
-        });
-    }
-    if rec.resolved == resolved {
-        // Idempotent success without bump.
-        return Ok(AnnotationOpResult {
-            annotation: rec.clone(),
-            comments: meta.comments.clone(),
-            run_id: meta.run.id,
-        });
-    }
-    rec.resolved = resolved;
-    bump(rec);
-    finish(md_path, &mut meta, id)
-}
-
-/// Accept suggestion: resolve it after the UI has applied the edit. Kind must be suggestion.
-pub fn accept_suggestion(
-    md_path: &Path,
-    id: Uuid,
-    expected_revision: u32,
-) -> Result<AnnotationOpResult> {
-    let side = moraine_sidecar_path(md_path);
-    let _lock = SidecarLock::acquire(&side)?;
-    let mut meta = ensure_meta_locked(md_path)?;
-    let idx = find_index(&meta, id).ok_or(Error::AnnotationNotFound { id })?;
-    let rec = &mut meta.comments[idx];
-    if rec.kind != AnnotationKind::Suggestion {
+    check_revision(rec, expected_revision)?;
+    if rec.kind == AnnotationKind::Suggestion {
         return Err(Error::InvalidAnnotationKind {
             id,
-            message: "accept requires a suggestion".into(),
-        });
-    }
-    if rec.revision != expected_revision {
-        return Err(Error::AnnotationConflict {
-            id,
-            expected_revision,
-            actual_revision: rec.revision,
+            message: "use accept_suggestion or reject_suggestion for suggestions".into(),
         });
     }
     if rec.resolved {
@@ -225,11 +198,225 @@ pub fn accept_suggestion(
         });
     }
     rec.resolved = true;
-    bump(rec);
+    bump_checked(rec)?;
     finish(md_path, &mut meta, id)
 }
 
-/// Reject suggestion: resolve without applying body as replacement (editor clears mark).
+/// Reopen a comment, or return a suggestion to pending (clearing terminal outcome).
+pub fn reopen_annotation(
+    md_path: &Path,
+    id: Uuid,
+    expected_revision: u32,
+) -> Result<AnnotationOpResult> {
+    let side = moraine_sidecar_path(md_path);
+    let _lock = SidecarLock::acquire(&side)?;
+    let mut meta = ensure_meta_locked(md_path)?;
+    let idx = find_index(&meta, id).ok_or(Error::AnnotationNotFound { id })?;
+    let rec = &mut meta.comments[idx];
+    check_revision(rec, expected_revision)?;
+
+    if rec.kind == AnnotationKind::Suggestion {
+        let d = rec
+            .suggestion_disposition()
+            .unwrap_or(SuggestionDisposition::Pending);
+        if d == SuggestionDisposition::Accepting {
+            return Err(Error::IncompleteAcceptance {
+                id,
+                message: "cancel the active acceptance before reopening".into(),
+            });
+        }
+        if d == SuggestionDisposition::Pending {
+            return Ok(AnnotationOpResult {
+                annotation: rec.clone(),
+                comments: meta.comments.clone(),
+                run_id: meta.run.id,
+            });
+        }
+        rec.disposition = Some(SuggestionDisposition::Pending);
+        rec.resolved = false;
+        rec.clear_acceptance_fields();
+        rec.applied_content_hash = None;
+        rec.acceptance_completed_at = None;
+        bump_checked(rec)?;
+        return finish(md_path, &mut meta, id);
+    }
+
+    if !rec.resolved {
+        return Ok(AnnotationOpResult {
+            annotation: rec.clone(),
+            comments: meta.comments.clone(),
+            run_id: meta.run.id,
+        });
+    }
+    rec.resolved = false;
+    bump_checked(rec)?;
+    finish(md_path, &mut meta, id)
+}
+
+/// Phase A: reserve acceptance (no Markdown change yet).
+pub fn begin_accept_suggestion(
+    md_path: &Path,
+    id: Uuid,
+    expected_revision: u32,
+    expected_markdown_hash: &str,
+) -> Result<BeginAcceptResult> {
+    let side = moraine_sidecar_path(md_path);
+    let _lock = SidecarLock::acquire(&side)?;
+    let mut meta = ensure_meta_locked(md_path)?;
+
+    let markdown = crate::document::Document::read_file(md_path)?;
+    let actual_hash = content_hash(&markdown);
+    if actual_hash != expected_markdown_hash {
+        return Err(Error::RevisionConflict {
+            expected: expected_markdown_hash.to_string(),
+            actual: actual_hash,
+        });
+    }
+
+    let idx = find_index(&meta, id).ok_or(Error::AnnotationNotFound { id })?;
+    let rec = &mut meta.comments[idx];
+    if rec.kind != AnnotationKind::Suggestion {
+        return Err(Error::InvalidAnnotationKind {
+            id,
+            message: "begin_accept requires a suggestion".into(),
+        });
+    }
+    check_revision(rec, expected_revision)?;
+    let d = rec
+        .suggestion_disposition()
+        .unwrap_or(SuggestionDisposition::Pending);
+    match d {
+        SuggestionDisposition::Pending => {}
+        SuggestionDisposition::Accepting => {
+            return Err(Error::IncompleteAcceptance {
+                id,
+                message: "acceptance already in progress".into(),
+            });
+        }
+        SuggestionDisposition::Accepted => {
+            return Err(Error::AnnotationPrecondition {
+                id: Some(id),
+                message: "suggestion already accepted".into(),
+            });
+        }
+        SuggestionDisposition::Rejected => {
+            return Err(Error::AnnotationPrecondition {
+                id: Some(id),
+                message: "suggestion already rejected".into(),
+            });
+        }
+        SuggestionDisposition::ResolvedLegacy => {
+            return Err(Error::AnnotationPrecondition {
+                id: Some(id),
+                message: "legacy resolved suggestion cannot be accepted; reopen first".into(),
+            });
+        }
+    }
+
+    let op_id = Uuid::new_v4();
+    rec.disposition = Some(SuggestionDisposition::Accepting);
+    rec.resolved = false;
+    rec.acceptance_op_id = Some(op_id);
+    rec.acceptance_base_hash = Some(actual_hash.clone());
+    rec.acceptance_started_at = Some(Utc::now());
+    bump_checked(rec)?;
+    meta.touch();
+    write_run_meta_unlocked(md_path, &meta)?;
+    let annotation = meta.comments[idx].clone();
+    Ok(BeginAcceptResult {
+        acceptance_op_id: op_id,
+        base_content_hash: actual_hash,
+        annotation,
+        comments: meta.comments.clone(),
+        run_id: meta.run.id,
+    })
+}
+
+/// Phase C: finalize after Markdown saved with applied suggestion.
+pub fn complete_accept_suggestion(
+    md_path: &Path,
+    id: Uuid,
+    expected_revision: u32,
+    acceptance_op_id: Uuid,
+    expected_saved_hash: &str,
+) -> Result<AnnotationOpResult> {
+    let side = moraine_sidecar_path(md_path);
+    let _lock = SidecarLock::acquire(&side)?;
+    let mut meta = ensure_meta_locked(md_path)?;
+
+    let markdown = crate::document::Document::read_file(md_path)?;
+    let actual_hash = content_hash(&markdown);
+    if actual_hash != expected_saved_hash {
+        return Err(Error::RevisionConflict {
+            expected: expected_saved_hash.to_string(),
+            actual: actual_hash,
+        });
+    }
+
+    let idx = find_index(&meta, id).ok_or(Error::AnnotationNotFound { id })?;
+    let rec = &mut meta.comments[idx];
+    if rec.kind != AnnotationKind::Suggestion {
+        return Err(Error::InvalidAnnotationKind {
+            id,
+            message: "complete_accept requires a suggestion".into(),
+        });
+    }
+    check_revision(rec, expected_revision)?;
+    if rec.disposition != Some(SuggestionDisposition::Accepting) {
+        return Err(Error::IncompleteAcceptance {
+            id,
+            message: "suggestion is not in accepting state".into(),
+        });
+    }
+    if rec.acceptance_op_id != Some(acceptance_op_id) {
+        return Err(Error::IncompleteAcceptance {
+            id,
+            message: "acceptance operation id does not match".into(),
+        });
+    }
+
+    rec.disposition = Some(SuggestionDisposition::Accepted);
+    rec.resolved = true;
+    rec.applied_content_hash = Some(actual_hash);
+    rec.acceptance_completed_at = Some(Utc::now());
+    rec.clear_acceptance_fields();
+    bump_checked(rec)?;
+    finish(md_path, &mut meta, id)
+}
+
+/// Cancel an active acceptance reservation; return to pending.
+pub fn cancel_accept_suggestion(
+    md_path: &Path,
+    id: Uuid,
+    expected_revision: u32,
+    acceptance_op_id: Uuid,
+) -> Result<AnnotationOpResult> {
+    let side = moraine_sidecar_path(md_path);
+    let _lock = SidecarLock::acquire(&side)?;
+    let mut meta = ensure_meta_locked(md_path)?;
+    let idx = find_index(&meta, id).ok_or(Error::AnnotationNotFound { id })?;
+    let rec = &mut meta.comments[idx];
+    check_revision(rec, expected_revision)?;
+    if rec.disposition != Some(SuggestionDisposition::Accepting) {
+        return Err(Error::IncompleteAcceptance {
+            id,
+            message: "suggestion is not in accepting state".into(),
+        });
+    }
+    if rec.acceptance_op_id != Some(acceptance_op_id) {
+        return Err(Error::IncompleteAcceptance {
+            id,
+            message: "acceptance operation id does not match".into(),
+        });
+    }
+    rec.disposition = Some(SuggestionDisposition::Pending);
+    rec.resolved = false;
+    rec.clear_acceptance_fields();
+    bump_checked(rec)?;
+    finish(md_path, &mut meta, id)
+}
+
+/// Reject a pending suggestion.
 pub fn reject_suggestion(
     md_path: &Path,
     id: Uuid,
@@ -246,27 +433,46 @@ pub fn reject_suggestion(
             message: "reject requires a suggestion".into(),
         });
     }
-    if rec.revision != expected_revision {
-        return Err(Error::AnnotationConflict {
-            id,
-            expected_revision,
-            actual_revision: rec.revision,
-        });
+    check_revision(rec, expected_revision)?;
+    let d = rec
+        .suggestion_disposition()
+        .unwrap_or(SuggestionDisposition::Pending);
+    match d {
+        SuggestionDisposition::Rejected => {
+            return Ok(AnnotationOpResult {
+                annotation: rec.clone(),
+                comments: meta.comments.clone(),
+                run_id: meta.run.id,
+            });
+        }
+        SuggestionDisposition::Accepted => {
+            return Err(Error::AnnotationPrecondition {
+                id: Some(id),
+                message: "cannot reject an accepted suggestion".into(),
+            });
+        }
+        SuggestionDisposition::Accepting => {
+            return Err(Error::IncompleteAcceptance {
+                id,
+                message: "cancel acceptance before rejecting".into(),
+            });
+        }
+        SuggestionDisposition::ResolvedLegacy => {
+            return Err(Error::AnnotationPrecondition {
+                id: Some(id),
+                message: "reopen legacy resolved suggestion before rejecting".into(),
+            });
+        }
+        SuggestionDisposition::Pending => {}
     }
-    if rec.resolved {
-        return Ok(AnnotationOpResult {
-            annotation: rec.clone(),
-            comments: meta.comments.clone(),
-            run_id: meta.run.id,
-        });
-    }
+    rec.disposition = Some(SuggestionDisposition::Rejected);
     rec.resolved = true;
-    bump(rec);
+    rec.clear_acceptance_fields();
+    bump_checked(rec)?;
     finish(md_path, &mut meta, id)
 }
 
-/// Import annotations that are missing by ID only (never overwrite, never delete).
-/// Used by deprecated full-list helper and tests.
+/// Import missing IDs only. New records always revision 1.
 pub fn import_missing_annotations(md_path: &Path, incoming: &[CommentRecord]) -> Result<RunMeta> {
     let side = moraine_sidecar_path(md_path);
     let _lock = SidecarLock::acquire(&side)?;
@@ -274,9 +480,22 @@ pub fn import_missing_annotations(md_path: &Path, incoming: &[CommentRecord]) ->
     let mut changed = false;
     for c in incoming {
         if find_index(&meta, c.id).is_none() {
-            let mut rec = c.clone();
-            if rec.revision == 0 {
-                rec.revision = 1;
+            let mut rec = CommentRecord::new(
+                c.id,
+                c.body.clone(),
+                c.author.clone(),
+                c.quote.clone(),
+                c.kind,
+            );
+            // Preserve body/kind from client but force revision 1 and disposition rules.
+            rec.body = c.body.clone();
+            rec.author = c.author.clone();
+            rec.quote = c.quote.clone();
+            rec.created_at = c.created_at;
+            rec.revision = 1;
+            if rec.kind == AnnotationKind::Suggestion {
+                rec.disposition = Some(SuggestionDisposition::Pending);
+                rec.resolved = false;
             }
             meta.comments.push(rec);
             changed = true;
@@ -290,12 +509,6 @@ pub fn import_missing_annotations(md_path: &Path, incoming: &[CommentRecord]) ->
 }
 
 /// Safe host reconciliation of a live-session snapshot.
-///
-/// * New IDs → create
-/// * Same content → no-op
-/// * Same ID, different content, matching `session.revision` == disk.revision → update + bump
-/// * Same ID, different content, revision mismatch → conflict (keep disk)
-/// * Disk-only annotations → preserved (never deleted)
 pub fn reconcile_session_annotations(
     md_path: &Path,
     session: &[CommentRecord],
@@ -310,12 +523,22 @@ pub fn reconcile_session_annotations(
     for s in session {
         match find_index(&meta, s.id) {
             None => {
-                let mut rec = s.clone();
-                if rec.revision == 0 {
-                    rec.revision = 1;
+                // Always revision 1 for unknown IDs; ignore client revision/disposition terminals.
+                let mut rec = CommentRecord::new(
+                    s.id,
+                    s.body.clone(),
+                    s.author.clone(),
+                    s.quote.clone(),
+                    s.kind,
+                );
+                rec.created_at = s.created_at;
+                if rec.kind == AnnotationKind::Comment {
+                    rec.resolved = s.resolved;
+                } else {
+                    rec.disposition = Some(SuggestionDisposition::Pending);
+                    rec.resolved = false;
                 }
-                // New from session: start at revision 1 if client sent 1.
-                rec.revision = rec.revision.max(1);
+                rec.revision = 1;
                 meta.comments.push(rec);
                 created += 1;
             }
@@ -323,6 +546,35 @@ pub fn reconcile_session_annotations(
                 let disk = &meta.comments[idx];
                 if disk.content_matches(s) {
                     continue;
+                }
+                // Protect accepting and terminal outcomes from stale session pending.
+                if disk.kind == AnnotationKind::Suggestion {
+                    let dd = disk
+                        .suggestion_disposition()
+                        .unwrap_or(SuggestionDisposition::Pending);
+                    let sd = s
+                        .suggestion_disposition()
+                        .unwrap_or(SuggestionDisposition::Pending);
+                    if dd == SuggestionDisposition::Accepting {
+                        conflicts.push(ReconcileConflict {
+                            annotation_id: s.id,
+                            expected_revision: s.revision,
+                            actual_revision: disk.revision,
+                            message: "disk has active acceptance reservation; kept disk".into(),
+                        });
+                        continue;
+                    }
+                    if dd.is_terminal() && sd == SuggestionDisposition::Pending {
+                        conflicts.push(ReconcileConflict {
+                            annotation_id: s.id,
+                            expected_revision: s.revision,
+                            actual_revision: disk.revision,
+                            message:
+                                "session pending cannot revert durable accepted/rejected suggestion"
+                                    .into(),
+                        });
+                        continue;
+                    }
                 }
                 if s.revision != disk.revision {
                     conflicts.push(ReconcileConflict {
@@ -335,13 +587,31 @@ pub fn reconcile_session_annotations(
                     });
                     continue;
                 }
-                // Apply session content, bump revision.
                 let rev = disk.revision;
+                let created_at = disk.created_at;
                 let mut next = s.clone();
                 next.revision = rev;
-                bump(&mut next);
-                // Preserve created_at from disk if session rewrote it casually.
-                next.created_at = disk.created_at;
+                next.created_at = created_at;
+                next.normalize_compat();
+                if next.kind == AnnotationKind::Suggestion {
+                    if next.disposition.is_none() {
+                        next.disposition = Some(if next.resolved {
+                            SuggestionDisposition::ResolvedLegacy
+                        } else {
+                            SuggestionDisposition::Pending
+                        });
+                    }
+                    next.sync_resolved_from_disposition();
+                }
+                if let Err(e) = bump_checked(&mut next) {
+                    conflicts.push(ReconcileConflict {
+                        annotation_id: s.id,
+                        expected_revision: rev,
+                        actual_revision: rev,
+                        message: e.to_string(),
+                    });
+                    continue;
+                }
                 meta.comments[idx] = next;
                 updated += 1;
             }
@@ -362,7 +632,6 @@ pub fn reconcile_session_annotations(
     })
 }
 
-/// Payload for a single mutation (optional typed dispatch).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum AnnotationMutation {
@@ -384,10 +653,6 @@ pub enum AnnotationMutation {
         expected_revision: u32,
     },
     Reopen {
-        id: Uuid,
-        expected_revision: u32,
-    },
-    AcceptSuggestion {
         id: Uuid,
         expected_revision: u32,
     },
@@ -427,16 +692,15 @@ pub fn apply_mutation(md_path: &Path, m: AnnotationMutation) -> Result<Annotatio
             id,
             expected_revision,
         } => reopen_annotation(md_path, id, expected_revision),
-        AnnotationMutation::AcceptSuggestion {
-            id,
-            expected_revision,
-        } => accept_suggestion(md_path, id, expected_revision),
         AnnotationMutation::RejectSuggestion {
             id,
             expected_revision,
         } => reject_suggestion(md_path, id, expected_revision),
     }
 }
+
+// Keep old name as alias for reject only path used by UI after two-phase accept.
+pub use reject_suggestion as reject_suggestion_op;
 
 #[cfg(test)]
 mod tests {
@@ -455,15 +719,229 @@ mod tests {
         (dir, md)
     }
 
+    fn hash_md(md: &Path) -> String {
+        content_hash(&fs::read_to_string(md).unwrap())
+    }
+
     #[test]
-    fn create_two_different_survive() {
+    fn create_suggestion_pending() {
         let (_d, md) = setup();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
-        create_annotation(&md, a, "a", "A", "q", AnnotationKind::Comment).unwrap();
-        create_annotation(&md, b, "b", "B", "q", AnnotationKind::Suggestion).unwrap();
+        let id = Uuid::new_v4();
+        let r = create_annotation(&md, id, "rep", "A", "run", AnnotationKind::Suggestion).unwrap();
+        assert_eq!(
+            r.annotation.disposition,
+            Some(SuggestionDisposition::Pending)
+        );
+        assert!(!r.annotation.resolved);
+        assert_eq!(r.annotation.revision, 1);
+    }
+
+    #[test]
+    fn reject_sets_rejected() {
+        let (_d, md) = setup();
+        let id = Uuid::new_v4();
+        create_annotation(&md, id, "rep", "A", "run", AnnotationKind::Suggestion).unwrap();
+        let r = reject_suggestion(&md, id, 1).unwrap();
+        assert_eq!(
+            r.annotation.disposition,
+            Some(SuggestionDisposition::Rejected)
+        );
+        assert!(r.annotation.resolved);
+        assert_eq!(r.annotation.revision, 2);
+    }
+
+    #[test]
+    fn two_phase_accept_success() {
+        let (_d, md) = setup();
+        let id = Uuid::new_v4();
+        create_annotation(&md, id, "NEW", "A", "run", AnnotationKind::Suggestion).unwrap();
+        let h0 = hash_md(&md);
+        let begin = begin_accept_suggestion(&md, id, 1, &h0).unwrap();
+        assert_eq!(
+            begin.annotation.disposition,
+            Some(SuggestionDisposition::Accepting)
+        );
+        assert_eq!(begin.annotation.revision, 2);
+        // Apply markdown change and save
+        fs::write(&md, "# NEW\n").unwrap();
+        let h1 = hash_md(&md);
+        let done = complete_accept_suggestion(&md, id, 2, begin.acceptance_op_id, &h1).unwrap();
+        assert_eq!(
+            done.annotation.disposition,
+            Some(SuggestionDisposition::Accepted)
+        );
+        assert_eq!(done.annotation.revision, 3);
+        assert_eq!(
+            done.annotation.applied_content_hash.as_deref(),
+            Some(h1.as_str())
+        );
+    }
+
+    #[test]
+    fn begin_requires_markdown_hash() {
+        let (_d, md) = setup();
+        let id = Uuid::new_v4();
+        create_annotation(&md, id, "rep", "A", "run", AnnotationKind::Suggestion).unwrap();
+        let err = begin_accept_suggestion(&md, id, 1, "0".repeat(64).as_str()).unwrap_err();
+        assert!(matches!(err, Error::RevisionConflict { .. }));
+    }
+
+    #[test]
+    fn concurrent_begin_one_wins() {
+        let (_d, md) = setup();
+        let id = Uuid::new_v4();
+        create_annotation(&md, id, "rep", "A", "run", AnnotationKind::Suggestion).unwrap();
+        let h = hash_md(&md);
+        let barrier = Arc::new(Barrier::new(2));
+        let md1 = md.clone();
+        let md2 = md.clone();
+        let h1 = h.clone();
+        let h2 = h;
+        let b1 = barrier.clone();
+        let b2 = barrier;
+        let t1 = thread::spawn(move || {
+            b1.wait();
+            begin_accept_suggestion(&md1, id, 1, &h1)
+        });
+        let t2 = thread::spawn(move || {
+            b2.wait();
+            begin_accept_suggestion(&md2, id, 1, &h2)
+        });
+        let r1 = t1.join().unwrap();
+        let r2 = t2.join().unwrap();
+        assert_eq!(r1.is_ok() as u8 + r2.is_ok() as u8, 1);
+        assert_eq!(r1.is_err() as u8 + r2.is_err() as u8, 1);
+    }
+
+    #[test]
+    fn cancel_restores_pending() {
+        let (_d, md) = setup();
+        let id = Uuid::new_v4();
+        create_annotation(&md, id, "rep", "A", "run", AnnotationKind::Suggestion).unwrap();
+        let h = hash_md(&md);
+        let b = begin_accept_suggestion(&md, id, 1, &h).unwrap();
+        let c = cancel_accept_suggestion(&md, id, 2, b.acceptance_op_id).unwrap();
+        assert_eq!(
+            c.annotation.disposition,
+            Some(SuggestionDisposition::Pending)
+        );
+        assert_eq!(c.annotation.revision, 3);
+    }
+
+    #[test]
+    fn reject_accepted_fails() {
+        let (_d, md) = setup();
+        let id = Uuid::new_v4();
+        create_annotation(&md, id, "rep", "A", "run", AnnotationKind::Suggestion).unwrap();
+        let h0 = hash_md(&md);
+        let b = begin_accept_suggestion(&md, id, 1, &h0).unwrap();
+        fs::write(&md, "x\n").unwrap();
+        let h1 = hash_md(&md);
+        complete_accept_suggestion(&md, id, 2, b.acceptance_op_id, &h1).unwrap();
+        let err = reject_suggestion(&md, id, 3).unwrap_err();
+        assert!(matches!(err, Error::AnnotationPrecondition { .. }));
+    }
+
+    #[test]
+    fn accept_rejected_fails() {
+        let (_d, md) = setup();
+        let id = Uuid::new_v4();
+        create_annotation(&md, id, "rep", "A", "run", AnnotationKind::Suggestion).unwrap();
+        reject_suggestion(&md, id, 1).unwrap();
+        let h = hash_md(&md);
+        let err = begin_accept_suggestion(&md, id, 2, &h).unwrap_err();
+        assert!(matches!(err, Error::AnnotationPrecondition { .. }));
+    }
+
+    #[test]
+    fn reject_idempotent() {
+        let (_d, md) = setup();
+        let id = Uuid::new_v4();
+        create_annotation(&md, id, "rep", "A", "run", AnnotationKind::Suggestion).unwrap();
+        reject_suggestion(&md, id, 1).unwrap();
+        let r = reject_suggestion(&md, id, 2).unwrap();
+        assert_eq!(r.annotation.revision, 2);
+    }
+
+    #[test]
+    fn new_session_ids_force_revision_1() {
+        let (_d, md) = setup();
+        crate::run_meta::ensure_run_meta(&md).unwrap();
+        let mut s0 = CommentRecord::new(Uuid::new_v4(), "a", "A", "q", AnnotationKind::Suggestion);
+        s0.revision = 0;
+        let mut s999 =
+            CommentRecord::new(Uuid::new_v4(), "b", "B", "q", AnnotationKind::Suggestion);
+        s999.revision = 999;
+        let res = reconcile_session_annotations(&md, &[s0, s999]).unwrap();
+        assert_eq!(res.created, 2);
+        for c in res.comments {
+            assert_eq!(c.revision, 1);
+            assert_eq!(c.disposition, Some(SuggestionDisposition::Pending));
+        }
+    }
+
+    #[test]
+    fn reconcile_stale_pending_vs_accepted() {
+        let (_d, md) = setup();
+        let id = Uuid::new_v4();
+        create_annotation(&md, id, "rep", "A", "run", AnnotationKind::Suggestion).unwrap();
+        let h0 = hash_md(&md);
+        let b = begin_accept_suggestion(&md, id, 1, &h0).unwrap();
+        fs::write(&md, "done\n").unwrap();
+        let h1 = hash_md(&md);
+        complete_accept_suggestion(&md, id, 2, b.acceptance_op_id, &h1).unwrap();
+        let mut stale = CommentRecord::new(id, "rep", "A", "run", AnnotationKind::Suggestion);
+        stale.revision = 1;
+        stale.disposition = Some(SuggestionDisposition::Pending);
+        let res = reconcile_session_annotations(&md, &[stale]).unwrap();
+        assert_eq!(res.conflicts.len(), 1);
+        assert_eq!(
+            res.comments[0].disposition,
+            Some(SuggestionDisposition::Accepted)
+        );
+    }
+
+    #[test]
+    fn reconcile_vs_accepting() {
+        let (_d, md) = setup();
+        let id = Uuid::new_v4();
+        create_annotation(&md, id, "rep", "A", "run", AnnotationKind::Suggestion).unwrap();
+        let h = hash_md(&md);
+        begin_accept_suggestion(&md, id, 1, &h).unwrap();
+        let mut s = CommentRecord::new(id, "rep", "A", "run", AnnotationKind::Suggestion);
+        s.revision = 2;
+        s.disposition = Some(SuggestionDisposition::Pending);
+        let res = reconcile_session_annotations(&md, &[s]).unwrap();
+        assert_eq!(res.conflicts.len(), 1);
+        assert_eq!(
+            res.comments[0].disposition,
+            Some(SuggestionDisposition::Accepting)
+        );
+    }
+
+    #[test]
+    fn complete_requires_op_id() {
+        let (_d, md) = setup();
+        let id = Uuid::new_v4();
+        create_annotation(&md, id, "rep", "A", "run", AnnotationKind::Suggestion).unwrap();
+        let h0 = hash_md(&md);
+        begin_accept_suggestion(&md, id, 1, &h0).unwrap();
+        fs::write(&md, "x\n").unwrap();
+        let h1 = hash_md(&md);
+        let err = complete_accept_suggestion(&md, id, 2, Uuid::new_v4(), &h1).unwrap_err();
+        assert!(matches!(err, Error::IncompleteAcceptance { .. }));
+    }
+
+    #[test]
+    fn decisions_survive() {
+        let (_d, md) = setup();
+        let h = content_hash("# run\n");
+        record_decision(&md, DecisionKind::Approved, "R", None, &h).unwrap();
+        let id = Uuid::new_v4();
+        create_annotation(&md, id, "n", "A", "run", AnnotationKind::Comment).unwrap();
         let meta = load_run_meta_readonly(&md).unwrap().unwrap();
-        assert_eq!(meta.comments.len(), 2);
+        assert_eq!(meta.decisions.len(), 1);
+        assert_eq!(meta.schema_version, crate::run_meta::SCHEMA_VERSION);
     }
 
     #[test]
@@ -487,211 +965,27 @@ mod tests {
         });
         t1.join().unwrap();
         t2.join().unwrap();
-        let meta = load_run_meta_readonly(&md).unwrap().unwrap();
-        assert_eq!(meta.comments.len(), 2);
+        assert_eq!(
+            load_run_meta_readonly(&md).unwrap().unwrap().comments.len(),
+            2
+        );
     }
 
     #[test]
-    fn same_annotation_update_conflict() {
+    fn reopen_accepted_to_pending() {
         let (_d, md) = setup();
         let id = Uuid::new_v4();
-        let r = create_annotation(&md, id, "v1", "A", "q", AnnotationKind::Comment).unwrap();
-        assert_eq!(r.annotation.revision, 1);
-        let ok = update_annotation(&md, id, 1, Some("v2".into()), None).unwrap();
-        assert_eq!(ok.annotation.revision, 2);
-        let err = update_annotation(&md, id, 1, Some("stale".into()), None).unwrap_err();
-        match err {
-            Error::AnnotationConflict {
-                expected_revision,
-                actual_revision,
-                ..
-            } => {
-                assert_eq!(expected_revision, 1);
-                assert_eq!(actual_revision, 2);
-            }
-            e => panic!("expected conflict, got {e}"),
-        }
-        let meta = load_run_meta_readonly(&md).unwrap().unwrap();
-        assert_eq!(meta.comments[0].body, "v2");
-    }
-
-    #[test]
-    fn concurrent_same_token_one_wins() {
-        let (_d, md) = setup();
-        let id = Uuid::new_v4();
-        create_annotation(&md, id, "v1", "A", "q", AnnotationKind::Comment).unwrap();
-        let barrier = Arc::new(Barrier::new(2));
-        let md1 = md.clone();
-        let md2 = md.clone();
-        let b1 = barrier.clone();
-        let b2 = barrier;
-        let t1 = thread::spawn(move || {
-            b1.wait();
-            update_annotation(&md1, id, 1, Some("a".into()), None)
-        });
-        let t2 = thread::spawn(move || {
-            b2.wait();
-            update_annotation(&md2, id, 1, Some("b".into()), None)
-        });
-        let r1 = t1.join().unwrap();
-        let r2 = t2.join().unwrap();
-        let wins = r1.is_ok() as u8 + r2.is_ok() as u8;
-        let fails = r1.is_err() as u8 + r2.is_err() as u8;
-        assert_eq!(wins, 1);
-        assert_eq!(fails, 1);
-        let meta = load_run_meta_readonly(&md).unwrap().unwrap();
-        assert_eq!(meta.comments.len(), 1);
-        assert_eq!(meta.comments[0].revision, 2);
-    }
-
-    #[test]
-    fn resolve_vs_update_conflict() {
-        let (_d, md) = setup();
-        let id = Uuid::new_v4();
-        create_annotation(&md, id, "x", "A", "q", AnnotationKind::Comment).unwrap();
-        resolve_annotation(&md, id, 1).unwrap();
-        let err = update_annotation(&md, id, 1, Some("y".into()), None).unwrap_err();
-        assert!(matches!(err, Error::AnnotationConflict { .. }));
-    }
-
-    #[test]
-    fn accept_vs_reject_conflict() {
-        let (_d, md) = setup();
-        let id = Uuid::new_v4();
-        create_annotation(&md, id, "rep", "A", "q", AnnotationKind::Suggestion).unwrap();
-        accept_suggestion(&md, id, 1).unwrap();
-        let err = reject_suggestion(&md, id, 1).unwrap_err();
-        assert!(matches!(err, Error::AnnotationConflict { .. }));
-    }
-
-    #[test]
-    fn duplicate_create_errors() {
-        let (_d, md) = setup();
-        let id = Uuid::new_v4();
-        create_annotation(&md, id, "a", "A", "q", AnnotationKind::Comment).unwrap();
-        let err = create_annotation(&md, id, "b", "B", "q", AnnotationKind::Comment).unwrap_err();
-        assert!(matches!(err, Error::DuplicateAnnotation { .. }));
-    }
-
-    #[test]
-    fn missing_id_not_found() {
-        let (_d, md) = setup();
-        let err = resolve_annotation(&md, Uuid::new_v4(), 1).unwrap_err();
-        assert!(matches!(err, Error::AnnotationNotFound { .. }));
-    }
-
-    #[test]
-    fn resolve_idempotent() {
-        let (_d, md) = setup();
-        let id = Uuid::new_v4();
-        create_annotation(&md, id, "a", "A", "q", AnnotationKind::Comment).unwrap();
-        let r1 = resolve_annotation(&md, id, 1).unwrap();
-        assert_eq!(r1.annotation.revision, 2);
-        let r2 = resolve_annotation(&md, id, 2).unwrap();
-        assert_eq!(r2.annotation.revision, 2);
-        assert!(r2.annotation.resolved);
-    }
-
-    #[test]
-    fn decisions_survive_annotation_ops() {
-        let (_d, md) = setup();
-        let h = content_hash("# run\n");
-        record_decision(&md, DecisionKind::Approved, "R", None, &h).unwrap();
-        let id = Uuid::new_v4();
-        create_annotation(&md, id, "note", "A", "run", AnnotationKind::Comment).unwrap();
-        let meta = load_run_meta_readonly(&md).unwrap().unwrap();
-        assert_eq!(meta.decisions.len(), 1);
-        assert_eq!(meta.comments.len(), 1);
-    }
-
-    #[test]
-    fn reconcile_does_not_delete() {
-        let (_d, md) = setup();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
-        create_annotation(&md, a, "a", "A", "q", AnnotationKind::Comment).unwrap();
-        create_annotation(&md, b, "b", "B", "q", AnnotationKind::Comment).unwrap();
-        // Session only knows A (stale snapshot).
-        let only_a = vec![CommentRecord::new(
-            a,
-            "a",
-            "A",
-            "q",
-            AnnotationKind::Comment,
-        )];
-        let res = reconcile_session_annotations(&md, &only_a).unwrap();
-        assert_eq!(res.comments.len(), 2);
-        assert!(res.comments.iter().any(|c| c.id == b));
-    }
-
-    #[test]
-    fn reconcile_conflict_keeps_disk() {
-        let (_d, md) = setup();
-        let id = Uuid::new_v4();
-        create_annotation(&md, id, "disk", "A", "q", AnnotationKind::Comment).unwrap();
-        update_annotation(&md, id, 1, Some("disk2".into()), None).unwrap();
-        let mut session = CommentRecord::new(id, "session", "A", "q", AnnotationKind::Comment);
-        session.revision = 1; // stale
-        let res = reconcile_session_annotations(&md, &[session]).unwrap();
-        assert_eq!(res.conflicts.len(), 1);
-        assert_eq!(res.comments[0].body, "disk2");
-    }
-
-    #[test]
-    fn concurrent_resolve_and_other_create() {
-        let (_d, md) = setup();
-        let a = Uuid::new_v4();
-        create_annotation(&md, a, "a", "A", "q", AnnotationKind::Comment).unwrap();
-        let barrier = Arc::new(Barrier::new(2));
-        let md1 = md.clone();
-        let md2 = md.clone();
-        let b1 = barrier.clone();
-        let b2 = barrier;
-        let id_b = Uuid::new_v4();
-        let t1 = thread::spawn(move || {
-            b1.wait();
-            resolve_annotation(&md1, a, 1).unwrap()
-        });
-        let t2 = thread::spawn(move || {
-            b2.wait();
-            create_annotation(&md2, id_b, "b", "B", "q", AnnotationKind::Comment).unwrap()
-        });
-        t1.join().unwrap();
-        t2.join().unwrap();
-        let meta = load_run_meta_readonly(&md).unwrap().unwrap();
-        assert_eq!(meta.comments.len(), 2);
-        assert!(meta.comments.iter().find(|c| c.id == a).unwrap().resolved);
-    }
-
-    #[test]
-    fn accept_requires_suggestion() {
-        let (_d, md) = setup();
-        let id = Uuid::new_v4();
-        create_annotation(&md, id, "c", "A", "q", AnnotationKind::Comment).unwrap();
-        let err = accept_suggestion(&md, id, 1).unwrap_err();
-        assert!(matches!(err, Error::InvalidAnnotationKind { .. }));
-    }
-
-    #[test]
-    fn legacy_record_without_revision_loads() {
-        let (_d, md) = setup();
-        crate::run_meta::ensure_run_meta(&md).unwrap();
-        let path = moraine_sidecar_path(&md);
-        let raw = fs::read_to_string(&path).unwrap();
-        let mut v: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        v["comments"] = serde_json::json!([{
-            "id": "00000000-0000-4000-8000-000000000042",
-            "body": "legacy",
-            "author": "A",
-            "quote": "run",
-            "createdAt": "2020-01-01T00:00:00Z",
-            "resolved": false,
-            "kind": "comment"
-        }]);
-        fs::write(&path, serde_json::to_string_pretty(&v).unwrap()).unwrap();
-        let meta = load_run_meta_readonly(&md).unwrap().unwrap();
-        assert_eq!(meta.comments[0].revision, 1);
-        let id = meta.comments[0].id;
-        resolve_annotation(&md, id, 1).unwrap();
+        create_annotation(&md, id, "rep", "A", "run", AnnotationKind::Suggestion).unwrap();
+        let h0 = hash_md(&md);
+        let b = begin_accept_suggestion(&md, id, 1, &h0).unwrap();
+        fs::write(&md, "x\n").unwrap();
+        let h1 = hash_md(&md);
+        complete_accept_suggestion(&md, id, 2, b.acceptance_op_id, &h1).unwrap();
+        let r = reopen_annotation(&md, id, 3).unwrap();
+        assert_eq!(
+            r.annotation.disposition,
+            Some(SuggestionDisposition::Pending)
+        );
+        assert!(!r.annotation.resolved);
     }
 }

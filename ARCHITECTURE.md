@@ -106,7 +106,7 @@ Content hash: SHA-256 of exact UTF-8 Markdown bytes (no line-ending normalizatio
 
 Ledger mutations (init, decide, annotation operations, migration) take a per-document lock file (`*.moraine.json.lock`), re-read after lock, then write via unique temp file + replace. There is no direct truncate-and-rewrite fallback.
 
-Annotations use explicit operations (`create`, `update`, `resolve`, `reopen`, `accept_suggestion`, `reject_suggestion`) with a per-annotation monotonic `revision` concurrency token. Host Save reconciles the live session by stable ID without deleting disk-only annotations or blindly replacing the full list. Same-annotation updates with a stale revision return an explicit conflict.
+Annotations use explicit operations with a per-annotation monotonic `revision` concurrency token (checked increment; overflow errors). Suggestions store a durable disposition: `pending`, `accepting`, `accepted`, `rejected`, or `resolved_legacy` (schema v3). Acceptance is two-phase: begin (reserve + bind content hash), apply and Save Markdown, then complete. Incomplete `accepting` state is recoverable (cancel). Host Save reconciles the live session by stable ID without deletes; new session IDs always start at revision 1.
 
 `moraine status` is read-only. `moraine init` (or desktop open / decide) creates the ledger.
 

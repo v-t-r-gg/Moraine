@@ -28,11 +28,9 @@ pub enum Error {
     #[error("history error: {0}")]
     History(String),
 
-    /// Markdown on disk no longer matches the revision the caller expected.
     #[error("revision conflict: expected content hash {expected}, actual {actual}")]
     RevisionConflict { expected: String, actual: String },
 
-    /// Another process holds the ledger lock, or the lock could not be taken.
     #[error("ledger busy: {0}")]
     LedgerBusy(String),
 
@@ -60,6 +58,12 @@ pub enum Error {
     #[error("invalid annotation kind for {id}: {message}")]
     InvalidAnnotationKind { id: uuid::Uuid, message: String },
 
+    #[error("incomplete acceptance for {id}: {message}")]
+    IncompleteAcceptance { id: uuid::Uuid, message: String },
+
+    #[error("annotation revision overflow for {id}")]
+    RevisionOverflow { id: uuid::Uuid },
+
     #[error("{0}")]
     Other(String),
 }
@@ -79,22 +83,23 @@ impl Error {
             Self::Serde(_) => "serde",
             Self::Watcher(_) => "watcher",
             Self::History(_) => "history",
-            Self::RevisionConflict { .. } => "revision_conflict",
+            Self::RevisionConflict { .. } => "document_revision_conflict",
             Self::LedgerBusy(_) => "ledger_busy",
             Self::AnnotationNotFound { .. } => "annotation_not_found",
             Self::DuplicateAnnotation { .. } => "duplicate_annotation",
             Self::AnnotationConflict { .. } => "annotation_conflict",
             Self::AnnotationPrecondition { .. } => "annotation_precondition",
             Self::InvalidAnnotationKind { .. } => "invalid_annotation_kind",
+            Self::IncompleteAcceptance { .. } => "incomplete_acceptance",
+            Self::RevisionOverflow { .. } => "revision_overflow",
             Self::Other(_) => "error",
         }
     }
 
-    /// Structured JSON object suitable for CLI/Tauri error payloads.
     pub fn to_json_value(&self) -> serde_json::Value {
         match self {
             Self::RevisionConflict { expected, actual } => serde_json::json!({
-                "kind": "revision_conflict",
+                "kind": "document_revision_conflict",
                 "expectedContentHash": expected,
                 "actualContentHash": actual,
                 "message": "The Markdown file changed before the operation completed.",
@@ -133,6 +138,16 @@ impl Error {
                 "kind": "invalid_annotation_kind",
                 "annotationId": id.to_string(),
                 "message": message,
+            }),
+            Self::IncompleteAcceptance { id, message } => serde_json::json!({
+                "kind": "incomplete_acceptance",
+                "annotationId": id.to_string(),
+                "message": message,
+            }),
+            Self::RevisionOverflow { id } => serde_json::json!({
+                "kind": "revision_overflow",
+                "annotationId": id.to_string(),
+                "message": "Annotation revision cannot be advanced further.",
             }),
             other => serde_json::json!({
                 "kind": other.kind_str(),

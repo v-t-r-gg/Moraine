@@ -1,5 +1,9 @@
 <script lang="ts">
-  import type { CommentRecord } from "$lib/editor/comments";
+  import {
+    dispositionLabel,
+    isResolvedView,
+    type CommentRecord,
+  } from "$lib/editor/comments";
 
   interface Props {
     comments: CommentRecord[];
@@ -10,6 +14,7 @@
     onReopen: (id: string) => void;
     onAccept: (id: string) => void;
     onReject: (id: string) => void;
+    onCancelAccept?: (id: string) => void;
     onFocus: (id: string) => void;
     onClose: () => void;
   }
@@ -23,6 +28,7 @@
     onReopen,
     onAccept,
     onReject,
+    onCancelAccept,
     onFocus,
     onClose,
   }: Props = $props();
@@ -30,7 +36,7 @@
   const orphanSet = $derived(new Set(orphanedIds));
 
   const visible = $derived(
-    showResolved ? comments : comments.filter((c) => !c.resolved),
+    showResolved ? comments : comments.filter((c) => !isResolvedView(c)),
   );
 
   function when(iso: string): string {
@@ -70,15 +76,30 @@
         {#each visible as c (c.id)}
           {@const isSug = c.kind === "suggestion"}
           {@const orphan = orphanSet.has(c.id)}
+          {@const terminal = isResolvedView(c)}
+          {@const accepting = isSug && c.disposition === "accepting"}
           <li
             class="rounded-lg border p-2 text-xs"
-            style="border-color: {orphan ? '#dc2626' : 'var(--border)'}; opacity: {c.resolved ? 0.65 : 1};"
+            style="border-color: {accepting
+              ? '#f59e0b'
+              : orphan
+                ? '#dc2626'
+                : 'var(--border)'}; opacity: {terminal ? 0.65 : 1};"
           >
             <button type="button" class="w-full text-left" onclick={() => onFocus(c.id)}>
               <div class="mb-1 text-[10px] font-semibold uppercase tracking-wide"
-                style="color: {isSug ? '#16a34a' : 'var(--accent)'};"
+                style="color: {isSug
+                  ? c.disposition === 'accepted'
+                    ? '#16a34a'
+                    : c.disposition === 'rejected'
+                      ? '#dc2626'
+                      : accepting
+                        ? '#b45309'
+                        : '#16a34a'
+                  : 'var(--accent)'};"
               >
                 {isSug ? "Suggestion" : "Comment"}
+                · {dispositionLabel(c)}
                 {#if orphan}
                   <span style="color: #dc2626;"> · quote not found</span>
                 {/if}
@@ -95,13 +116,19 @@
               {/if}
               <div class="mt-1" style="color: var(--muted);">
                 {c.author} · {when(c.createdAt)}
-                {#if c.resolved}
-                  · resolved
-                {/if}
               </div>
             </button>
             <div class="mt-1.5 flex flex-wrap gap-2">
-              {#if c.resolved}
+              {#if accepting}
+                <button type="button" class="link" onclick={() => onAccept(c.id)} disabled>
+                  Accept (in progress)
+                </button>
+                {#if onCancelAccept}
+                  <button type="button" class="link" onclick={() => onCancelAccept(c.id)}>
+                    Cancel acceptance
+                  </button>
+                {/if}
+              {:else if terminal}
                 <button type="button" class="link" onclick={() => onReopen(c.id)}>Reopen</button>
               {:else if isSug}
                 <button type="button" class="link" onclick={() => onAccept(c.id)}>Accept</button>

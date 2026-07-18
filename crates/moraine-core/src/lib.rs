@@ -16,14 +16,15 @@ pub mod share;
 pub mod watcher;
 
 pub use annotation_ops::{
-    accept_suggestion, apply_mutation, create_annotation, reconcile_session_annotations,
-    reject_suggestion, reopen_annotation, resolve_annotation, update_annotation,
-    AnnotationMutation, AnnotationOpResult, ReconcileResult,
+    apply_mutation, begin_accept_suggestion, cancel_accept_suggestion, complete_accept_suggestion,
+    create_annotation, reconcile_session_annotations, reject_suggestion, reopen_annotation,
+    resolve_annotation, update_annotation, AnnotationMutation, AnnotationOpResult,
+    BeginAcceptResult, ReconcileResult,
 };
 #[allow(deprecated)]
 pub use comments::{
     comments_sidecar_path, merge_comments, read_comments_sidecar, write_comments_sidecar,
-    AnnotationKind, CommentRecord, CommentsFile,
+    AnnotationKind, CommentRecord, CommentsFile, SuggestionDisposition,
 };
 pub use document::{Document, DocumentId, DocumentMeta, DocumentSnapshot};
 pub use error::{Error, Result};

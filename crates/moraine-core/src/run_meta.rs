@@ -19,7 +19,8 @@ use crate::comments::{comments_sidecar_path, CommentRecord, CommentsFile};
 use crate::error::{Error, Result};
 
 /// Current sidecar schema. Unknown greater versions are rejected.
-pub const SCHEMA_VERSION: u32 = 2;
+/// v3: suggestion disposition + two-phase acceptance fields.
+pub const SCHEMA_VERSION: u32 = 3;
 
 pub fn moraine_sidecar_path(md_path: &Path) -> PathBuf {
     let mut s = md_path.as_os_str().to_os_string();
@@ -209,14 +210,28 @@ fn review_snapshot_init(meta: &RunMeta, markdown: &str, initialized: bool) -> Re
 }
 
 fn parse_meta_raw(raw: &str) -> Result<RunMeta> {
-    let meta: RunMeta = serde_json::from_str(raw)?;
+    let mut meta: RunMeta = serde_json::from_str(raw)?;
     if meta.schema_version > SCHEMA_VERSION {
         return Err(Error::other(format!(
             "unsupported moraine sidecar schema version {} (max {})",
             meta.schema_version, SCHEMA_VERSION
         )));
     }
+    // Normalize comment compatibility fields in memory (disposition defaults).
+    for c in &mut meta.comments {
+        c.normalize_compat();
+    }
     Ok(meta)
+}
+
+/// Ensure written ledger uses current schema version after in-memory migration.
+pub(crate) fn promote_schema(meta: &mut RunMeta) {
+    if meta.schema_version < SCHEMA_VERSION {
+        meta.schema_version = SCHEMA_VERSION;
+    }
+    for c in &mut meta.comments {
+        c.normalize_compat();
+    }
 }
 
 fn read_moraine_file(path: &Path) -> Result<RunMeta> {
@@ -347,13 +362,15 @@ pub fn ensure_run_meta(md_path: &Path) -> Result<RunMeta> {
 
 /// Write ledger without taking a lock (caller must hold `SidecarLock`).
 pub(crate) fn write_run_meta_unlocked(md_path: &Path, meta: &RunMeta) -> Result<()> {
+    let mut meta = meta.clone();
+    promote_schema(&mut meta);
     let path = moraine_sidecar_path(md_path);
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent)?;
         }
     }
-    let raw = serde_json::to_string_pretty(meta)?;
+    let raw = serde_json::to_string_pretty(&meta)?;
     write_atomic(&path, raw.as_bytes())
 }
 

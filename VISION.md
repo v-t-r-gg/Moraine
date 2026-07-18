@@ -49,7 +49,8 @@ Use "human review" as the default term. "Audit" means a careful human look at th
 | Artifact | Role |
 |----------|------|
 | `*.md` | Human-readable run narrative |
-| `*.md.comments.json` | Structured comments and suggestions (sidecar next to the file) |
+| `*.md.moraine.json` | Run ledger: stable run id, revision-bound decisions, comments, suggestions |
+| `*.md.comments.json` | Legacy annotations only; migrated into `.moraine.json` on open |
 | Local history store | Optional local edit snapshots under the Moraine data directory (not Git) |
 
 Files sit next to the work they describe and can be versioned with Git **by the user**. Moraine does not automatically commit, branch, or open pull requests.
@@ -58,18 +59,20 @@ Files sit next to the work they describe and can be versioned with Git **by the 
 
 * Agent text can be wrong, incomplete, or optimistic.
 * Supporting evidence should be linked or attached in the narrative when available.
-* Human decisions today are mainly: comments, suggestion accept/reject, and Save. Stronger structured "approve/reject run" decisions are a design direction, not a complete product surface yet.
+* Humans can leave comments, accept/reject text suggestions, and record run-level decisions (`approved` / `changes_requested` / `rejected`) bound to a content hash. Reviewer labels are user-provided, not authenticated identity.
+* When Markdown changes after a decision, that decision remains in history but is reported as **stale** until a new decision is recorded for the current revision.
 * Moraine does **not** provide authenticated reviewer identity, cryptographic integrity, or a tamper-proof audit log.
 
 ## Current scope
 
 Implemented today (high level):
 
-* CLI for file I/O, local history helpers, share/join URLs, status over path/room/relay/sidecar
+* CLI for file I/O, local history helpers, share/join URLs, status, and decide
 * Desktop/web editor over one Markdown file
 * Optional live multiplayer via an in-memory WebSocket relay
 * Host save policy when remote peers are present
-* Comments and suggestions with Yjs session state and host sidecar persistence
+* Comments and suggestions with Yjs session state and host ledger persistence
+* Run-level review decisions bound to SHA-256 content hash of Markdown
 * Mark rehydration from quote text on cold open (best effort)
 
 ## Current limitations

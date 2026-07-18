@@ -39,6 +39,9 @@ pub fn run() {
             commands::load_comments,
             commands::save_comments,
             commands::comments_sidecar_path_cmd,
+            commands::get_run_review,
+            commands::record_run_decision,
+            commands::ensure_run_id,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Moraine");

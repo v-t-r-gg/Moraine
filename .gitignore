@@ -29,5 +29,7 @@ vite.config.ts.timestamp-*
 *.log
 coverage
 
-# Moraine local data (if ever stored in-repo)
-.moraine/
+# Ad-hoc local Moraine data outside the project dogfood area
+# (project run records under .moraine/runs are committed intentionally)
+.moraine/*.tmp
+.moraine/**/*.lock

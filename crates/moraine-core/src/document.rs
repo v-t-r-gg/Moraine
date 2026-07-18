@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::atomic::write_atomic;
 use crate::error::{Error, Result};
 
 pub type DocumentId = Uuid;
@@ -130,12 +131,20 @@ impl Document {
     }
 
     pub fn save(&mut self) -> Result<()> {
-        fs::write(&self.meta.path, &self.content)?;
+        write_atomic(&self.meta.path, self.content.as_bytes())?;
         self.meta.dirty = false;
         self.meta.last_saved_at = Some(Utc::now());
         self.meta.last_modified_on_disk = file_mtime(&self.meta.path)?;
         self.meta.byte_len = self.content.len() as u64;
         Ok(())
+    }
+
+    /// Save only if on-disk Markdown hash still equals `expected_disk_hash`.
+    pub fn save_if_base_matches(&mut self, expected_disk_hash: &str) -> Result<()> {
+        if self.meta.path.exists() {
+            crate::run_meta::assert_disk_revision(&self.meta.path, expected_disk_hash)?;
+        }
+        self.save()
     }
 
     pub fn save_as(&mut self, path: impl AsRef<Path>) -> Result<()> {
@@ -145,7 +154,7 @@ impl Document {
                 fs::create_dir_all(parent)?;
             }
         }
-        fs::write(path, &self.content)?;
+        write_atomic(path, self.content.as_bytes())?;
         let path = fs::canonicalize(path)?;
         self.meta.path = path;
         self.meta.title = self
@@ -191,26 +200,9 @@ impl Document {
         String::from_utf8(bytes).map_err(|_| Error::InvalidUtf8(path.to_path_buf()))
     }
 
-    /// Write via sibling temp file + rename; falls back to direct write on EXDEV.
+    /// Write via unique same-directory temp file + safe replace (no truncate fallback).
     pub fn write_file(path: impl AsRef<Path>, content: &str) -> Result<()> {
-        let path = path.as_ref();
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent)?;
-            }
-        }
-
-        let tmp = path.with_extension(format!(
-            "{}.moraine-tmp",
-            path.extension().and_then(|e| e.to_str()).unwrap_or("md")
-        ));
-        fs::write(&tmp, content)?;
-        fs::rename(&tmp, path).or_else(|_| {
-            fs::write(path, content)?;
-            let _ = fs::remove_file(&tmp);
-            Ok::<(), std::io::Error>(())
-        })?;
-        Ok(())
+        write_atomic(path.as_ref(), content.as_bytes())
     }
 }
 

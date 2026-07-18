@@ -7,8 +7,8 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use moraine_core::{
-    find_run_by_id, init_project, run_checkpoint, run_ready, run_resume, run_show, run_start,
-    CheckpointInput, Error as CoreError, RunShowOptions, RunStartRequest,
+    find_run_by_id, init_project, resolve_existing_project, run_checkpoint, run_ready, run_resume,
+    run_show, run_start, CheckpointInput, Error as CoreError, RunShowOptions, RunStartRequest,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -221,7 +221,17 @@ pub fn dispatch_run(cmd: RunCmd) -> Result<i32> {
                 Ok(u) => u,
                 Err(c) => return Ok(c),
             };
-            let body = read_input(&input).map_err(|e| anyhow::anyhow!(e))?;
+            let body = match read_input(&input) {
+                Ok(b) => b,
+                Err(e) => {
+                    return Ok(emit_protocol(
+                        json,
+                        "invalid_checkpoint",
+                        &format!("could not read checkpoint input: {e}"),
+                        json!({ "input": input }),
+                    ));
+                }
+            };
             let payload: CheckpointInput = match serde_json::from_str(&body) {
                 Ok(p) => p,
                 Err(e) => {
@@ -359,7 +369,7 @@ pub fn dispatch_run(cmd: RunCmd) -> Result<i32> {
                 Ok(u) => u,
                 Err(c) => return Ok(c),
             };
-            let project = match moraine_core::resolve_or_init_project(project.as_deref()) {
+            let project = match resolve_existing_project(project.as_deref()) {
                 Ok(p) => p,
                 Err(e) => return Ok(emit_core(json, &e)),
             };
@@ -368,6 +378,32 @@ pub fn dispatch_run(cmd: RunCmd) -> Result<i32> {
                 Err(e) => return Ok(emit_core(json, &e)),
             };
             let launched = launch_desktop(&path).unwrap_or(false);
+            if !launched {
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&json!({
+                            "ok": false,
+                            "error": {
+                                "code": "desktop_launch_failed",
+                                "message": "Could not launch the Moraine desktop app",
+                                "details": {
+                                    "recordPath": path,
+                                    "runId": id.to_string(),
+                                    "hint": format!("MORAINE_OPEN={} npm run tauri:dev", path.display()),
+                                }
+                            },
+                            "code": EXIT_ERR,
+                        }))?
+                    );
+                } else {
+                    eprintln!(
+                        "could not launch desktop app; open manually:\n  MORAINE_OPEN={} npm run tauri:dev",
+                        path.display()
+                    );
+                }
+                return Ok(EXIT_ERR);
+            }
             if json {
                 println!(
                     "{}",
@@ -376,18 +412,12 @@ pub fn dispatch_run(cmd: RunCmd) -> Result<i32> {
                         "run": {
                             "id": id.to_string(),
                             "path": path,
-                            "launched": launched,
+                            "launched": true,
                         }
                     }))?
                 );
-            } else if launched {
-                println!("opened {}", path.display());
             } else {
-                eprintln!(
-                    "could not launch desktop app; open manually:\n  MORAINE_OPEN={} npm run tauri:dev",
-                    path.display()
-                );
-                return Ok(EXIT_ERR);
+                println!("opened {}", path.display());
             }
             Ok(EXIT_OK)
         }

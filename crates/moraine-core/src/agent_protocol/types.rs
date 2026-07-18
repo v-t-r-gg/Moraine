@@ -8,7 +8,10 @@ pub const MAX_SUMMARY_CHARS: usize = 2_000;
 pub const MAX_FIELD_CHARS: usize = 4_000;
 pub const MAX_CHECKPOINT_ITEMS: usize = 50;
 pub const MAX_RECENT_CHECKPOINTS_IN_SHOW: usize = 5;
-pub const MAX_COMPLETED_OPS_RETAINED: usize = 200;
+pub const MAX_RECENT_LIST_IN_SHOW: usize = 5;
+/// Compact lifetime idempotency index; never silently drops keys.
+/// Detail history may still be capped separately.
+pub const MAX_IDEMPOTENCY_INDEX: usize = 10_000;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -124,11 +127,10 @@ pub struct LifecycleEvent {
     pub git: Option<GitContextSummary>,
 }
 
+/// Compact lifetime idempotency record (safe to retain indefinitely).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct CompletedOp {
-    pub idempotency_key: String,
-    /// Logical payload fingerprint (SHA-256 hex of canonical JSON).
+pub struct IdempotencyRecord {
     pub payload_hash: String,
     pub op_id: Uuid,
     pub kind: String,
@@ -146,22 +148,30 @@ pub struct IncompleteOp {
     pub payload_hash: String,
     /// Hash of Markdown before this op began.
     pub base_content_hash: String,
-    /// Expected Markdown hash after successful apply (when known).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expected_content_hash: Option<String>,
+    /// Expected Markdown hash after successful apply.
+    pub expected_content_hash: String,
     pub phase: IncompletePhase,
     pub created_at: DateTime<Utc>,
+    /// Next committed agent state if Markdown reaches `expected_content_hash`.
+    /// Must not itself contain a nested incomplete_op.
+    pub pending_agent: Box<AgentRunState>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum IncompletePhase {
-    /// Sidecar marked; Markdown not yet replaced.
+    /// Sidecar intent recorded; Markdown not yet replaced.
     Begun,
-    /// Markdown written; sidecar finalization pending.
+    /// Markdown written; promotion of pending_agent still required.
     MarkdownApplied,
 }
 
+/// Committed agent-run protocol state.
+///
+/// Authority model A: Moraine-managed Markdown regions are projections of this
+/// state. Only `## Human notes` is free-form human text that survives agent
+/// mutations. Human edits outside that region are not preserved on the next
+/// protocol operation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentRunState {
@@ -183,11 +193,11 @@ pub struct AgentRunState {
     pub lifecycle_events: Vec<LifecycleEvent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ready_summary: Option<String>,
+    /// Lifetime compact idempotency index (key → record). Not silently expired.
     #[serde(default)]
-    pub completed_ops: Vec<CompletedOp>,
+    pub idempotency: std::collections::BTreeMap<String, IdempotencyRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub incomplete_op: Option<IncompleteOp>,
-    /// Aggregated open risks (latest union; compact for show).
+    pub incomplete_op: Option<Box<IncompleteOp>>,
     #[serde(default)]
     pub risks: Vec<String>,
     #[serde(default)]
@@ -195,18 +205,29 @@ pub struct AgentRunState {
 }
 
 impl AgentRunState {
-    pub fn find_completed_op(&self, key: &str) -> Option<&CompletedOp> {
-        self.completed_ops
-            .iter()
-            .rev()
-            .find(|o| o.idempotency_key == key)
+    pub fn find_idempotency(&self, key: &str) -> Option<&IdempotencyRecord> {
+        self.idempotency.get(key)
     }
 
-    pub fn push_completed(&mut self, op: CompletedOp) {
-        self.completed_ops.push(op);
-        if self.completed_ops.len() > MAX_COMPLETED_OPS_RETAINED {
-            let drop_n = self.completed_ops.len() - MAX_COMPLETED_OPS_RETAINED;
-            self.completed_ops.drain(0..drop_n);
+    pub fn record_idempotency(
+        &mut self,
+        key: String,
+        rec: IdempotencyRecord,
+    ) -> Result<(), crate::error::Error> {
+        if self.idempotency.len() >= MAX_IDEMPOTENCY_INDEX && !self.idempotency.contains_key(&key) {
+            return Err(crate::error::Error::other(format!(
+                "idempotency index full ({MAX_IDEMPOTENCY_INDEX} keys); refuse silent eviction"
+            )));
         }
+        self.idempotency.insert(key, rec);
+        Ok(())
+    }
+
+    pub fn bump_revision(&mut self) -> Result<(), crate::error::Error> {
+        self.record_revision = self
+            .record_revision
+            .checked_add(1)
+            .ok_or_else(|| crate::error::Error::other("agent record_revision overflow"))?;
+        Ok(())
     }
 }

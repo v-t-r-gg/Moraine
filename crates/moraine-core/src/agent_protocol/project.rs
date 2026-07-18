@@ -28,6 +28,15 @@ pub struct ProjectMeta {
     pub start_ops: BTreeMap<String, StartOpIndex>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StartOpStatus {
+    /// Reservation under project lock; Markdown/sidecar may still be creating.
+    Pending,
+    /// Run files written and start finalized.
+    Complete,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct StartOpIndex {
@@ -35,6 +44,12 @@ pub struct StartOpIndex {
     pub objective: String,
     pub record_path: String,
     pub payload_hash: String,
+    #[serde(default = "default_start_complete")]
+    pub status: StartOpStatus,
+}
+
+fn default_start_complete() -> StartOpStatus {
+    StartOpStatus::Complete
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -226,7 +241,6 @@ fn write_project_meta_unlocked(path: &Path, meta: &ProjectMeta) -> Result<()> {
     write_atomic(path, format!("{raw}\n").as_bytes())
 }
 
-#[allow(dead_code)]
 pub fn load_project_meta(project_root: &Path) -> Result<ProjectMeta> {
     let path = project_meta_path(project_root);
     if !path.exists() {
@@ -306,6 +320,30 @@ pub fn resolve_or_init_project(path: Option<&Path>) -> Result<ProjectInitResult>
     // Prefer git root when present.
     let init_root = resolve_init_root(path)?;
     ensure_project(&init_root)
+}
+
+/// Discover an existing project without creating files.
+pub fn resolve_existing_project(path: Option<&Path>) -> Result<ProjectInitResult> {
+    let hint = match path {
+        Some(p) => {
+            if p.exists() {
+                fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+            } else {
+                p.to_path_buf()
+            }
+        }
+        None => std::env::current_dir()?,
+    };
+    let root = discover_project_root(&hint)
+        .ok_or_else(|| Error::ProjectNotFound { path: hint.clone() })?;
+    let meta = load_project_meta(&root)?;
+    Ok(ProjectInitResult {
+        project_root: root.clone(),
+        project_id: meta.id,
+        created: false,
+        moraine_dir: root.join(MORAINE_DIR),
+        runs_dir: runs_dir(&root),
+    })
 }
 
 #[cfg(test)]

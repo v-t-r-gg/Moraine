@@ -118,3 +118,22 @@ Default show ~1.2 KiB; start/checkpoint/ready compact.
 - Idempotency and concurrency semantics.
 - Token/response-size bounds vs completeness of `run show`.
 - Desktop open behavior when binary is missing.
+
+
+## Review response (request changes)
+
+Addressed PR #6 merge blockers and high-priority findings:
+
+1. Two-phase recovery: committed agent vs pending_agent; failed MD write discards pending.
+2. Authority model A documented in Markdown projection and docs; managed regions regenerated.
+3. Start reservation under project lock (pending → complete).
+4. Agent evidence cannot claim moraine_captured.
+5. Scalar fields reject newlines/control chars.
+6. Lifetime idempotency map (no silent 200-eviction).
+7. Bounded risks/openQuestions in run show (total + recent).
+8. run open JSON fails with desktop_launch_failed when not launched.
+9. Checkpoint input I/O errors use JSON envelope.
+10. run show discovers only (no auto-init).
+11. record_revision uses checked_add.
+
+Remaining for human: desktop GUI enforcement of managed regions; full tauri package build optional.

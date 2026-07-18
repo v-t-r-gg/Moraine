@@ -194,7 +194,7 @@ fn project_init_and_run_lifecycle_cli() {
     assert_eq!(resumed["run"]["state"], "active");
     assert_eq!(resumed["run"]["reviewState"], "stale");
 
-    // open resolves path (may not launch desktop in CI)
+    // open: without a desktop binary, JSON mode reports structured failure with path
     let (code, open, _) = run_json(&[
         "run",
         "open",
@@ -204,11 +204,13 @@ fn project_init_and_run_lifecycle_cli() {
         root,
         "--json",
     ]);
-    // launched may be false; still ok:true with path when binary missing? currently EXIT_ERR if not launched in non-json; with json we still return ok true with launched false
-    // Looking at our code: if !launched && !json return EXIT_ERR; with json we always EXIT_OK with launched false
-    assert_eq!(code, 0, "{open}");
-    assert_eq!(open["ok"], true);
-    assert!(open["run"]["path"].as_str().unwrap().contains(".md"));
+    assert_eq!(code, 1, "{open}");
+    assert_eq!(open["ok"], false);
+    assert_eq!(open["error"]["code"], "desktop_launch_failed");
+    assert!(open["error"]["details"]["recordPath"]
+        .as_str()
+        .unwrap()
+        .contains(".md"));
 }
 
 #[test]

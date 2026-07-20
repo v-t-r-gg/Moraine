@@ -49,6 +49,20 @@ Configure in GitHub settings (requires admin):
 
 Self-merge is fine when checks pass; the goal is a review boundary in GitHub/CI, not a Moraine verdict.
 
+## Definition of done (dogfood runs)
+
+A milestone or feature PR is not done while its Moraine run remains stuck mid-checkpoint.
+
+Before calling a change set ready for human inspection / merge consideration:
+
+1. Meaningful checkpoints cover the actual work (typically 3–8).
+2. Validation evidence is linked or noted (commands, CI, dogfood findings).
+3. Open risks and questions are current.
+4. Lifecycle is `ready_for_review` (or an explicit later descriptive state when those exist).
+5. CI includes every new crate on the critical path (for example `moraine-mcp` must be clippy’d and tested).
+
+`ready_for_review` means ready for inspection—not approval.
+
 ## After each milestone
 
 Dogfood for several real runs before starting the next major milestone. Classify findings:

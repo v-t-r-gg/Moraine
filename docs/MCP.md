@@ -90,6 +90,7 @@ Normal domain errors do **not** terminate the server.
 
 - Official crate: **`rmcp` 2.2.x** (`server`, `macros`, `transport-io`, `schemars`)
 - Locked via workspace `Cargo.lock`
+- Requires workspace **MSRV 1.88** (`rmcp` edition 2024 / `darling`)
 
 ## Manual checks
 

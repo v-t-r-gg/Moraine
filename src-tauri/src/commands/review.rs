@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use moraine_core::{
-    ensure_run_meta, moraine_sidecar_path, record_decision, review_snapshot, DecisionKind,
-    Document, Error as CoreError, ReviewStateKind,
+    ensure_run_meta, moraine_sidecar_path, review_snapshot, Document, Error as CoreError,
+    ReviewStateKind,
 };
 use serde::{Deserialize, Serialize};
 
@@ -82,34 +82,6 @@ pub fn get_run_review(path: String) -> Result<RunReviewDto, String> {
     let markdown = Document::read_file(&path).map_err(map_err)?;
     let meta = ensure_run_meta(&path).map_err(map_err)?;
     let snap = review_snapshot(&meta, &markdown);
-    Ok(dto_from_snap(&path, &snap))
-}
-
-#[tauri::command]
-pub fn record_run_decision(
-    path: String,
-    decision: String,
-    reviewer_label: String,
-    reason: Option<String>,
-    expected_content_hash: String,
-) -> Result<RunReviewDto, String> {
-    let kind = DecisionKind::parse(&decision)
-        .ok_or_else(|| "invalid decision (approved|changes_requested|rejected)".to_string())?;
-    if reviewer_label.trim().is_empty() {
-        return Err("reviewer label required".into());
-    }
-    if expected_content_hash.trim().is_empty() {
-        return Err("expectedContentHash required (save first)".into());
-    }
-    let path = PathBuf::from(path);
-    let (_meta, _recorded, snap) = record_decision(
-        &path,
-        kind,
-        reviewer_label.trim(),
-        reason,
-        expected_content_hash.trim(),
-    )
-    .map_err(map_err)?;
     Ok(dto_from_snap(&path, &snap))
 }
 

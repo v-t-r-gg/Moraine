@@ -13,14 +13,14 @@ High-level direction. Product model: [VISION.md](./VISION.md), [ARCHITECTURE.md]
 * Per-document ledger lock + safe atomic replace; deterministic legacy migration
 * CLI: protocol + `share`, `status --json`, `init`, file helpers
 * **Milestone 0:** vision realignment and decision de-centering (docs, legacy `decide`, primary UI)
-* Local STDIO MCP (`moraine mcp`) with Codex integration docs
-* GUI: comments, suggestions, host Save; run-level decision controls de-centered
+* **Milestone 1:** local STDIO MCP (`moraine mcp`) + Codex docs; CI covers `moraine-mcp`; no decision tools
+* GUI: comments, suggestions, host Save; run-level decision controls removed from desktop IPC
 * Optional in-memory live relay (secondary)
 
 ## Now
 
-* Finish MCP / Codex dogfooding (Milestone 1 acceptance)
 * Keep CI green
+* Dogfood MCP on additional real tasks
 
 ## Next (bounded milestones)
 
@@ -35,4 +35,4 @@ Approval/rejection as product center, merge gates, remote MCP, hosted multi-user
 
 ## Compatibility note
 
-`moraine decide` and historical sidecar `decisions[]` remain readable and writable for compatibility. Do not extend decision functionality. Prefer comments, findings, and human notes. Do not expose decisions through MCP or future agent transports.
+`moraine decide` remains readable/writable via **CLI only** (legacy warning). Historical sidecar `decisions[]` remain loadable. Do not extend decision functionality. Prefer comments, findings, and human notes. Do not expose decisions through MCP or desktop IPC.

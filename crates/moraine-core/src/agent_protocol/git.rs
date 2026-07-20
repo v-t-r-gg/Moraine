@@ -125,18 +125,12 @@ mod tests {
 
     #[test]
     fn porcelain_keeps_dotfiles_and_first_char() {
-        assert_eq!(
-            porcelain_path(" M ARCHITECTURE.md"),
-            "ARCHITECTURE.md"
-        );
+        assert_eq!(porcelain_path(" M ARCHITECTURE.md"), "ARCHITECTURE.md");
         assert_eq!(
             porcelain_path("?? .github/workflows/ci.yml"),
             ".github/workflows/ci.yml"
         );
         assert_eq!(porcelain_path("M  Cargo.toml"), "Cargo.toml");
-        assert_eq!(
-            porcelain_path("R  old.md -> new.md"),
-            "new.md"
-        );
+        assert_eq!(porcelain_path("R  old.md -> new.md"), "new.md");
     }
 }

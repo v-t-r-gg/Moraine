@@ -117,7 +117,10 @@ fn text_payload(call_result: &Value) -> Value {
     let result = call_result
         .get("result")
         .unwrap_or_else(|| panic!("no result: {call_result}"));
-    let is_error = result.get("isError").and_then(|v| v.as_bool()).unwrap_or(false);
+    let is_error = result
+        .get("isError")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let text = result["content"][0]["text"]
         .as_str()
         .unwrap_or_else(|| panic!("no text content: {result}"));
@@ -149,10 +152,7 @@ fn mcp_initialize_tools_and_lifecycle() {
     let head: String = instructions.chars().take(512).collect();
     assert!(head.contains("run_ready") || head.contains("run_start"));
 
-    c.notify(
-        "notifications/initialized",
-        json!({}),
-    );
+    c.notify("notifications/initialized", json!({}));
 
     let tools = c.request("tools/list", json!({}));
     let list = &tools["result"]["tools"];
@@ -252,7 +252,11 @@ fn mcp_initialize_tools_and_lifecycle() {
         ])
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let resume = text_payload(&c.call_tool(
         "run_resume",

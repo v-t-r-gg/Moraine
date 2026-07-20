@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use moraine_core::{resolve_or_init_project, resolve_existing_project};
-use rmcp::{ServiceExt, transport::stdio};
+use moraine_core::{resolve_existing_project, resolve_or_init_project};
+use rmcp::{transport::stdio, ServiceExt};
 use tracing_subscriber::EnvFilter;
 
 use crate::tools::MoraineMcp;

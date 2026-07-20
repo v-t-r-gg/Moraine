@@ -37,11 +37,13 @@ echo "==> npm install (frontend)"
 cd "$(dirname "$0")/.."
 npm install
 
-echo "==> cargo fetch / build core + CLI"
-cargo build -p moraine-core -p moraine-cli
+echo "==> cargo fetch / build core + CLI + MCP"
+cargo build -p moraine-core -p moraine-cli -p moraine-mcp
 
 echo ""
 echo "Done."
 echo "  CLI:     cargo run -p moraine-cli -- info"
+echo "  MCP:     cargo run -p moraine-cli -- mcp --project \$PWD"
 echo "  Desktop: npm run tauri:dev"
 echo "  Tests:   npm run test:rust"
+echo "  MSRV:    Rust 1.88 (workspace rust-version)"

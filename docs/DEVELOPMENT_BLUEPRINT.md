@@ -869,9 +869,11 @@ Before merge:
 
 ## 17. Immediate next action
 
-**Milestone 0 (this change set):** Vision realignment and decision de-centering — keep documentation, primary UI, and process language ledger-only; preserve historical decisions for compatibility.
+**Milestone 0 (closed):** Vision realignment and decision de-centering.
 
-**Next:** Complete **Local MCP Transport and Codex Integration** (Milestone 1 acceptance), then evidence capture.
+**Milestone 1 (this change set):** Local MCP transport + Codex integration acceptance — CI coverage, project confinement, five tools only, dogfood run marked ready.
+
+**Next:** Minimal trustworthy evidence capture (Milestone 2).
 
 Do not build additional approval semantics, live collaboration features, observability dashboards, or broad editor behavior.
 

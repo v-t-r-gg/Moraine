@@ -3,13 +3,13 @@
   "run": {
     "id": "7416135c-f8f6-4377-801c-a7c47674a372",
     "createdAt": "2026-07-18T17:59:09.545959029Z",
-    "updatedAt": "2026-07-18T17:59:17.826535181Z"
+    "updatedAt": "2026-07-20T20:35:41.755669850Z"
   },
   "decisions": [],
   "comments": [],
   "agent": {
-    "lifecycle": "active",
-    "recordRevision": 2,
+    "lifecycle": "ready_for_review",
+    "recordRevision": 8,
     "objective": "Add local MCP transport and Codex integration",
     "recordPath": ".moraine/runs/2026-07-18-add-local-mcp-transport-and-codex-integr-7416135c.md",
     "projectId": "a6ceb4ba-c909-4977-a2af-b4488e4ea313",
@@ -31,16 +31,33 @@
       "available": true,
       "repositoryRoot": "/home/bone/Projects/Moraine",
       "branch": "feat/local-mcp-codex-integration",
-      "head": "e09f68d436d74bbe0253e669437c6d1a0b122408",
+      "head": "27d3cdb8819ecba5675225e4582436d7ca2375e6",
+      "upstream": "origin/feat/local-mcp-codex-integration",
       "detached": false,
       "workingTree": "dirty",
       "changedFiles": [
-        ".moraine/.gitignore",
-        ".moraine/project.json",
+        ".github/workflows/ci.yml",
         ".moraine/runs/2026-07-18-add-local-mcp-transport-and-codex-integr-7416135c.md",
-        ".moraine/runs/2026-07-18-add-local-mcp-transport-and-codex-integr-7416135c.md.moraine.json"
+        ".moraine/runs/2026-07-18-add-local-mcp-transport-and-codex-integr-7416135c.md.moraine.json",
+        "ARCHITECTURE.md",
+        "Cargo.lock",
+        "Cargo.toml",
+        "README.md",
+        "ROADMAP.md",
+        "crates/moraine-core/src/agent_protocol/git.rs",
+        "docs/DEVELOPMENT.md",
+        "docs/DEVELOPMENT_BLUEPRINT.md",
+        "docs/MCP.md",
+        "package-lock.json",
+        "package.json",
+        "scripts/check.sh",
+        "src-tauri/Cargo.toml",
+        "src-tauri/capabilities/default.json",
+        "src-tauri/src/commands/review.rs",
+        "src-tauri/src/lib.rs",
+        "src/lib/api.ts"
       ],
-      "changedFileCount": 4
+      "changedFileCount": 20
     },
     "checkpoints": [
       {
@@ -80,9 +97,320 @@
           ],
           "changedFileCount": 4
         }
+      },
+      {
+        "opId": "f62723c5-5528-464f-a545-3483c00f5f74",
+        "idempotencyKey": "mcp-cp2-shipped",
+        "createdAt": "2026-07-20T20:34:02.909059470Z",
+        "summary": "Shipped MCP crate, Codex docs, and M0 ledger realignment on feat/local-mcp-codex-integration",
+        "actions": [
+          "Added crates/moraine-mcp STDIO server over core run ops (five tools only)",
+          "Documented Codex one-time project config in docs/integrations/CODEX.md",
+          "Merged M0 vision realignment: decide legacy, primary UI without verdict controls",
+          "Pushed PR branch with dogfood project metadata"
+        ],
+        "rationales": [
+          {
+            "choice": "Reuse moraine-core operations behind MCP rather than a second persistence path",
+            "reason": "Blueprint requires CLI/MCP/desktop to share one core"
+          }
+        ],
+        "evidence": [
+          {
+            "kind": "command_result",
+            "label": "cargo test -p moraine-mcp",
+            "command": "cargo test -p moraine-mcp",
+            "exitCode": 0,
+            "provenance": "agent_reported"
+          }
+        ],
+        "risks": [
+          "Initial PR commit mixed M0+M1 contrary to one-problem-per-milestone preference"
+        ],
+        "git": {
+          "available": true,
+          "repositoryRoot": "/home/bone/Projects/Moraine",
+          "branch": "feat/local-mcp-codex-integration",
+          "head": "27d3cdb8819ecba5675225e4582436d7ca2375e6",
+          "upstream": "origin/feat/local-mcp-codex-integration",
+          "detached": false,
+          "workingTree": "dirty",
+          "changedFiles": [
+            "github/workflows/ci.yml",
+            "RCHITECTURE.md",
+            "argo.lock",
+            "argo.toml",
+            "EADME.md",
+            "OADMAP.md",
+            "ocs/DEVELOPMENT.md",
+            "ocs/DEVELOPMENT_BLUEPRINT.md",
+            "ocs/MCP.md",
+            "ackage-lock.json",
+            "ackage.json",
+            "cripts/check.sh",
+            "rc-tauri/Cargo.toml",
+            "rc-tauri/capabilities/default.json",
+            "rc-tauri/src/commands/review.rs",
+            "rc-tauri/src/lib.rs",
+            "rc/lib/api.ts"
+          ],
+          "changedFileCount": 17
+        }
+      },
+      {
+        "opId": "a6e40cbe-c6da-46af-906e-99c248d56e3d",
+        "idempotencyKey": "mcp-cp3-m1-acceptance",
+        "createdAt": "2026-07-20T20:34:17.521987183Z",
+        "summary": "Closed M0 cleanup and M1 acceptance gaps: CI, FS scope, decision IPC, MSRV, DoD",
+        "actions": [
+          "Added moraine-mcp to clippy/tests in scripts/check.sh, CI, and npm scripts",
+          "Removed unused webview fs:** capability wildcards and direct tauri-plugin-fs usage",
+          "Removed record_run_decision from Tauri command + TypeScript IPC (CLI decide remains legacy)",
+          "Raised workspace MSRV to 1.88 and added CI msrv job",
+          "Documented dogfood definition-of-done requiring ready_for_review"
+        ],
+        "rationales": [
+          {
+            "choice": "Remove desktop decision IPC instead of only warning",
+            "reason": "Primary UI already hid controls; live unguarded path contradicted M0 boundary"
+          },
+          {
+            "choice": "MSRV 1.88",
+            "reason": "rmcp edition 2024 and darling via rmcp-macros require it; prior 1.77 claim was incomplete"
+          }
+        ],
+        "evidence": [
+          {
+            "kind": "command_result",
+            "label": "vitest + svelte-check",
+            "command": "npm test && npx svelte-check --threshold error",
+            "exitCode": 0,
+            "provenance": "agent_reported"
+          },
+          {
+            "kind": "command_result",
+            "label": "cargo test -p moraine-mcp",
+            "command": "cargo build -p moraine-cli && cargo test -p moraine-mcp",
+            "exitCode": 0,
+            "provenance": "agent_reported"
+          }
+        ],
+        "risks": [
+          "tauri-plugin-dialog still depends on tauri-plugin-fs transitively; capability scopes must stay non-wildcard"
+        ],
+        "openQuestions": [
+          "Whether a real Codex session with zero Moraine prompt text reliably follows server instructions on every Codex build"
+        ],
+        "git": {
+          "available": true,
+          "repositoryRoot": "/home/bone/Projects/Moraine",
+          "branch": "feat/local-mcp-codex-integration",
+          "head": "27d3cdb8819ecba5675225e4582436d7ca2375e6",
+          "upstream": "origin/feat/local-mcp-codex-integration",
+          "detached": false,
+          "workingTree": "dirty",
+          "changedFiles": [
+            "github/workflows/ci.yml",
+            "moraine/runs/2026-07-18-add-local-mcp-transport-and-codex-integr-7416135c.md",
+            "moraine/runs/2026-07-18-add-local-mcp-transport-and-codex-integr-7416135c.md.moraine.json",
+            "RCHITECTURE.md",
+            "argo.lock",
+            "argo.toml",
+            "EADME.md",
+            "OADMAP.md",
+            "ocs/DEVELOPMENT.md",
+            "ocs/DEVELOPMENT_BLUEPRINT.md",
+            "ocs/MCP.md",
+            "ackage-lock.json",
+            "ackage.json",
+            "cripts/check.sh",
+            "rc-tauri/Cargo.toml",
+            "rc-tauri/capabilities/default.json",
+            "rc-tauri/src/commands/review.rs",
+            "rc-tauri/src/lib.rs",
+            "rc/lib/api.ts"
+          ],
+          "changedFileCount": 19
+        }
+      },
+      {
+        "opId": "c42c8bf8-f232-45e3-96c5-a59d250e41bb",
+        "idempotencyKey": "mcp-cp4-git-porcelain",
+        "createdAt": "2026-07-20T20:35:41.218308282Z",
+        "summary": "Fixed git porcelain path parsing that stripped leading path characters",
+        "actions": [
+          "Stopped trim_start before XY PATH slice in capture_git_context",
+          "Added porcelain_path unit tests for unstaged, untracked dotfiles, and renames",
+          "Resumed dogfood run to refresh Current Git context with correct paths"
+        ],
+        "rationales": [
+          {
+            "choice": "Treat as M1 dogfood integrity fix, not a separate milestone",
+            "reason": "Corrupt changed-file lists made the flagship run record dishonest"
+          }
+        ],
+        "evidence": [
+          {
+            "kind": "command_result",
+            "label": "porcelain unit test",
+            "command": "cargo test -p moraine-core porcelain_keeps",
+            "exitCode": 0,
+            "provenance": "agent_reported"
+          }
+        ],
+        "git": {
+          "available": true,
+          "repositoryRoot": "/home/bone/Projects/Moraine",
+          "branch": "feat/local-mcp-codex-integration",
+          "head": "27d3cdb8819ecba5675225e4582436d7ca2375e6",
+          "upstream": "origin/feat/local-mcp-codex-integration",
+          "detached": false,
+          "workingTree": "dirty",
+          "changedFiles": [
+            ".github/workflows/ci.yml",
+            ".moraine/runs/2026-07-18-add-local-mcp-transport-and-codex-integr-7416135c.md",
+            ".moraine/runs/2026-07-18-add-local-mcp-transport-and-codex-integr-7416135c.md.moraine.json",
+            "ARCHITECTURE.md",
+            "Cargo.lock",
+            "Cargo.toml",
+            "README.md",
+            "ROADMAP.md",
+            "crates/moraine-core/src/agent_protocol/git.rs",
+            "docs/DEVELOPMENT.md",
+            "docs/DEVELOPMENT_BLUEPRINT.md",
+            "docs/MCP.md",
+            "package-lock.json",
+            "package.json",
+            "scripts/check.sh",
+            "src-tauri/Cargo.toml",
+            "src-tauri/capabilities/default.json",
+            "src-tauri/src/commands/review.rs",
+            "src-tauri/src/lib.rs",
+            "src/lib/api.ts"
+          ],
+          "changedFileCount": 20
+        }
       }
     ],
-    "lifecycleEvents": [],
+    "lifecycleEvents": [
+      {
+        "opId": "743096d4-0b62-4055-954c-f573d6f1acde",
+        "idempotencyKey": "mcp-ready-m1",
+        "createdAt": "2026-07-20T20:34:24.865417825Z",
+        "kind": "ready",
+        "note": "Local MCP + Codex docs + M0/M1 acceptance gaps closed; CI covers moraine-mcp; dogfood lifecycle ready_for_review",
+        "git": {
+          "available": true,
+          "repositoryRoot": "/home/bone/Projects/Moraine",
+          "branch": "feat/local-mcp-codex-integration",
+          "head": "27d3cdb8819ecba5675225e4582436d7ca2375e6",
+          "upstream": "origin/feat/local-mcp-codex-integration",
+          "detached": false,
+          "workingTree": "dirty",
+          "changedFiles": [
+            "github/workflows/ci.yml",
+            "moraine/runs/2026-07-18-add-local-mcp-transport-and-codex-integr-7416135c.md",
+            "moraine/runs/2026-07-18-add-local-mcp-transport-and-codex-integr-7416135c.md.moraine.json",
+            "RCHITECTURE.md",
+            "argo.lock",
+            "argo.toml",
+            "EADME.md",
+            "OADMAP.md",
+            "ocs/DEVELOPMENT.md",
+            "ocs/DEVELOPMENT_BLUEPRINT.md",
+            "ocs/MCP.md",
+            "ackage-lock.json",
+            "ackage.json",
+            "cripts/check.sh",
+            "rc-tauri/Cargo.toml",
+            "rc-tauri/capabilities/default.json",
+            "rc-tauri/src/commands/review.rs",
+            "rc-tauri/src/lib.rs",
+            "rc/lib/api.ts"
+          ],
+          "changedFileCount": 19
+        }
+      },
+      {
+        "opId": "1fc954cf-904a-416f-90ac-39e8aa600e83",
+        "idempotencyKey": "mcp-resume-git-path-fix",
+        "createdAt": "2026-07-20T20:35:29.331866846Z",
+        "kind": "resume",
+        "note": "Fix porcelain path parsing before final ready",
+        "git": {
+          "available": true,
+          "repositoryRoot": "/home/bone/Projects/Moraine",
+          "branch": "feat/local-mcp-codex-integration",
+          "head": "27d3cdb8819ecba5675225e4582436d7ca2375e6",
+          "upstream": "origin/feat/local-mcp-codex-integration",
+          "detached": false,
+          "workingTree": "dirty",
+          "changedFiles": [
+            ".github/workflows/ci.yml",
+            ".moraine/runs/2026-07-18-add-local-mcp-transport-and-codex-integr-7416135c.md",
+            ".moraine/runs/2026-07-18-add-local-mcp-transport-and-codex-integr-7416135c.md.moraine.json",
+            "ARCHITECTURE.md",
+            "Cargo.lock",
+            "Cargo.toml",
+            "README.md",
+            "ROADMAP.md",
+            "crates/moraine-core/src/agent_protocol/git.rs",
+            "docs/DEVELOPMENT.md",
+            "docs/DEVELOPMENT_BLUEPRINT.md",
+            "docs/MCP.md",
+            "package-lock.json",
+            "package.json",
+            "scripts/check.sh",
+            "src-tauri/Cargo.toml",
+            "src-tauri/capabilities/default.json",
+            "src-tauri/src/commands/review.rs",
+            "src-tauri/src/lib.rs",
+            "src/lib/api.ts"
+          ],
+          "changedFileCount": 20
+        }
+      },
+      {
+        "opId": "71ee4ae9-e088-47a5-8c26-f44de349913c",
+        "idempotencyKey": "mcp-ready-m1-final",
+        "createdAt": "2026-07-20T20:35:41.725383463Z",
+        "kind": "ready",
+        "note": "M1 acceptance complete: MCP in CI, decision IPC removed, MSRV 1.88, FS scopes tightened, dogfood ready_for_review with honest git paths",
+        "git": {
+          "available": true,
+          "repositoryRoot": "/home/bone/Projects/Moraine",
+          "branch": "feat/local-mcp-codex-integration",
+          "head": "27d3cdb8819ecba5675225e4582436d7ca2375e6",
+          "upstream": "origin/feat/local-mcp-codex-integration",
+          "detached": false,
+          "workingTree": "dirty",
+          "changedFiles": [
+            ".github/workflows/ci.yml",
+            ".moraine/runs/2026-07-18-add-local-mcp-transport-and-codex-integr-7416135c.md",
+            ".moraine/runs/2026-07-18-add-local-mcp-transport-and-codex-integr-7416135c.md.moraine.json",
+            "ARCHITECTURE.md",
+            "Cargo.lock",
+            "Cargo.toml",
+            "README.md",
+            "ROADMAP.md",
+            "crates/moraine-core/src/agent_protocol/git.rs",
+            "docs/DEVELOPMENT.md",
+            "docs/DEVELOPMENT_BLUEPRINT.md",
+            "docs/MCP.md",
+            "package-lock.json",
+            "package.json",
+            "scripts/check.sh",
+            "src-tauri/Cargo.toml",
+            "src-tauri/capabilities/default.json",
+            "src-tauri/src/commands/review.rs",
+            "src-tauri/src/lib.rs",
+            "src/lib/api.ts"
+          ],
+          "changedFileCount": 20
+        }
+      }
+    ],
+    "readySummary": "M1 acceptance complete: MCP in CI, decision IPC removed, MSRV 1.88, FS scopes tightened, dogfood ready_for_review with honest git paths",
     "idempotency": {
       "mcp-cp1-inspect": {
         "payloadHash": "882549f43fcc130324f3b7ab20f3130f237d4daab9e37eb9c8dc1d9e6a948ca6",
@@ -91,13 +419,64 @@
         "contentHash": "9b6ae877e53d3e1180c47d0dc066f34ac2402d86a9bf34e8e4209f94273a18e0",
         "recordRevision": 2,
         "createdAt": "2026-07-18T17:59:17.826503111Z"
+      },
+      "mcp-cp2-shipped": {
+        "payloadHash": "c33b4744228f4dc71efd33443244855942f840a58c6f049a5e33d7a98d3fa5ae",
+        "opId": "f62723c5-5528-464f-a545-3483c00f5f74",
+        "kind": "checkpoint",
+        "contentHash": "8be5f8461c3bcbec7e5219484b5b60c6ef7912368489ed66371c4cde497ab907",
+        "recordRevision": 3,
+        "createdAt": "2026-07-20T20:34:02.936612123Z"
+      },
+      "mcp-cp3-m1-acceptance": {
+        "payloadHash": "3c0ab63005d25c4e6db0712cc4263aaede02fb4537daf5eb9e410c2f05926938",
+        "opId": "a6e40cbe-c6da-46af-906e-99c248d56e3d",
+        "kind": "checkpoint",
+        "contentHash": "1e8872498b0760cdd0b56d0144c2fa919e1da158717c7542e83d7b4867127d23",
+        "recordRevision": 4,
+        "createdAt": "2026-07-20T20:34:17.549932657Z"
+      },
+      "mcp-cp4-git-porcelain": {
+        "payloadHash": "5a2888ce70fc72680984abaaa89d1ad423ad528c64bf4004c6767a95f8cfe4ba",
+        "opId": "c42c8bf8-f232-45e3-96c5-a59d250e41bb",
+        "kind": "checkpoint",
+        "contentHash": "33b79edd93a91b4a44fa02e14a8dfc1932208db3ab71167556587cdf6f43c59b",
+        "recordRevision": 7,
+        "createdAt": "2026-07-20T20:35:41.234033729Z"
+      },
+      "mcp-ready-m1": {
+        "payloadHash": "fb82aac8105a0cf7c428e6733eef59fea9fbafce8a85e13794b7eeba82116979",
+        "opId": "743096d4-0b62-4055-954c-f573d6f1acde",
+        "kind": "ready",
+        "contentHash": "f3a5a61f7c010d0077c4984ab9a8f8711500d206e608a6807022f018507cb3e3",
+        "recordRevision": 5,
+        "createdAt": "2026-07-20T20:34:24.894392381Z"
+      },
+      "mcp-ready-m1-final": {
+        "payloadHash": "f122d9e9580a0c3291d13ca45253d1cd7fb5b1b0d85b69da22dcf74eba776021",
+        "opId": "71ee4ae9-e088-47a5-8c26-f44de349913c",
+        "kind": "ready",
+        "contentHash": "0d3f02989f106a20e15eb1e4d8799481803bcbbe768f1fc0aef9e09b9ed62f3b",
+        "recordRevision": 8,
+        "createdAt": "2026-07-20T20:35:41.755586689Z"
+      },
+      "mcp-resume-git-path-fix": {
+        "payloadHash": "428d07a1a98c53c04ad9bfd141e727353e47451fbef4e926609ef76876aad416",
+        "opId": "1fc954cf-904a-416f-90ac-39e8aa600e83",
+        "kind": "resume",
+        "contentHash": "e10193f2fc4aae1a4e769f51b971f6fc542afb33296f27e93efa9c847f20ded8",
+        "recordRevision": 6,
+        "createdAt": "2026-07-20T20:35:29.361370096Z"
       }
     },
     "risks": [
-      "rmcp API version churn; pin via Cargo.lock"
+      "rmcp API version churn; pin via Cargo.lock",
+      "Initial PR commit mixed M0+M1 contrary to one-problem-per-milestone preference",
+      "tauri-plugin-dialog still depends on tauri-plugin-fs transitively; capability scopes must stay non-wildcard"
     ],
     "openQuestions": [
-      "Exact Codex config.toml keys for tool allowlists and timeouts on current Codex docs"
+      "Exact Codex config.toml keys for tool allowlists and timeouts on current Codex docs",
+      "Whether a real Codex session with zero Moraine prompt text reliably follows server instructions on every Codex build"
     ]
   }
 }

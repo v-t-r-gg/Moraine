@@ -61,16 +61,9 @@ pub fn capture_git_context(cwd: &Path) -> GitContextSummary {
         Some(s) => {
             let mut files: Vec<String> = s
                 .lines()
-                .filter(|l| !l.trim().is_empty())
-                .map(|l| {
-                    let line = l.trim_start();
-                    // porcelain: XY PATH or XY ORIG -> PATH
-                    if line.len() >= 3 {
-                        line[3..].trim().replace(" -> ", "→").to_string()
-                    } else {
-                        line.to_string()
-                    }
-                })
+                .filter(|l| !l.is_empty())
+                .map(porcelain_path)
+                .filter(|p| !p.is_empty())
                 .collect();
             let count = files.len();
             if files.len() > MAX_CHANGED_FILES {
@@ -94,6 +87,26 @@ pub fn capture_git_context(cwd: &Path) -> GitContextSummary {
     }
 }
 
+/// Parse a single `git status --porcelain` line into a path.
+///
+/// Porcelain lines are `XY<space>PATH` (or rename `XY<space>ORIG -> PATH`).
+/// Never trim the line before slicing: a leading space in `XY` is meaningful, and
+/// trimming it shifts the path slice left by one character.
+fn porcelain_path(line: &str) -> String {
+    let bytes = line.as_bytes();
+    if bytes.len() >= 3 && bytes[2] == b' ' {
+        let path = &line[3..];
+        if let Some((_, newer)) = path.split_once(" -> ") {
+            newer.trim_end().to_string()
+        } else {
+            // Paths may start with `.`; do not trim_start.
+            path.trim_end().to_string()
+        }
+    } else {
+        line.trim().to_string()
+    }
+}
+
 fn git_stdout(cwd: &Path, args: &[&str]) -> Option<String> {
     let out = Command::new("git")
         .args(args)
@@ -104,4 +117,20 @@ fn git_stdout(cwd: &Path, args: &[&str]) -> Option<String> {
         return None;
     }
     String::from_utf8(out.stdout).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::porcelain_path;
+
+    #[test]
+    fn porcelain_keeps_dotfiles_and_first_char() {
+        assert_eq!(porcelain_path(" M ARCHITECTURE.md"), "ARCHITECTURE.md");
+        assert_eq!(
+            porcelain_path("?? .github/workflows/ci.yml"),
+            ".github/workflows/ci.yml"
+        );
+        assert_eq!(porcelain_path("M  Cargo.toml"), "Cargo.toml");
+        assert_eq!(porcelain_path("R  old.md -> new.md"), "new.md");
+    }
 }

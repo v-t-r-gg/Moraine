@@ -276,22 +276,6 @@ export async function getRunReview(path: string): Promise<RunReviewDto> {
   return invoke("get_run_review", { path });
 }
 
-export async function recordRunDecision(
-  path: string,
-  decision: string,
-  reviewerLabel: string,
-  reason: string | null | undefined,
-  expectedContentHash: string,
-): Promise<RunReviewDto> {
-  return invoke("record_run_decision", {
-    path,
-    decision,
-    reviewerLabel,
-    reason: reason ?? null,
-    expectedContentHash,
-  });
-}
-
 export async function pickMarkdownFile(): Promise<string | null> {
   if (!isTauri) {
     return null;
@@ -509,24 +493,6 @@ function browserStub<T>(cmd: string, args?: Record<string, unknown>): T {
         decisionCurrent: true,
         decisionCount: 0,
         latest: null,
-        sidecar: "(browser)",
-        initialized: true,
-      } as T;
-    case "record_run_decision":
-      return {
-        runId: "00000000-0000-4000-8000-000000000000",
-        contentHash: String(args?.expectedContentHash ?? "0".repeat(64)),
-        reviewState: String(args?.decision ?? "approved"),
-        decisionCurrent: true,
-        decisionCount: 1,
-        latest: {
-          id: crypto.randomUUID(),
-          decision: String(args?.decision ?? "approved"),
-          reviewerLabel: String(args?.reviewerLabel ?? "Reviewer"),
-          reason: (args?.reason as string) ?? null,
-          createdAt: new Date().toISOString(),
-          contentHash: String(args?.expectedContentHash ?? "0".repeat(64)),
-        },
         sidecar: "(browser)",
         initialized: true,
       } as T;

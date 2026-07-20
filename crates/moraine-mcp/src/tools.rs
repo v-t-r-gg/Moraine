@@ -5,14 +5,14 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use moraine_core::{
-    run_checkpoint, run_ready, run_resume, run_show, run_start, CheckpointInput, Error as CoreError,
-    EvidenceItem, EvidenceKind, EvidenceProvenance, RationalItem, RunShowOptions, RunStartRequest,
+    run_checkpoint, run_ready, run_resume, run_show, run_start, CheckpointInput,
+    Error as CoreError, EvidenceItem, EvidenceKind, EvidenceProvenance, RationalItem,
+    RunShowOptions, RunStartRequest,
 };
 use rmcp::{
-    ErrorData as McpError, ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::*,
-    schemars, tool, tool_handler, tool_router,
+    schemars, tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -274,20 +274,16 @@ impl MoraineMcp {
 #[tool_handler]
 impl ServerHandler for MoraineMcp {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
-            ServerCapabilities::builder()
-                .enable_tools()
-                .build(),
-        )
-        .with_server_info(
-            Implementation::new("moraine", env!("CARGO_PKG_VERSION"))
-                .with_title("Moraine")
-                .with_description(
-                    "Local-first review layer for coding-agent work (agent-run protocol)",
-                )
-                .with_website_url("https://github.com/v-t-r-gg/Moraine"),
-        )
-        .with_instructions(crate::server::server_instructions())
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(
+                Implementation::new("moraine", env!("CARGO_PKG_VERSION"))
+                    .with_title("Moraine")
+                    .with_description(
+                        "Local-first review layer for coding-agent work (agent-run protocol)",
+                    )
+                    .with_website_url("https://github.com/v-t-r-gg/Moraine"),
+            )
+            .with_instructions(crate::server::server_instructions())
     }
 }
 

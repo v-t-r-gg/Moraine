@@ -19,9 +19,9 @@ pub mod watcher;
 pub use agent_protocol::{
     capture_git_context, ensure_project, find_run_by_id, init_project, resolve_existing_project,
     resolve_or_init_project, run_checkpoint, run_ready, run_resume, run_show, run_start,
-    AgentOpResult, AgentRunState, CheckpointInput, CheckpointRecord, GitContextSummary,
-    ProjectInitResult, ProjectMeta, RunLifecycle, RunShowOptions, RunShowPacket, RunStartRequest,
-    MAX_JSON_RESPONSE_HINT,
+    AgentOpResult, AgentRunState, CheckpointInput, CheckpointRecord, EvidenceItem, EvidenceKind,
+    EvidenceProvenance, GitContextSummary, ProjectInitResult, ProjectMeta, RationalItem,
+    RunLifecycle, RunShowOptions, RunShowPacket, RunStartRequest, MAX_JSON_RESPONSE_HINT,
 };
 pub use annotation_ops::{
     acceptance_recovery_status, apply_mutation, begin_accept_suggestion, cancel_accept_suggestion,

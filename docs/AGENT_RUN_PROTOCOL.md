@@ -3,8 +3,7 @@
 Compact JSON CLI for agents to manage durable Markdown run records without
 rewriting the whole document on every step.
 
-**This document describes current CLI capabilities.** MCP transport is future
-work and is not implemented.
+Local STDIO MCP exposes the same core operations; see [MCP.md](./MCP.md).
 
 ## Authority model A (current)
 
@@ -16,14 +15,16 @@ work and is not implemented.
 Protocol records are detected via `## Protocol status` + `## Human notes` and the
 managed-region notice. Legacy Markdown keeps full edit behavior.
 
-Agent `ready_for_review` is **not** human approval.
+Agent `ready_for_review` means the run is ready for human **inspection**. It is
+**not** human approval, merge authority, or deployment authorization.
 
 ## Authority boundary
 
 | Actor | Can do | Cannot do |
 | ----- | ------ | --------- |
-| Agent (`moraine run …`) | start, checkpoint, ready, resume, show, open | `approved` / `changes_requested` / `rejected`, reviewer identity |
-| Human (`moraine decide`, GUI) | review decisions, annotations, suggestions | agent lifecycle commands |
+| Agent (`moraine run …` / MCP) | start, checkpoint, ready, resume, show, open | approval/rejection, merge authority, reviewer identity |
+| Human (GUI, comments, notes) | inspect, comment, suggest, edit human notes | agent lifecycle commands |
+| Human (`moraine decide`) | legacy compatibility decisions only | product-center workflow (prefer comments/findings) |
 
 ## Commands
 
@@ -38,7 +39,8 @@ moraine run resume --run-id UUID --expected-hash HEX --idempotency-key "…" [--
 moraine run open --run-id UUID [--project PATH] --json
 ```
 
-Existing `init`, `status`, `decide`, `share`, and file helpers remain.
+Existing `init`, `status`, `share`, and file helpers remain.
+`moraine decide` is **legacy / compatibility-only**.
 
 ## Lifecycle
 
@@ -46,8 +48,9 @@ Existing `init`, `status`, `decide`, `share`, and file helpers remain.
 active ──run ready──► ready_for_review ──run resume──► active
 ```
 
-Human `decide` is independent. Changing Markdown after a decision makes that
-decision **stale** (content-hash bound).
+Lifecycle is operational stage, not approval. Historical decisions in sidecars
+remain readable; changing Markdown after a legacy decision marks that decision
+**stale** (content-hash bound).
 
 ## Project discovery
 

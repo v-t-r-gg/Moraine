@@ -31,25 +31,12 @@ Closes #
 
 ## Known limitations
 
-## Review-ledger state
+## Review ledger (optional notes)
 
-- [ ] The run record names the reviewed implementation commit.
-- [ ] The Moraine decision is current for the run-record Markdown.
-- [ ] No implementation files changed after the reviewed commit.
-- [ ] Any implementation or run-record Markdown change after approval was reviewed again.
+- [ ] The run record names relevant implementation commits when useful.
+- [ ] Claims in the run record match the repository.
+- [ ] Open risks / questions are honest.
+- [ ] Documentation distinguishes current capability from future direction.
 
-A sidecar-only commit that records the human decision does not itself
-require another decision.
-
-Do not merge while the Moraine decision is stale relative to the run
-record. If implementation changes after approval, update the reviewed
-commit in the run record and record a new decision.
-
-### Guarantee boundary (current product)
-
-| Guarantee | Current status |
-| --------- | -------------- |
-| Decision applies to exact run-record Markdown | Mechanically enforced |
-| Run record names an implementation commit | Manually recorded |
-| Implementation commit has not changed | Process-enforced |
-| Decision cryptographically applies to source tree | Not implemented |
+Moraine does **not** require an approval/decision state as a merge gate.
+GitHub PR review and CI own merge disposition.

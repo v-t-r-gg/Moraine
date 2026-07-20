@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "a6ceb4ba-c909-4977-a2af-b4488e4ea313",
+  "createdAt": "2026-07-18T17:59:09.523265075Z",
+  "updatedAt": "2026-07-18T17:59:09.558036795Z",
+  "startOps": {
+    "local-mcp-codex-integration-2026-07": {
+      "runId": "7416135c-f8f6-4377-801c-a7c47674a372",
+      "objective": "Add local MCP transport and Codex integration",
+      "recordPath": ".moraine/runs/2026-07-18-add-local-mcp-transport-and-codex-integr-7416135c.md",
+      "payloadHash": "8fbc473bf5e1688853fda8b8f1c8203f8f9453e8b51eda8f5a311a073e72f43c",
+      "status": "complete"
+    }
+  }
+}

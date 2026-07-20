@@ -869,7 +869,7 @@ Before merge:
 
 ## 17. Immediate next action
 
-**Milestone 0 (this change set):** Vision realignment and decision de-centering — keep documentation, primary UI, and process language ledger-only; preserve historical decisions for compatibility.
+**Milestone 0 (closed):** Vision realignment and decision de-centering — documentation, primary UI, and process language are ledger-only; historical decisions remain for compatibility.
 
 **Next:** Complete **Local MCP Transport and Codex Integration** (Milestone 1 acceptance), then evidence capture.
 

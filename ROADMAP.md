@@ -12,13 +12,13 @@ High-level direction. Product model: [VISION.md](./VISION.md), [ARCHITECTURE.md]
 * Agent run protocol: `project init`, `run start|checkpoint|show|ready|resume|open`
 * Per-document ledger lock + safe atomic replace; deterministic legacy migration
 * CLI: protocol + `share`, `status --json`, `init`, file helpers
+* **Milestone 0:** vision realignment and decision de-centering (docs, legacy `decide`, primary UI)
 * Local STDIO MCP (`moraine mcp`) with Codex integration docs
 * GUI: comments, suggestions, host Save; run-level decision controls de-centered
 * Optional in-memory live relay (secondary)
 
 ## Now
 
-* Vision realignment and decision de-centering (Milestone 0)
 * Finish MCP / Codex dogfooding (Milestone 1 acceptance)
 * Keep CI green
 

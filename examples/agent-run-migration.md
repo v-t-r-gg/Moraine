@@ -53,9 +53,10 @@ Moraine does not auto-collect these artifacts. The agent (or human) must write p
 
 ## Needs human review
 
-* [ ] Use Moraine **Run review**: Approve / Request changes / Reject (bound to this Markdown revision)
-* [ ] Approve concurrent approach or schedule a window for blocking DDL  
+* [ ] Inspect this run record in Moraine (comment / challenge / add notes as needed)
+* [ ] Confirm concurrent approach or schedule a window for blocking DDL  
 * [ ] Confirm staging is the correct target  
 * [ ] Optional: Suggest clearer wording in the Outcome section via Moraine **Suggest**
 
-Run-level decisions are separate from accepting a text suggestion. After Markdown changes, prior decisions become stale until re-recorded.
+Moraine does not record merge approval. Disposition stays in the PR / ops process.
+Accepting a text **suggestion** only updates wording in the record.

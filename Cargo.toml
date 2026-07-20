@@ -4,9 +4,10 @@ members = [
     "crates/moraine-core",
     "crates/moraine-cli",
     "crates/moraine-server",
+    "crates/moraine-mcp",
     "src-tauri",
 ]
-default-members = ["crates/moraine-cli", "crates/moraine-core", "crates/moraine-server"]
+default-members = ["crates/moraine-cli", "crates/moraine-core", "crates/moraine-server", "crates/moraine-mcp"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,7 +16,7 @@ license = "Apache-2.0"
 repository = "https://github.com/v-t-r-gg/Moraine"
 authors = ["Moraine Contributors"]
 rust-version = "1.77"
-description = "Local-first review ledger for autonomous agent work"
+description = "Local-first ledger for autonomous agent work"
 
 [workspace.dependencies]
 moraine-core = { path = "crates/moraine-core" }

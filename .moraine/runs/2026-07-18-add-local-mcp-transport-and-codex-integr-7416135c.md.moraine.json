@@ -1,0 +1,103 @@
+{
+  "schemaVersion": 4,
+  "run": {
+    "id": "7416135c-f8f6-4377-801c-a7c47674a372",
+    "createdAt": "2026-07-18T17:59:09.545959029Z",
+    "updatedAt": "2026-07-18T17:59:17.826535181Z"
+  },
+  "decisions": [],
+  "comments": [],
+  "agent": {
+    "lifecycle": "active",
+    "recordRevision": 2,
+    "objective": "Add local MCP transport and Codex integration",
+    "recordPath": ".moraine/runs/2026-07-18-add-local-mcp-transport-and-codex-integr-7416135c.md",
+    "projectId": "a6ceb4ba-c909-4977-a2af-b4488e4ea313",
+    "startIdempotencyKey": "local-mcp-codex-integration-2026-07",
+    "startingGit": {
+      "available": true,
+      "repositoryRoot": "/home/bone/Projects/Moraine",
+      "branch": "feat/local-mcp-codex-integration",
+      "head": "e09f68d436d74bbe0253e669437c6d1a0b122408",
+      "detached": false,
+      "workingTree": "dirty",
+      "changedFiles": [
+        ".moraine/.gitignore",
+        ".moraine/project.json"
+      ],
+      "changedFileCount": 2
+    },
+    "currentGit": {
+      "available": true,
+      "repositoryRoot": "/home/bone/Projects/Moraine",
+      "branch": "feat/local-mcp-codex-integration",
+      "head": "e09f68d436d74bbe0253e669437c6d1a0b122408",
+      "detached": false,
+      "workingTree": "dirty",
+      "changedFiles": [
+        ".moraine/.gitignore",
+        ".moraine/project.json",
+        ".moraine/runs/2026-07-18-add-local-mcp-transport-and-codex-integr-7416135c.md",
+        ".moraine/runs/2026-07-18-add-local-mcp-transport-and-codex-integr-7416135c.md.moraine.json"
+      ],
+      "changedFileCount": 4
+    },
+    "checkpoints": [
+      {
+        "opId": "683c13c3-2b63-4161-a174-70dc3447e938",
+        "idempotencyKey": "mcp-cp1-inspect",
+        "createdAt": "2026-07-18T17:59:17.809074196Z",
+        "summary": "Confirmed PR #6 merged at e09f68d; started branch and dogfood run via protocol CLI",
+        "actions": [
+          "Verified main at e09f68d contains agent-run protocol recovery, Human notes, managed regions",
+          "Created feat/local-mcp-codex-integration",
+          "Selected official rmcp Rust SDK for STDIO MCP server"
+        ],
+        "rationales": [
+          {
+            "choice": "Use official rmcp crate with server+transport-io features",
+            "reason": "Official Model Context Protocol Rust SDK; stdio transport is first-class"
+          }
+        ],
+        "risks": [
+          "rmcp API version churn; pin via Cargo.lock"
+        ],
+        "openQuestions": [
+          "Exact Codex config.toml keys for tool allowlists and timeouts on current Codex docs"
+        ],
+        "git": {
+          "available": true,
+          "repositoryRoot": "/home/bone/Projects/Moraine",
+          "branch": "feat/local-mcp-codex-integration",
+          "head": "e09f68d436d74bbe0253e669437c6d1a0b122408",
+          "detached": false,
+          "workingTree": "dirty",
+          "changedFiles": [
+            ".moraine/.gitignore",
+            ".moraine/project.json",
+            ".moraine/runs/2026-07-18-add-local-mcp-transport-and-codex-integr-7416135c.md",
+            ".moraine/runs/2026-07-18-add-local-mcp-transport-and-codex-integr-7416135c.md.moraine.json"
+          ],
+          "changedFileCount": 4
+        }
+      }
+    ],
+    "lifecycleEvents": [],
+    "idempotency": {
+      "mcp-cp1-inspect": {
+        "payloadHash": "882549f43fcc130324f3b7ab20f3130f237d4daab9e37eb9c8dc1d9e6a948ca6",
+        "opId": "683c13c3-2b63-4161-a174-70dc3447e938",
+        "kind": "checkpoint",
+        "contentHash": "9b6ae877e53d3e1180c47d0dc066f34ac2402d86a9bf34e8e4209f94273a18e0",
+        "recordRevision": 2,
+        "createdAt": "2026-07-18T17:59:17.826503111Z"
+      }
+    },
+    "risks": [
+      "rmcp API version churn; pin via Cargo.lock"
+    ],
+    "openQuestions": [
+      "Exact Codex config.toml keys for tool allowlists and timeouts on current Codex docs"
+    ]
+  }
+}

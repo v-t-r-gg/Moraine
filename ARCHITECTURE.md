@@ -2,21 +2,23 @@
 
 ## Conceptual center
 
-The central object is an **agent run**, represented by a durable **run record**:
+The central object is an **agent run**, represented by a durable **run bundle**:
 
-* Markdown narrative (what happened)
-* Structured ledger `*.md.moraine.json` (run id, revision-bound decisions, comments, suggestions)
+* Markdown narrative (human-readable projection)
+* Structured sidecar `*.md.moraine.json` (run id, agent protocol state, annotations; historical decisions retained for compatibility)
+* Optional evidence references or captured artifacts
+* Human notes and comments
 
-Live collaboration is optional infrastructure around that record. See [VISION.md](./VISION.md).
+Moraine is a **ledger**, not an approval gate. Live collaboration is optional infrastructure around that record. See [VISION.md](./VISION.md) and [docs/DEVELOPMENT_BLUEPRINT.md](./docs/DEVELOPMENT_BLUEPRINT.md).
 
 ## Interaction surfaces
 
 ```
   Agents / scripts                      Humans
         |                                  |
-   moraine CLI                        GUI (Tauri / web)
-   project/run protocol,              review, edit, Save
-   status, decide, share
+   moraine CLI / MCP                  GUI (Tauri / web)
+   project/run protocol,              inspect, comment,
+   status, share                      notes, Save
         |                                  |
         +---------- moraine-core ----------+
                     |            |
@@ -30,26 +32,28 @@ Long-term surfaces over the same core:
 
 ```text
 moraine-core
-    ├── JSON CLI (current)
-    ├── future MCP transport
+    ├── JSON CLI (`moraine run …`)
+    ├── local STDIO MCP (`moraine mcp`, crate moraine-mcp)
     └── desktop human-review surface
 ```
 
 | Surface | Audience | Role |
 |---------|----------|------|
-| CLI | Agents, scripts | Project/run protocol, share room URL, status, decide, local history helpers |
-| GUI | Humans | Open run records, run-level decisions, comments/suggestions, host Save |
+| CLI | Agents, scripts | Project/run protocol, share room URL, status, local history helpers; `decide` is legacy/compatibility-only |
+| MCP | Coding agents | Same core operations over local STDIO; no decision tools |
+| GUI | Humans | Open run records, comments/suggestions, human notes, host Save |
 | `moraine-core` | Shared | Domain library: documents, history, rooms, share URLs, run ledger, agent protocol |
 | `moraine-server` | Optional | In-memory Yjs WebSocket relay; no auth; no disk persistence |
 
-Core has no Tauri or Axum dependency. MCP is not implemented yet.
+Business logic belongs in `moraine-core`. CLI, MCP, and Tauri commands call the same core operations. Core has no Tauri or Axum dependency.
 
 ## Crates
 
 | Piece | Role |
 |-------|------|
-| `moraine-core` | Run-record files, local history store, FS watcher, room ids, share helpers, run ledger |
+| `moraine-core` | Run-record files, local history store, FS watcher, room ids, share helpers, run ledger, agent protocol |
 | `moraine-cli` | Terminal API for agents and humans |
+| `moraine-mcp` | Local STDIO MCP server over core protocol operations |
 | `moraine-server` | Live Yjs relay only |
 | `src-tauri` | Desktop host shell (IPC, dialogs, watcher bridge) |
 | `src/` | Review UI (Tiptap + Yjs) |
@@ -59,14 +63,14 @@ Core has no Tauri or Axum dependency. MCP is not implemented yet.
 ### Agent write flow
 
 ```text
-Agent or script
-    -> moraine run start / checkpoint / ready / resume (JSON CLI)
+Agent (CLI or MCP)
+    -> run start / checkpoint / ready / resume
     -> durable Markdown projection + sidecar agent state
     -> optional human later opens path or moraine run open --run-id
-    -> human moraine decide / GUI (not agent lifecycle)
+    -> human comments / notes / suggestions (not a Moraine verdict)
 ```
 
-Details: [docs/AGENT_RUN_PROTOCOL.md](./docs/AGENT_RUN_PROTOCOL.md).
+Details: [docs/AGENT_RUN_PROTOCOL.md](./docs/AGENT_RUN_PROTOCOL.md), [docs/MCP.md](./docs/MCP.md).
 
 ### Live review flow
 
@@ -74,7 +78,7 @@ Details: [docs/AGENT_RUN_PROTOCOL.md](./docs/AGENT_RUN_PROTOCOL.md).
 Agent or human edits (file and/or GUI)
     -> optional moraine share -> join URL
     -> moraine-server (WS) + Yjs in GUI
-    -> human Review (run decide / comment / suggest / accept / reject)
+    -> human Review (comment / suggest / accept / reject suggestion)
     -> host desktop Save -> .md + .md.moraine.json
 ```
 
@@ -85,23 +89,22 @@ Relay state is not durable. When the process exits, live rooms are gone; files r
 ```text
 Markdown + .moraine.json on disk
     -> open in GUI as host (or re-share later)
-    -> load ledger (run id, decisions, annotations) into UI / Yjs map
+    -> load ledger (run id, annotations, optional historical decisions) into UI / Yjs map
     -> rehydrate marks by quote search (best effort)
-    -> show current vs stale run-level decision from content hash
-    -> human reviews without the original agent session
+    -> human inspects, comments, and adds notes without the original agent session
 ```
 
 ## Feature and audience
 
 | Capability | Primary audience | Current role |
 |------------|------------------|--------------|
-| CLI operations | Agents and scripts | Create, inspect, share, status using supported commands |
-| Desktop / web editor | Humans | Review and edit run records |
+| CLI / MCP operations | Agents and scripts | Create, inspect, share, status using supported commands |
+| Desktop / web editor | Humans | Inspect and annotate run records |
 | Comments and suggestions | Humans | Structured review feedback; accept/reject text suggestions |
 | Markdown persistence | Agents and humans | Durable portable run narrative |
-| Sidecar metadata | Review tooling + humans | Run ID, revision-bound decisions, operation-based annotations |
-| Run-level decisions | Humans | Approve / request changes / reject bound to content hash |
-| Live collaboration | Agents and humans | Optional concurrent review via relay |
+| Sidecar metadata | Review tooling + humans | Run ID, agent protocol state, operation-based annotations |
+| Historical run-level decisions | Compatibility | Preserved in sidecars; not extended; not primary UI |
+| Live collaboration | Agents and humans | Optional concurrent review via relay (secondary) |
 | Local history | Humans | Revisit local snapshots under data dir (not Git) |
 
 ## Persistence details
@@ -109,18 +112,18 @@ Markdown + .moraine.json on disk
 | Store | What | Notes |
 |-------|------|--------|
 | `.md` file | Narrative | Source of truth for prose |
-| `.md.moraine.json` | Run ledger | schema v2: run id, decisions[], comments[] |
+| `.md.moraine.json` | Run ledger | schema through v4: run id, agent state, annotations; `decisions[]` retained for compatibility |
 | `.md.comments.json` | Legacy annotations | Migrated into `.moraine.json` on load |
 | `~/.local/share/moraine/history` (typical) | Local edit snapshots | Separate from Git |
 | Yjs (memory / live) | Session collab state | Not a server-side durable store |
 
 Content hash: SHA-256 of exact UTF-8 Markdown bytes (no line-ending normalization).
 
-Ledger mutations (init, decide, annotation operations, migration) take a per-document lock file (`*.moraine.json.lock`), re-read after lock, then write via unique temp file + replace. There is no direct truncate-and-rewrite fallback.
+Ledger mutations (init, legacy decide, annotation operations, migration) take a per-document lock file (`*.moraine.json.lock`), re-read after lock, then write via unique temp file + replace. There is no direct truncate-and-rewrite fallback.
 
 Annotations use explicit operations with a per-annotation monotonic `revision` concurrency token (checked increment; overflow errors). Suggestions store a durable disposition: `pending`, `accepting`, `accepted`, `rejected`, or `resolved_legacy` (schema v3). Acceptance is two-phase: begin (reserve + bind content hash), apply and Save Markdown, then complete. Cancel is allowed only while the disk Markdown hash still equals the acceptance base hash; if the document changed, cancel fails with `acceptance_document_changed` and the human may explicitly finalize against the current saved hash. Host Save reconciles the live session by stable ID without deletes; new session IDs always start at revision 1.
 
-`moraine status` is read-only. `moraine init` (or desktop open / decide) creates the ledger.
+`moraine status` is read-only. `moraine init` (or desktop open / legacy decide) creates the ledger.
 
 Legacy migration: copy comments into `.moraine.json`, then rename `.comments.json` to `.comments.json.migrated`.
 
@@ -136,6 +139,8 @@ When remote peers are present, autosave pauses; explicit Save still writes. Brow
 
 Moraine is **not** currently:
 
+* an approval or rejection system (product center)
+* a merge gate or CI/deployment authorizer
 * a general knowledge-management workspace
 * a complete agent observability platform
 * a replacement for Git or pull requests
@@ -144,15 +149,15 @@ Moraine is **not** currently:
 * a guarantee that an agent narrative is truthful or complete
 * a system with secure multi-user auth on the relay
 
-Also: no automatic evidence capture; no automatic Git commits; relay has no durable state; reviewer names are not authenticated identities.
+Also: limited automatic evidence capture; no automatic Git commits; relay has no durable state; reviewer names are not authenticated identities.
 
 ## Future direction (not implemented)
 
-Possible later work: evidence capture, authenticated reviewer identity, Git helpers, authenticated collab, multi-run review inbox, optional agent protocol adapters. Present as direction only.
+See the development blueprint: evidence capture, findings and amendments, local run discovery, second agent integration. Present as direction only. Freeze broad live-collaboration investment unless real use demands it.
 
 ## Quality preference
 
-Prefer improvements that strengthen **run records** and **human review/hindsight** over general editor features.
+Prefer improvements that strengthen **run records**, **evidence provenance**, and **human inspection/hindsight** over general editor features or approval workflow.
 
 ## Tests
 
@@ -160,5 +165,6 @@ Prefer improvements that strengthen **run records** and **human review/hindsight
 ./scripts/check.sh
 cargo test -p moraine-core
 cargo test -p moraine-cli
+cargo test -p moraine-mcp
 npm test
 ```

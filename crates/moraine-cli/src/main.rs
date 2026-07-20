@@ -169,11 +169,15 @@ enum Commands {
         json: bool,
     },
 
-    /// Record a run-level review decision bound to the current Markdown hash
-    #[command(after_help = "Examples:\n  \
+    /// Record a run-level review decision (legacy / compatibility-only)
+    #[command(
+        after_help = "LEGACY: Run-level decisions are compatibility-only. Prefer comments, suggestions, and human notes.\n\
+Moraine records review activity; it does not authorize merge or deployment.\n\n\
+Examples:\n  \
         moraine decide run.md --decision approved --reviewer Alice --json\n  \
         moraine decide run.md --decision changes_requested --reviewer Bob --reason 'fix outcomes'\n  \
-        moraine decide run.md --decision approved --reviewer Ada --expected-hash <sha256> --json")]
+        moraine decide run.md --decision approved --reviewer Ada --expected-hash <sha256> --json"
+    )]
     Decide {
         path: PathBuf,
         /// approved | changes_requested | rejected
@@ -201,6 +205,17 @@ enum Commands {
     Run {
         #[command(subcommand)]
         cmd: run_cli::RunCmd,
+    },
+
+    /// Local STDIO MCP server for agent-run tools (project-scoped)
+    #[command(after_help = "Examples:\n  \
+        moraine mcp --project /absolute/path/to/repo\n  \
+        moraine mcp\n\
+        Protocol frames on stdout; diagnostics on stderr. No network listener.")]
+    Mcp {
+        /// Project root (Git root or directory with `.moraine`). Fixed for process lifetime.
+        #[arg(long)]
+        project: Option<PathBuf>,
     },
 }
 
@@ -271,6 +286,20 @@ fn run() -> Result<i32> {
         } => cmd_decide(path, decision, reviewer, reason, expected_hash, json),
         Commands::Project { cmd } => run_cli::dispatch_project(cmd),
         Commands::Run { cmd } => run_cli::dispatch_run(cmd),
+        Commands::Mcp { project } => {
+            // Blocking STDIO MCP loop; never write human diagnostics to stdout.
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .context("tokio runtime")?;
+            match rt.block_on(moraine_mcp::run_stdio_server(project)) {
+                Ok(()) => Ok(EXIT_OK),
+                Err(e) => {
+                    eprintln!("error: {e:#}");
+                    Ok(EXIT_ERR)
+                }
+            }
+        }
     }?;
     Ok(code)
 }
@@ -619,6 +648,9 @@ fn cmd_decide(
     expected_hash: Option<String>,
     json: bool,
 ) -> Result<i32> {
+    eprintln!(
+        "warning: `moraine decide` is legacy/compatibility-only; prefer comments and human notes"
+    );
     if !path.exists() {
         return Ok(emit_err(
             json,

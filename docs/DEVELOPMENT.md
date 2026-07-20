@@ -1,6 +1,6 @@
 # Development process
 
-Short process notes for keeping `main` releasable. Product vision lives in [VISION.md](../VISION.md).
+Short process notes for keeping `main` releasable. Product vision lives in [VISION.md](../VISION.md). Product direction: [DEVELOPMENT_BLUEPRINT.md](./DEVELOPMENT_BLUEPRINT.md).
 
 ## Branch model
 
@@ -16,34 +16,25 @@ Prefer several logical commits on the milestone branch over one giant agent comm
 1. Implement on a feature or release branch (never push multi-commit work only as direct `main` history without review when avoidable).
 2. Open a pull request into `main`.
 3. CI must run `./scripts/check.sh` (see `.github/workflows/ci.yml`).
-4. Update the Moraine run record under `.moraine/runs/` with validation results and the reviewed implementation commit(s).
-5. Human reviews code and run record; records a **current** run-level decision against the finalized run-record Markdown.
-6. Commit the decision sidecar only. A sidecar-only approval commit does not require another decision.
-7. Merge with a **merge commit** when preserving reviewed commit identities matters (for example when local `main` already contains some of the same commits). Prefer squash only when history rewrite is intentional.
-8. Tag only when package versions match the product milestone, otherwise use a descriptive milestone tag (for example `review-ledger-v0.2.1`).
+4. Update the Moraine run record under `.moraine/runs/` with validation results, meaningful checkpoints, evidence, risks, and unresolved questions.
+5. Human inspects code and run record (comments, notes, challenges as needed). **No Moraine approval/decision is required** as a merge gate.
+6. Merge with a **merge commit** when preserving reviewed commit identities matters (for example when local `main` already contains some of the same commits). Prefer squash only when history rewrite is intentional.
+7. Tag only when package versions match the product milestone, otherwise use a descriptive milestone tag.
 
 ### What Moraine enforces vs process
 
 | Guarantee | Current status |
 | --------- | -------------- |
-| Decision applies to exact run-record Markdown | Mechanically enforced |
-| Run record names an implementation commit | Manually recorded |
-| Implementation commit has not changed | Process-enforced |
-| Decision cryptographically applies to source tree | Not implemented |
+| Run record is durable beside the work | Product behavior |
+| Run record names an implementation commit | Manually recorded when useful |
+| Implementation commit has not changed | Process / Git / PR review |
+| Moraine authorizes merge or deployment | **Not a product goal** |
 
-Do not merge while the Moraine decision is stale relative to the run record. If implementation changes after approval, update the reviewed commit in the run record and record a new decision.
+GitHub pull requests and CI remain responsible for merge workflow. Moraine preserves the work record and human context around it.
 
 ### Run records and Git SHAs
 
-A committed run record must **not** attempt to contain the SHA of the commit that contains that same record. Record implementation commits in the run record and record the final PR head in pull-request metadata at approval time.
-
-Review gate summary:
-
-* The run record names implementation commits (manually).
-* The human decision is current for the run-record Markdown (mechanically enforced).
-* PR metadata records the approved PR head at approval time.
-* No implementation files change after approval.
-* A sidecar-only approval commit does not require another decision.
+A committed run record must **not** attempt to contain the SHA of the commit that contains that same record. Record implementation commits in the run record when useful; record the final PR head in pull-request metadata when needed for GitHub review.
 
 ## Recommended branch protection (`main`)
 
@@ -56,7 +47,7 @@ Configure in GitHub settings (requires admin):
 * Block deletion of `main`.
 * Do not require a separate human reviewer on a solo repository unless another reviewer is available.
 
-Self-approval is fine; the goal is a review boundary, not bureaucracy.
+Self-merge is fine when checks pass; the goal is a review boundary in GitHub/CI, not a Moraine verdict.
 
 ## After each milestone
 
@@ -64,15 +55,13 @@ Dogfood for several real runs before starting the next major milestone. Classify
 
 | Classification | Action |
 |----------------|--------|
-| Data loss or incorrect review state | Fix before next milestone |
+| Data loss or incorrect ledger state | Fix before next milestone |
 | Workflow blocker | Fix before next milestone |
 | Frequent usability issue | Consider patch release |
 | Cosmetic | Backlog |
 | New capability | Roadmap |
 | One-off preference | Do not build immediately |
 
-## Next milestone (detail only the next one)
+## Next milestones
 
-**v0.3 Durable Annotations**: comments and suggestions survive ordinary document evolution; no full-list last-writer-wins annotation updates; orphan/ambiguous handling.
-
-Later (adjustable): v0.4 Evidence References, v0.5 Agent Capture, v0.6 Review Inbox, v0.7 Collaboration Hardening.
+See [ROADMAP.md](../ROADMAP.md) and [DEVELOPMENT_BLUEPRINT.md](./DEVELOPMENT_BLUEPRINT.md): evidence capture → findings/amendments → run discovery UX → second agent + beta.

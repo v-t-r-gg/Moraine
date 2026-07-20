@@ -1,7 +1,7 @@
 {
   "name": "moraine",
   "version": "0.1.0",
-  "description": "Local-first review ledger for autonomous agent work",
+  "description": "Local-first ledger for autonomous agent work",
   "type": "module",
   "private": true,
   "scripts": {

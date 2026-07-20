@@ -22,7 +22,6 @@
     onFileChanged,
     openDocument,
     pickMarkdownFile,
-    recordRunDecision,
     reconcileSessionAnnotations,
     rejectSuggestion as rejectSuggestionApi,
     reloadDocument,
@@ -64,15 +63,15 @@
 
   const WELCOME_MD = `# Agent run record
 
-This is a **run record**: a durable Markdown log of agent work for human review.
+This is a **run record**: a durable Markdown log of agent work for human inspection.
 
 ## How to use
 
-1. Agents write or update \`.md\` files (CLI or any tool).
+1. Agents write or update \`.md\` files (CLI, MCP, or any tool).
 2. Optional live room: \`moraine share this-file.md\` (relay must be running).
 3. Humans open the file or join URL, then **Comment** / **Suggest**, **Review**, **Save**.
-4. Use **Run review** (Approve / Request changes / Reject) for the whole record.
-5. Annotations + decisions persist in \`file.md.moraine.json\` on host Save.
+4. Edit **Human notes** for free-form context. Moraine does not record merge approval.
+5. Annotations persist in \`file.md.moraine.json\` on host Save.
 
 See the project README and VISION.md for the full model.
 `;
@@ -97,7 +96,6 @@ See the project README and VISION.md for the full model.
   let sessionCfg = $state<SessionConfig>({ roomId: null, syncUrl: null });
   let localAuthor = $state("You");
   let runReview = $state<RunReviewDto | null>(null);
-  let reviewBusy = $state(false);
   let recoveryBusy = $state(false);
   /** Hash of the last known persisted Markdown revision (from disk load/save). */
   let baseContentHash = $state<string | null>(null);
@@ -373,44 +371,6 @@ See the project README and VISION.md for the full model.
       }
     } catch (e) {
       status = `error: could not load run review (${e})`;
-    }
-  }
-
-  async function onRunDecide(decision: string, reviewer: string, reason: string) {
-    if (!doc || !isTauri) return;
-    if (dirty || externalConflict || saving) {
-      status = dirty
-        ? "Save the current revision before recording a review decision."
-        : "Resolve the external file conflict before recording a decision.";
-      return;
-    }
-    const expected = baseContentHash ?? runReview?.contentHash;
-    if (!expected) {
-      status = "No persisted content hash. Save the file first.";
-      return;
-    }
-    reviewBusy = true;
-    try {
-      runReview = await recordRunDecision(
-        doc.meta.path,
-        decision,
-        reviewer,
-        reason || null,
-        expected,
-      );
-      baseContentHash = runReview.contentHash;
-      status = `Run decision recorded: ${decision}`;
-    } catch (e) {
-      if (isRevisionConflictError(e)) {
-        externalConflict = true;
-        conflictLocalMarkdown = editorRef?.getMarkdownContent?.() ?? markdown;
-        status =
-          "Revision conflict: Markdown on disk changed. Reload from disk, then decide again.";
-      } else {
-        status = `error: could not record decision (${e})`;
-      }
-    } finally {
-      reviewBusy = false;
     }
   }
 
@@ -1124,11 +1084,7 @@ See the project README and VISION.md for the full model.
   {#if isTauri}
     <RunReviewPanel
       review={runReview}
-      busy={reviewBusy}
-      dirty={dirty}
       externalConflict={externalConflict}
-      saving={saving}
-      onDecide={onRunDecide}
       onReload={reloadFromDiskKeepingLocalCopy}
     />
   {/if}

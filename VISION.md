@@ -1,41 +1,56 @@
 # Vision
 
+## Product invariant
+
+> Moraine records review activity; it does not render the verdict.
+
+Moraine is a **local-first ledger for autonomous agent work**. Near-term product focus:
+
+> **Moraine is a local-first, cross-agent ledger for coding-agent work.**
+
+It preserves what an agent did, why it did it, what evidence exists, what risks or unresolved questions remain, and what human context accumulated around the work. It does **not** decide whether work is accepted, rejected, mergeable, deployable, or authorized. Those decisions remain in the coding-agent session, pull request, issue tracker, CI, or other workflow that already owns them.
+
 ## The problem
 
-Autonomous agents now perform real work: code changes, investigations, migrations, deploys, ops fixes. That work often leaves behind chat transcripts, tool logs, or nothing durable at all. Humans need a **reviewable record** of what happened that they can open later, share with peers, put next to the code, and decide on.
+Autonomous agents perform real work: code changes, investigations, migrations, ops fixes. That work often leaves behind chat transcripts, tool logs, or nothing durable. Humans need a **reviewable record** they can open later, put next to the code, comment on, and challenge—without relying on a vendor session viewer.
 
-Moraine is a **review ledger for autonomous agent work**.
+Concise positioning: **Review agent work without relying on agent chat.**
 
-Agents create durable, human-readable **run records** (Markdown plus optional structured sidecar metadata). Humans use Moraine to **review** those records: read the narrative, leave comments, propose text changes as suggestions, and accept or reject suggestions using the current GUI.
+## What Moraine is
 
-Collaborative live editing exists as a supporting capability. It is not the product headline.
+Agents create durable, human-readable **run records** (Markdown plus structured sidecar metadata). Humans inspect those records: read the narrative, leave comments, challenge evidence, add notes, and preserve review discussion.
 
-## Agent self-documentation
+Collaborative live editing exists as a supporting capability. It is not the product headline. Moraine is **not** an approval system.
 
-An **agent run** is a bounded unit of work (one task, one investigation, one migration attempt). During or after that run, the agent (or a wrapper script) writes a **run record**:
+## Agent run
+
+An **agent run** is a bounded unit of work (one feature, one investigation, one migration attempt). During or after that run, the agent writes a **run record**:
 
 * objective and context
 * actions taken
-* decisions and rationale
+* implementation rationale
 * outcome
 * verification or checks performed
 * risks
 * unresolved questions
-* items that need a human
+* evidence references (with clear provenance)
 
-The run record is a plain `.md` file on disk. Agents and scripts use the **CLI** and ordinary filesystem tools to create and update it. The CLI is first-class for automation (`--json` where supported, stable exit codes).
+The run record is a plain `.md` file on disk. Agents use the **CLI**, **local MCP**, or ordinary filesystem tools. The CLI and MCP are first-class for automation (`--json` where supported, stable exit codes, compact tool results).
 
-An agent's narrative is a **claim about its work**, not independent proof. Prefer explicit verification notes and pointers to evidence (command output paths, PR links, log files). Automatic evidence capture is **not** assumed by Moraine today; referencing evidence in Markdown is the current pattern.
+An agent's narrative is a **claim about its work**, not independent proof. Prefer explicit verification notes and pointers to evidence. Automatic evidence capture is emerging; until then, referencing evidence in Markdown is the baseline pattern.
 
-## Human review
+## Human review (without verdict)
 
 Humans primarily use the **GUI** (desktop Tauri app or web UI in development):
 
-* open a run record file
+* open a run record
 * read the narrative
 * comment on selections
 * suggest replacements (accept applies text; reject drops the mark)
-* save the Markdown file and review sidecar when acting as host
+* edit **Human notes**
+* save Markdown and sidecar when acting as host
+
+Review means inspection, comment, challenge, context, and response. It does **not** need to end in an approval state.
 
 Review may happen:
 
@@ -49,7 +64,7 @@ Use "human review" as the default term. "Audit" means a careful human look at th
 | Artifact | Role |
 |----------|------|
 | `*.md` | Human-readable run narrative |
-| `*.md.moraine.json` | Run ledger: stable run id, revision-bound decisions, comments, suggestions |
+| `*.md.moraine.json` | Run ledger: stable run id, structured agent state, annotations; historical decisions preserved for compatibility |
 | `*.md.comments.json` | Legacy annotations only; migrated into `.moraine.json` on open |
 | Local history store | Optional local edit snapshots under the Moraine data directory (not Git) |
 
@@ -58,21 +73,21 @@ Files sit next to the work they describe and can be versioned with Git **by the 
 ## Evidence and trust
 
 * Agent text can be wrong, incomplete, or optimistic.
-* Supporting evidence should be linked or attached in the narrative when available.
-* Humans can leave comments, accept/reject text suggestions, and record run-level decisions (`approved` / `changes_requested` / `rejected`) bound to a content hash. Reviewer labels are user-provided, not authenticated identity.
-* When Markdown changes after a decision, that decision remains in history but is reported as **stale** until a new decision is recorded for the current revision.
+* Supporting evidence should be linked or attached when available, with provenance (`agent_reported` vs captured vs external vs human).
+* Humans can leave comments and accept/reject **text suggestions**. That is not run-level authorization.
 * Moraine does **not** provide authenticated reviewer identity, cryptographic integrity, or a tamper-proof audit log.
+* Historical run-level decisions (`approved` / `changes_requested` / `rejected`) may still exist in older sidecars; they are **compatibility data**, not the product center. Prefer comments, findings, and human notes.
 
 ## Current scope
 
 Implemented today (high level):
 
-* CLI for file I/O, local history helpers, share/join URLs, status, and decide
+* CLI for agent run protocol, file I/O, local history helpers, share/join URLs, status
+* Local STDIO MCP transport (`moraine mcp`) over the same core operations
 * Desktop/web editor over one Markdown file
 * Optional live multiplayer via an in-memory WebSocket relay
 * Host save policy when remote peers are present
 * Comments and suggestions with Yjs session state and host ledger persistence
-* Run-level review decisions bound to SHA-256 content hash of Markdown
 * Mark rehydration from quote text on cold open (best effort)
 
 ## Current limitations
@@ -80,7 +95,7 @@ Implemented today (high level):
 * Early-stage, not production-ready as a hosted collaboration service
 * No authentication; the relay is local/in-memory with no durable server-side state
 * No secure multi-tenant remote collaboration
-* No automatic evidence capture pipeline
+* Limited automatic evidence capture
 * No compliance-grade or immutable review ledger
 * No built-in Git automation
 * Live peer count is not available via CLI `status` (UI/Yjs only)
@@ -91,25 +106,23 @@ Implemented today (high level):
 ## Design principles
 
 1. The primary conceptual object is an **agent run**, not a generic document.
-2. The **CLI** is first-class for agents, scripts, and automation.
-3. The **GUI** is primarily a **human review** interface.
-4. **Hindsight** and durable files matter more than real-time editing.
-5. Agent narrative is useful and not automatically trustworthy.
-6. Run records should be able to **reference** supporting evidence (capture automation is future work).
-7. Human decisions should be structured where the product supports it (comments/suggestions today; richer decisions later).
+2. Moraine is a **ledger**, not a workflow gate.
+3. The **CLI** and **MCP** are first-class for agents and automation.
+4. The **GUI** is primarily a **human inspection** interface.
+5. **Hindsight** and durable files matter more than real-time editing.
+6. Agent narrative is useful and not automatically trustworthy.
+7. Run records should **reference** supporting evidence (capture automation is near-term work).
 8. Plain files and portable formats are deliberate.
-9. One file / one session is acceptable for the current implementation.
+9. Tool independence: no single agent vendor owns the record format.
 10. Docs must separate **current capability** from **direction**.
 
 ## Longer-term direction
 
-Possible future work (not current guarantees):
+See [docs/DEVELOPMENT_BLUEPRINT.md](./docs/DEVELOPMENT_BLUEPRINT.md). Near-term sequence:
 
-* stronger run identity and review decision records
-* better evidence capture and attachment
-* Git integrations (still optional)
-* authenticated collaboration
-* review inboxes across many run records
-* optional MCP or other agent protocol adapters
+* minimal trustworthy evidence capture
+* human findings and agent amendments
+* local run discovery and ledger-focused UX
+* second agent integration and external beta
 
-The CLI remains a valid agent interface even if those appear.
+Explicit non-goals for the MVP: approval/rejection as product center, merge gates, full observability, hosted multi-tenant collab, compliance-grade audit, cryptographic signing.

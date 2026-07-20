@@ -28,3 +28,4 @@ pub use types::{
     IdempotencyRecord, IncompleteOp, LifecycleEvent, RationalItem, RunLifecycle,
     MAX_CHECKPOINT_ITEMS, MAX_FIELD_CHARS, MAX_SUMMARY_CHARS,
 };
+// RationalItem already exported above

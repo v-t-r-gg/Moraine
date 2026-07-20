@@ -13,7 +13,6 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
         .manage(app_state)
         .setup(|app| {
             AppState::start_watcher(app.handle().clone());
@@ -49,7 +48,6 @@ pub fn run() {
             commands::reconcile_session_annotations_cmd,
             commands::comments_sidecar_path_cmd,
             commands::get_run_review,
-            commands::record_run_decision,
             commands::ensure_run_id,
         ])
         .run(tauri::generate_context!())

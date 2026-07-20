@@ -17,16 +17,15 @@
     "server": "cargo run -p moraine-server",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:rust": "cargo test -p moraine-core && cargo test -p moraine-cli",
+    "test:rust": "cargo test -p moraine-core && cargo build -p moraine-cli -q && cargo test -p moraine-cli && cargo test -p moraine-mcp",
     "fmt:rust": "cargo fmt --all",
-    "lint:rust": "cargo clippy -p moraine-core -p moraine-cli -p moraine-server -- -D warnings",
+    "lint:rust": "cargo clippy -p moraine-core -p moraine-cli -p moraine-mcp -p moraine-server -- -D warnings",
     "check:all": "bash scripts/check.sh"
   },
   "license": "Apache-2.0",
   "dependencies": {
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2",
-    "@tauri-apps/plugin-fs": "^2",
     "@tauri-apps/plugin-opener": "^2",
     "@tiptap/core": "^2.11.5",
     "@tiptap/extension-collaboration": "^2.11.5",

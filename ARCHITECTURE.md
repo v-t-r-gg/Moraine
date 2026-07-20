@@ -39,9 +39,9 @@ moraine-core
 
 | Surface | Audience | Role |
 |---------|----------|------|
-| CLI | Agents, scripts | Project/run protocol, share room URL, status, local history helpers; `decide` is legacy/compatibility-only |
+| CLI | Agents, scripts | Project/run protocol, share room URL, status, local history helpers; `decide` is legacy/compatibility-only (CLI only) |
 | MCP | Coding agents | Same core operations over local STDIO; no decision tools |
-| GUI | Humans | Open run records, comments/suggestions, human notes, host Save |
+| GUI | Humans | Open run records, comments/suggestions, human notes, host Save (no decision IPC) |
 | `moraine-core` | Shared | Domain library: documents, history, rooms, share URLs, run ledger, agent protocol |
 | `moraine-server` | Optional | In-memory Yjs WebSocket relay; no auth; no disk persistence |
 
@@ -135,6 +135,8 @@ One Markdown path maps to one live room id (stable hash of absolute path).
 
 When remote peers are present, autosave pauses; explicit Save still writes. Browser-only mode uses stubs and does not provide real host disk for arbitrary paths the same way.
 
+Desktop file I/O uses **Rust Tauri commands** (trusted local host), not the webview `fs` plugin. Capabilities deliberately omit broad `fs:**` scopes. MCP remains project-confined at process start.
+
 ## Current non-goals and limitations
 
 Moraine is **not** currently:
@@ -168,3 +170,5 @@ cargo test -p moraine-cli
 cargo test -p moraine-mcp
 npm test
 ```
+
+MSRV is declared in the workspace `Cargo.toml` (`rust-version = "1.88"`) and checked in CI.

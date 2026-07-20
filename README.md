@@ -31,6 +31,8 @@ npm install
 
 CLI and server do not require WebKit. Desktop does.
 
+**Rust MSRV:** `1.88` (workspace `rust-version`). Required by `rmcp` 2.2 (edition 2024) and `rmcp-macros` → `darling`. CI runs an MSRV job.
+
 ## Quick start
 
 ```bash
@@ -158,8 +160,8 @@ Live multiplayer is a convenience, not the main differentiation.
 Older sidecars may contain append-only run-level decisions (`approved` / `changes_requested` / `rejected`) bound to a content hash. That data is **preserved and still loadable**. The product no longer centers on recording new decisions.
 
 * Prefer comments, suggestions, human notes, and (upcoming) findings.
-* `moraine decide` remains available as **legacy / compatibility-only**.
-* Decisions are **not** exposed through MCP.
+* `moraine decide` remains available as **legacy / compatibility-only** (CLI only; stderr warning on use).
+* Decisions are **not** exposed through MCP or the desktop UI IPC.
 * Accepting a text **suggestion** is unrelated to run-level authorization.
 * Legacy `file.md.comments.json` is migrated into `.moraine.json` on **init**, legacy **decide**, desktop open, or comment save (not on `status`).
 

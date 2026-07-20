@@ -15,7 +15,8 @@ edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/v-t-r-gg/Moraine"
 authors = ["Moraine Contributors"]
-rust-version = "1.77"
+# Effective MSRV: rmcp 2.2 (edition 2024) + rmcp-macros → darling require ≥1.88.
+rust-version = "1.88"
 description = "Local-first ledger for autonomous agent work"
 
 [workspace.dependencies]

@@ -29,6 +29,30 @@ impl RunLifecycle {
     }
 }
 
+/// How completely Moraine captured this run (independent of lifecycle).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureCoverage {
+    Full,
+    MechanicalOnly,
+    SemanticOnly,
+    Partial,
+    #[default]
+    Unknown,
+}
+
+impl CaptureCoverage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::MechanicalOnly => "mechanical_only",
+            Self::SemanticOnly => "semantic_only",
+            Self::Partial => "partial",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RationalItem {
@@ -202,6 +226,15 @@ pub struct AgentRunState {
     pub risks: Vec<String>,
     #[serde(default)]
     pub open_questions: Vec<String>,
+    /// Capture channel honesty (hooks / MCP / both / unknown).
+    #[serde(default)]
+    pub capture_coverage: CaptureCoverage,
+    /// Agent-host session this run is bound to, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// True until a semantic `run_start` confirms this mechanically created run.
+    #[serde(default)]
+    pub provisional: bool,
 }
 
 impl AgentRunState {

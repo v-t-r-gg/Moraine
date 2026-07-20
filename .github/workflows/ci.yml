@@ -22,7 +22,7 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy -p moraine-core -p moraine-cli -p moraine-mcp -p moraine-server -- -D warnings
+        run: cargo clippy -p moraine-core -p moraine-cli -p moraine-mcp -p moraine-server -p moraine-service -- -D warnings
       - name: Test
         run: |
           cargo test -p moraine-core
@@ -30,6 +30,7 @@ jobs:
           cargo build -p moraine-cli -q
           cargo test -p moraine-cli
           cargo test -p moraine-mcp
+          cargo test -p moraine-service
 
   # Workspace Cargo.toml rust-version must build (includes edition-2024 deps via rmcp).
   msrv:
@@ -40,7 +41,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: MSRV check
         run: |
-          cargo check -p moraine-core -p moraine-cli -p moraine-mcp -p moraine-server
+          cargo check -p moraine-core -p moraine-cli -p moraine-mcp -p moraine-server -p moraine-service
 
   frontend:
     runs-on: ubuntu-latest

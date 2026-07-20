@@ -1,0 +1,11 @@
+[Unit]
+Description=Moraine local integration runtime (per-user)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.cargo/bin/moraine-service --http 127.0.0.1:33111 --unix-socket %t/moraine-service.sock
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

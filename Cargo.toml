@@ -5,6 +5,7 @@ members = [
     "crates/moraine-cli",
     "crates/moraine-server",
     "crates/moraine-mcp",
+    "crates/moraine-service",
     "src-tauri",
 ]
 default-members = ["crates/moraine-cli", "crates/moraine-core", "crates/moraine-server", "crates/moraine-mcp"]

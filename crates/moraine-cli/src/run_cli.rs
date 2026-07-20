@@ -161,6 +161,7 @@ pub fn dispatch_run(cmd: RunCmd) -> Result<i32> {
                 objective,
                 idempotency_key,
                 project,
+                session_id: None,
             }) {
                 Ok(r) => {
                     emit_ok(

@@ -12,9 +12,12 @@ use super::project::{
     find_run_by_id, resolve_existing_project, resolve_or_init_project, runs_dir,
     update_project_meta, StartOpIndex, StartOpStatus,
 };
+use super::session::{
+    load_session, session_observe, set_session_active_run, SessionObserveRequest,
+};
 use super::types::{
-    AgentRunState, CheckpointRecord, EvidenceItem, EvidenceProvenance, IdempotencyRecord,
-    IncompleteOp, IncompletePhase, LifecycleEvent, RationalItem, RunLifecycle,
+    AgentRunState, CaptureCoverage, CheckpointRecord, EvidenceItem, EvidenceProvenance,
+    IdempotencyRecord, IncompleteOp, IncompletePhase, LifecycleEvent, RationalItem, RunLifecycle,
     MAX_CHECKPOINT_ITEMS, MAX_FIELD_CHARS, MAX_RECENT_CHECKPOINTS_IN_SHOW, MAX_RECENT_LIST_IN_SHOW,
     MAX_SUMMARY_CHARS,
 };
@@ -50,6 +53,17 @@ pub struct RunStartRequest {
     pub objective: String,
     pub idempotency_key: String,
     pub project: Option<PathBuf>,
+    /// When set, confirm a provisional run bound to this session instead of creating a duplicate.
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProvisionalRunRequest {
+    pub session_id: String,
+    pub project: Option<PathBuf>,
+    /// Bounded objective from the first substantive prompt; optional fallback applied.
+    pub objective: Option<String>,
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -168,6 +182,55 @@ pub fn run_start(req: RunStartRequest) -> Result<AgentOpResult> {
             message: "idempotency key is required".into(),
         });
     }
+
+    // Prefer confirming a provisional run bound to this session.
+    if let Some(session_id) = req
+        .session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let project = resolve_or_init_project(req.project.as_deref())?;
+        if let Some(session) = load_session(&project.project_root, session_id)? {
+            if let Some(run_id) = session.active_run_id {
+                if let Ok((md_path, meta)) = find_run_by_id(&project.project_root, run_id) {
+                    if let Some(agent) = meta.agent.as_ref() {
+                        if agent.provisional {
+                            return confirm_provisional_run(
+                                &project.project_root,
+                                project.project_id,
+                                session_id,
+                                md_path,
+                                meta,
+                                &objective,
+                                &req.idempotency_key,
+                            );
+                        }
+                        // Already confirmed for this session: idempotent if start key matches.
+                        if agent.start_idempotency_key == req.idempotency_key {
+                            let markdown = Document::read_file(&md_path)?;
+                            return Ok(AgentOpResult {
+                                run_id: meta.run.id,
+                                state: agent.lifecycle,
+                                record_path: agent.record_path.clone(),
+                                absolute_path: md_path,
+                                content_hash: content_hash(&markdown),
+                                record_revision: agent.record_revision,
+                                project_id: Some(project.project_id),
+                                project_root: Some(project.project_root),
+                                op_id: None,
+                                git: agent.starting_git.clone(),
+                                review_state: None,
+                                decision_current: None,
+                                idempotent_replay: true,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let payload_hash = hash_payload(&json!({
         "kind": "start",
         "objective": objective,
@@ -244,6 +307,17 @@ pub fn run_start(req: RunStartRequest) -> Result<AgentOpResult> {
 
     // Pending or incomplete create: build files with reserved identity.
     let git = capture_git_context(&project_root);
+    let session_id = req
+        .session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let coverage = if session_id.is_some() {
+        CaptureCoverage::SemanticOnly
+    } else {
+        CaptureCoverage::Unknown
+    };
     let agent = AgentRunState {
         lifecycle: RunLifecycle::Active,
         record_revision: 1,
@@ -260,6 +334,9 @@ pub fn run_start(req: RunStartRequest) -> Result<AgentOpResult> {
         incomplete_op: None,
         risks: vec![],
         open_questions: vec![],
+        capture_coverage: coverage,
+        session_id: session_id.clone(),
+        provisional: false,
     };
 
     let mut meta = RunMeta::new_run_with_id(run_id);
@@ -302,6 +379,10 @@ pub fn run_start(req: RunStartRequest) -> Result<AgentOpResult> {
 
     finalize_start_index(&project_root, &req.idempotency_key, &reservation)?;
 
+    if let Some(sid) = session_id.as_deref() {
+        let _ = set_session_active_run(&project_root, sid, run_id);
+    }
+
     Ok(AgentOpResult {
         run_id,
         state: RunLifecycle::Active,
@@ -310,6 +391,356 @@ pub fn run_start(req: RunStartRequest) -> Result<AgentOpResult> {
         content_hash: hash,
         record_revision: 1,
         project_id: Some(project.project_id),
+        project_root: Some(project_root),
+        op_id: None,
+        git: Some(git),
+        review_state: None,
+        decision_current: None,
+        idempotent_replay: reservation.status == StartOpStatus::Complete,
+    })
+}
+
+fn confirm_provisional_run(
+    project_root: &Path,
+    project_id: Uuid,
+    session_id: &str,
+    md_path: PathBuf,
+    _meta: RunMeta,
+    objective: &str,
+    idempotency_key: &str,
+) -> Result<AgentOpResult> {
+    let side = moraine_sidecar_path(&md_path);
+    let _lock = SidecarLock::acquire(&side)?;
+    // Reload under lock.
+    let mut meta = load_or_migrate_locked(&md_path)?;
+    let mut agent = meta
+        .agent
+        .take()
+        .ok_or_else(|| Error::RunRecordStructureInvalid {
+            message: "missing agent state".into(),
+        })?;
+
+    if !agent.provisional {
+        let markdown = Document::read_file(&md_path)?;
+        return Ok(AgentOpResult {
+            run_id: meta.run.id,
+            state: agent.lifecycle,
+            record_path: agent.record_path.clone(),
+            absolute_path: md_path,
+            content_hash: content_hash(&markdown),
+            record_revision: agent.record_revision,
+            project_id: Some(project_id),
+            project_root: Some(project_root.to_path_buf()),
+            op_id: None,
+            git: agent.starting_git.clone(),
+            review_state: None,
+            decision_current: None,
+            idempotent_replay: true,
+        });
+    }
+
+    // Idempotent confirm when semantic start key + objective already applied.
+    if agent.start_idempotency_key == idempotency_key && agent.objective == objective {
+        let markdown = Document::read_file(&md_path)?;
+        return Ok(AgentOpResult {
+            run_id: meta.run.id,
+            state: agent.lifecycle,
+            record_path: agent.record_path.clone(),
+            absolute_path: md_path,
+            content_hash: content_hash(&markdown),
+            record_revision: agent.record_revision,
+            project_id: Some(project_id),
+            project_root: Some(project_root.to_path_buf()),
+            op_id: None,
+            git: agent.starting_git.clone(),
+            review_state: None,
+            decision_current: None,
+            idempotent_replay: true,
+        });
+    }
+
+    let payload_hash = hash_payload(&json!({
+        "kind": "start",
+        "objective": objective,
+        "confirm": true,
+        "sessionId": session_id,
+    }));
+
+    // Register semantic start key → this run (conflict if key reused differently).
+    update_project_meta(project_root, |pm| {
+        if let Some(existing) = pm.start_ops.get(idempotency_key) {
+            if existing.run_id != meta.run.id
+                || (existing.payload_hash != payload_hash && existing.objective != objective)
+            {
+                // Allow same run_id with matching objective even if payload hash differs slightly.
+                if existing.run_id != meta.run.id || existing.objective != objective {
+                    return Err(Error::IdempotencyConflict {
+                        key: idempotency_key.to_string(),
+                        message:
+                            "start idempotency key was reused with a different run or objective"
+                                .into(),
+                    });
+                }
+            }
+            return Ok(());
+        }
+        pm.start_ops.insert(
+            idempotency_key.to_string(),
+            StartOpIndex {
+                run_id: meta.run.id,
+                objective: objective.to_string(),
+                record_path: agent.record_path.clone(),
+                payload_hash: payload_hash.clone(),
+                status: StartOpStatus::Complete,
+            },
+        );
+        Ok(())
+    })?;
+
+    let human = {
+        let markdown = Document::read_file(&md_path)?;
+        extract_human_notes(&markdown)?
+    };
+
+    agent.objective = objective.to_string();
+    agent.provisional = false;
+    agent.start_idempotency_key = idempotency_key.to_string();
+    agent.session_id = Some(session_id.to_string());
+    agent.capture_coverage = match agent.capture_coverage {
+        CaptureCoverage::MechanicalOnly | CaptureCoverage::Full => CaptureCoverage::Full,
+        CaptureCoverage::SemanticOnly => CaptureCoverage::SemanticOnly,
+        CaptureCoverage::Partial => CaptureCoverage::Partial,
+        CaptureCoverage::Unknown => CaptureCoverage::Full,
+    };
+    agent.bump_revision()?;
+    let git = capture_git_context(project_root);
+    agent.current_git = Some(git.clone());
+
+    let new_md = render_run_markdown_with_id(meta.run.id, &agent, &human);
+    let new_hash = content_hash(&new_md);
+    write_atomic(&md_path, new_md.as_bytes())?;
+    meta.agent = Some(agent.clone());
+    meta.touch();
+    write_run_meta_unlocked(&md_path, &meta)?;
+    drop(_lock);
+
+    set_session_active_run(project_root, session_id, meta.run.id)?;
+
+    Ok(AgentOpResult {
+        run_id: meta.run.id,
+        state: agent.lifecycle,
+        record_path: agent.record_path.clone(),
+        absolute_path: md_path,
+        content_hash: new_hash,
+        record_revision: agent.record_revision,
+        project_id: Some(project_id),
+        project_root: Some(project_root.to_path_buf()),
+        op_id: None,
+        git: Some(git),
+        review_state: None,
+        decision_current: None,
+        idempotent_replay: false,
+    })
+}
+
+/// Ensure a provisional run exists for a session after the first substantive event.
+pub fn provisional_run_ensure(req: ProvisionalRunRequest) -> Result<AgentOpResult> {
+    let session_id = req.session_id.trim();
+    if session_id.is_empty() {
+        return Err(Error::InvalidCheckpoint {
+            message: "session_id is required".into(),
+        });
+    }
+
+    // Ensure session envelope exists.
+    let observed = session_observe(SessionObserveRequest {
+        session_id: session_id.to_string(),
+        integration: "unknown".into(),
+        project: req.project.clone(),
+        source: "provisional_ensure".into(),
+        initial_task: req.objective.clone(),
+        ended: false,
+    })?;
+
+    if let Some(run_id) = observed.active_run_id {
+        if let Ok((md_path, meta)) = find_run_by_id(&observed.project_root, run_id) {
+            if let Some(agent) = meta.agent.as_ref() {
+                let markdown = Document::read_file(&md_path)?;
+                return Ok(AgentOpResult {
+                    run_id: meta.run.id,
+                    state: agent.lifecycle,
+                    record_path: agent.record_path.clone(),
+                    absolute_path: md_path,
+                    content_hash: content_hash(&markdown),
+                    record_revision: agent.record_revision,
+                    project_id: Some(observed.project_id),
+                    project_root: Some(observed.project_root),
+                    op_id: None,
+                    git: agent.starting_git.clone(),
+                    review_state: None,
+                    decision_current: None,
+                    idempotent_replay: true,
+                });
+            }
+        }
+    }
+
+    let objective = require_safe_scalar(
+        "objective",
+        req.objective
+            .as_deref()
+            .or(observed.initial_task.as_deref())
+            .unwrap_or("Provisional capture (no objective yet)")
+            .trim(),
+        MAX_SUMMARY_CHARS,
+    )?;
+    let idempotency_key = req
+        .idempotency_key
+        .unwrap_or_else(|| format!("provisional:{session_id}"));
+
+    let payload_hash = hash_payload(&json!({
+        "kind": "provisional_start",
+        "sessionId": session_id,
+        "objective": objective,
+    }));
+
+    let project_root = observed.project_root.clone();
+    let project_id = observed.project_id;
+
+    let reservation = update_project_meta(&project_root, |meta| {
+        if let Some(existing) = meta.start_ops.get(&idempotency_key).cloned() {
+            if existing.payload_hash != payload_hash && existing.objective != objective {
+                // Same provisional key should map to same run; allow objective refinement only
+                // before confirm by returning existing.
+                return Ok(existing);
+            }
+            return Ok(existing);
+        }
+        let run_id = Uuid::new_v4();
+        let short = short_id(run_id);
+        let date = Utc::now().format("%Y-%m-%d");
+        let slug = slugify(&objective);
+        let mut file_name = format!("{date}-{slug}-{short}.md");
+        let runs = runs_dir(&project_root);
+        let mut md_path = runs.join(&file_name);
+        if md_path.exists() {
+            file_name = format!(
+                "{date}-{slug}-{short}-{}.md",
+                &Uuid::new_v4().to_string()[..8]
+            );
+            md_path = runs.join(&file_name);
+        }
+        let rel = path_relative_to(&md_path, &project_root);
+        let entry = StartOpIndex {
+            run_id,
+            objective: objective.clone(),
+            record_path: rel,
+            payload_hash: payload_hash.clone(),
+            status: StartOpStatus::Pending,
+        };
+        meta.start_ops
+            .insert(idempotency_key.clone(), entry.clone());
+        Ok(entry)
+    })?;
+
+    let md_path = project_root.join(&reservation.record_path);
+    let rel = reservation.record_path.clone();
+    let run_id = reservation.run_id;
+
+    if reservation.status == StartOpStatus::Complete && md_path.is_file() {
+        if let Some(meta) = crate::run_meta::load_run_meta_readonly(&md_path)? {
+            if let Some(agent) = meta.agent.as_ref() {
+                let markdown = Document::read_file(&md_path)?;
+                set_session_active_run(&project_root, session_id, run_id)?;
+                return Ok(AgentOpResult {
+                    run_id: meta.run.id,
+                    state: agent.lifecycle,
+                    record_path: agent.record_path.clone(),
+                    absolute_path: md_path,
+                    content_hash: content_hash(&markdown),
+                    record_revision: agent.record_revision,
+                    project_id: Some(project_id),
+                    project_root: Some(project_root),
+                    op_id: None,
+                    git: agent.starting_git.clone(),
+                    review_state: None,
+                    decision_current: None,
+                    idempotent_replay: true,
+                });
+            }
+        }
+    }
+
+    let git = capture_git_context(&project_root);
+    let agent = AgentRunState {
+        lifecycle: RunLifecycle::Active,
+        record_revision: 1,
+        objective: objective.clone(),
+        record_path: rel.clone(),
+        project_id: Some(project_id),
+        start_idempotency_key: idempotency_key.clone(),
+        starting_git: Some(git.clone()),
+        current_git: Some(git.clone()),
+        checkpoints: vec![],
+        lifecycle_events: vec![],
+        ready_summary: None,
+        idempotency: Default::default(),
+        incomplete_op: None,
+        risks: vec![],
+        open_questions: vec![],
+        capture_coverage: CaptureCoverage::MechanicalOnly,
+        session_id: Some(session_id.to_string()),
+        provisional: true,
+    };
+
+    let mut meta = RunMeta::new_run_with_id(run_id);
+    meta.schema_version = SCHEMA_VERSION;
+    meta.agent = Some(agent.clone());
+
+    let markdown = render_run_markdown_with_id(run_id, &agent, "");
+    let hash = content_hash(&markdown);
+
+    let side = moraine_sidecar_path(&md_path);
+    let _lock = SidecarLock::acquire(&side)?;
+    if md_path.is_file() {
+        if let Some(existing) = crate::run_meta::load_run_meta_readonly(&md_path)? {
+            if existing.run.id == run_id {
+                let markdown = Document::read_file(&md_path)?;
+                finalize_start_index(&project_root, &idempotency_key, &reservation)?;
+                set_session_active_run(&project_root, session_id, run_id)?;
+                return Ok(AgentOpResult {
+                    run_id,
+                    state: agent.lifecycle,
+                    record_path: rel,
+                    absolute_path: md_path,
+                    content_hash: content_hash(&markdown),
+                    record_revision: 1,
+                    project_id: Some(project_id),
+                    project_root: Some(project_root),
+                    op_id: None,
+                    git: Some(git),
+                    review_state: None,
+                    decision_current: None,
+                    idempotent_replay: true,
+                });
+            }
+        }
+    }
+    write_atomic(&md_path, markdown.as_bytes())?;
+    write_run_meta_unlocked(&md_path, &meta)?;
+    drop(_lock);
+
+    finalize_start_index(&project_root, &idempotency_key, &reservation)?;
+    set_session_active_run(&project_root, session_id, run_id)?;
+
+    Ok(AgentOpResult {
+        run_id,
+        state: RunLifecycle::Active,
+        record_path: rel,
+        absolute_path: md_path,
+        content_hash: hash,
+        record_revision: 1,
+        project_id: Some(project_id),
         project_root: Some(project_root),
         op_id: None,
         git: Some(git),
@@ -990,6 +1421,7 @@ mod tests {
             objective: "Ship protocol".into(),
             idempotency_key: "start-1".into(),
             project: Some(dir.path().to_path_buf()),
+            session_id: None,
         })
         .unwrap();
         assert_eq!(start.state, RunLifecycle::Active);
@@ -1112,6 +1544,7 @@ mod tests {
             objective: "Recovery".into(),
             idempotency_key: "s".into(),
             project: Some(dir.path().to_path_buf()),
+            session_id: None,
         })
         .unwrap();
 
@@ -1207,12 +1640,14 @@ mod tests {
             objective: "A".into(),
             idempotency_key: "k".into(),
             project: Some(dir.path().to_path_buf()),
+            session_id: None,
         })
         .unwrap();
         let err = run_start(RunStartRequest {
             objective: "B".into(),
             idempotency_key: "k".into(),
             project: Some(dir.path().to_path_buf()),
+            session_id: None,
         })
         .unwrap_err();
         assert!(matches!(err, Error::IdempotencyConflict { .. }));
@@ -1231,6 +1666,7 @@ mod tests {
                 objective: "Concurrent start".into(),
                 idempotency_key: "same".into(),
                 project: Some(r1),
+                session_id: None,
             })
         });
         let b2 = barrier;
@@ -1241,6 +1677,7 @@ mod tests {
                 objective: "Concurrent start".into(),
                 idempotency_key: "same".into(),
                 project: Some(r2),
+                session_id: None,
             })
         });
         let a = t1.join().unwrap().unwrap();
@@ -1263,6 +1700,7 @@ mod tests {
             objective: "Concurrent".into(),
             idempotency_key: "s".into(),
             project: Some(dir.path().to_path_buf()),
+            session_id: None,
         })
         .unwrap();
         let hash = start.content_hash.clone();
@@ -1329,6 +1767,7 @@ mod tests {
             objective: "Size".into(),
             idempotency_key: "s".into(),
             project: Some(dir.path().to_path_buf()),
+            session_id: None,
         })
         .unwrap();
         for i in 0..30 {
@@ -1407,6 +1846,7 @@ mod tests {
             objective: "Capacity".into(),
             idempotency_key: "s".into(),
             project: Some(dir.path().to_path_buf()),
+            session_id: None,
         })
         .unwrap();
 
@@ -1499,5 +1939,63 @@ mod tests {
         .unwrap();
         assert!(replay.idempotent_replay);
         assert_eq!(replay.content_hash, start.content_hash);
+    }
+
+    #[test]
+    fn provisional_ensure_then_run_start_confirms_same_run() {
+        let dir = tempdir().unwrap();
+        let _ = init_project(Some(dir.path())).unwrap();
+        let session_id = "sess-dogfood-1";
+
+        let first = provisional_run_ensure(ProvisionalRunRequest {
+            session_id: session_id.into(),
+            project: Some(dir.path().to_path_buf()),
+            objective: Some("Fix the spool".into()),
+            idempotency_key: None,
+        })
+        .unwrap();
+        assert!(!first.idempotent_replay);
+
+        let meta = load_or_migrate_locked(&first.absolute_path).unwrap();
+        let agent = meta.agent.as_ref().unwrap();
+        assert!(agent.provisional);
+        assert_eq!(agent.capture_coverage, CaptureCoverage::MechanicalOnly);
+        assert_eq!(agent.session_id.as_deref(), Some(session_id));
+
+        let second = provisional_run_ensure(ProvisionalRunRequest {
+            session_id: session_id.into(),
+            project: Some(dir.path().to_path_buf()),
+            objective: Some("Fix the spool".into()),
+            idempotency_key: None,
+        })
+        .unwrap();
+        assert!(second.idempotent_replay);
+        assert_eq!(second.run_id, first.run_id);
+
+        let confirmed = run_start(RunStartRequest {
+            objective: "Fix the spool and add tests".into(),
+            idempotency_key: "mcp-start-1".into(),
+            project: Some(dir.path().to_path_buf()),
+            session_id: Some(session_id.into()),
+        })
+        .unwrap();
+        assert_eq!(confirmed.run_id, first.run_id);
+        assert!(!confirmed.idempotent_replay);
+
+        let meta2 = load_or_migrate_locked(&confirmed.absolute_path).unwrap();
+        let agent2 = meta2.agent.as_ref().unwrap();
+        assert!(!agent2.provisional);
+        assert_eq!(agent2.capture_coverage, CaptureCoverage::Full);
+        assert_eq!(agent2.objective, "Fix the spool and add tests");
+
+        let replay = run_start(RunStartRequest {
+            objective: "Fix the spool and add tests".into(),
+            idempotency_key: "mcp-start-1".into(),
+            project: Some(dir.path().to_path_buf()),
+            session_id: Some(session_id.into()),
+        })
+        .unwrap();
+        assert!(replay.idempotent_replay);
+        assert_eq!(replay.run_id, first.run_id);
     }
 }

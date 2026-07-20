@@ -1,5 +1,6 @@
 //! CLI for agent run records and review helpers. Fail-fast share unless `--start`.
 
+mod hook_codex;
 mod relay;
 mod run_cli;
 
@@ -217,6 +218,23 @@ Examples:\n  \
         #[arg(long)]
         project: Option<PathBuf>,
     },
+
+    /// Codex lifecycle hook adapter (stdin JSON → local service / spool)
+    #[command(
+        name = "hook-codex",
+        after_help = "Intended for Codex hooks.json command handlers.\n\
+Reads Codex hook JSON from stdin, maps SessionStart / UserPromptSubmit / Stop\n\
+to Moraine mechanical events, and delivers them to the local service Unix socket.\n\
+On delivery failure, events are written to the local spool (exit 0)."
+    )]
+    HookCodex {
+        /// Unix socket path (default: $MORAINE_SOCKET or $XDG_RUNTIME_DIR/moraine-service.sock)
+        #[arg(long)]
+        socket: Option<PathBuf>,
+        /// Spool directory used when the service is unavailable
+        #[arg(long)]
+        spool_dir: Option<PathBuf>,
+    },
 }
 
 fn main() {
@@ -300,6 +318,7 @@ fn run() -> Result<i32> {
                 }
             }
         }
+        Commands::HookCodex { socket, spool_dir } => hook_codex::run_hook_codex(socket, spool_dir),
     }?;
     Ok(code)
 }

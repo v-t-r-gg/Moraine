@@ -82,6 +82,16 @@ pub fn render_run_markdown_with_id(
         agent.lifecycle.as_str()
     ));
     out.push_str(&format!(
+        "- **Capture coverage:** `{}`\n",
+        agent.capture_coverage.as_str()
+    ));
+    if agent.provisional {
+        out.push_str("- **Provisional:** `true` (awaiting semantic `run_start`)\n");
+    }
+    if let Some(sid) = &agent.session_id {
+        out.push_str(&format!("- **Session ID:** `{sid}`\n"));
+    }
+    out.push_str(&format!(
         "- **Record revision:** `{}`\n",
         agent.record_revision
     ));
@@ -298,6 +308,9 @@ mod tests {
             incomplete_op: None,
             risks: vec![],
             open_questions: vec![],
+            capture_coverage: Default::default(),
+            session_id: None,
+            provisional: false,
         }
     }
 

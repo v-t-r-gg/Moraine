@@ -69,6 +69,9 @@ pub fn tool_names() -> &'static [&'static str] {
 pub struct RunStartArgs {
     pub objective: String,
     pub idempotency_key: String,
+    /// Optional agent-host session id; confirms a provisional run when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -141,7 +144,7 @@ pub struct RunResumeArgs {
 #[tool_router]
 impl MoraineMcp {
     #[tool(
-        description = "Start a Moraine run. Args: objective, idempotencyKey. Returns runId, contentHash, state. No full Markdown."
+        description = "Start a Moraine run. Args: objective, idempotencyKey, optional sessionId (reconciles provisional). Returns runId, contentHash, state. No full Markdown."
     )]
     async fn run_start(
         &self,
@@ -151,6 +154,7 @@ impl MoraineMcp {
             objective: args.objective,
             idempotency_key: args.idempotency_key,
             project: Some(self.project_root.as_ref().clone()),
+            session_id: args.session_id,
         }) {
             Ok(r) => ok_json(json!({
                 "runId": r.run_id.to_string(),

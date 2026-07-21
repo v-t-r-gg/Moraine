@@ -1,8 +1,13 @@
 //! CLI for agent run records and review helpers. Fail-fast share unless `--start`.
 
+mod codex_setup;
+mod doctor;
 mod hook_codex;
 mod relay;
 mod run_cli;
+mod service_cmd;
+mod setup_cmd;
+mod suite;
 
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
@@ -23,7 +28,7 @@ use serde::Serialize;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
-use relay::{health_ok, launch_desktop, try_spawn_server};
+use relay::{health_ok, launch_desktop, launch_desktop_workspace, try_spawn_server};
 
 /// Exit codes for scripts/agents.
 const EXIT_OK: i32 = 0;
@@ -38,6 +43,7 @@ const EXIT_RELAY: i32 = 3;
     about = "Moraine CLI: run records and review helpers for agents and scripts",
     long_about = "Create and inspect Markdown run records, share live review rooms, and read sidecar status.\n\
                   Agent protocol: moraine project init; moraine run start|show|checkpoint|ready|resume|open --json.\n\
+                  Install suite: moraine version|doctor|service|setup.\n\
                   Exit codes: 0 ok, 1 error, 2 not found, 3 relay down.\n\
                   Prefer --json on share/status/info/join/run/project when calling from scripts."
 )]
@@ -45,7 +51,8 @@ struct Cli {
     #[command(subcommand)]
     command: Commands,
 
-    #[arg(short, long, action = clap::ArgAction::Count, global = true)]
+    /// Increase log verbosity (`-v`, `-vv`). Global; not the same as `version --verbose`.
+    #[arg(short = 'v', action = clap::ArgAction::Count, global = true)]
     verbose: u8,
 }
 
@@ -235,6 +242,129 @@ On delivery failure, events are written to the local spool (exit 0)."
         #[arg(long)]
         spool_dir: Option<PathBuf>,
     },
+
+    /// Product version and installed-suite identity
+    Version {
+        #[arg(long)]
+        json: bool,
+        /// Include suite/service/desktop paths and PATH drift (same as --json detail).
+        /// Named `--verbose` here (not `-v`) so it does not collide with the global `-v` count.
+        #[arg(long = "verbose", visible_alias = "long")]
+        long: bool,
+    },
+
+    /// Installation and integration health report
+    Doctor {
+        #[arg(long)]
+        project: Option<PathBuf>,
+        #[arg(long)]
+        integration: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Per-user moraine-service lifecycle (systemd --user on Linux)
+    Service {
+        #[command(subcommand)]
+        cmd: ServiceSub,
+    },
+
+    /// Post-install suite check (and optional project integrations)
+    Setup {
+        /// Integration subcommand; omit for bare post-install setup
+        #[command(subcommand)]
+        cmd: Option<SetupSub>,
+        #[arg(long, global = true)]
+        json: bool,
+    },
+
+    /// Alias for project-scoped integrations (`setup codex`)
+    Integrate {
+        #[command(subcommand)]
+        cmd: IntegrateSub,
+    },
+
+    /// Open the installed desktop (ledger workspace or a run path)
+    Open {
+        /// Optional Markdown run path
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Optional run id (resolved under project if --project set)
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long)]
+        project: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ServiceSub {
+    Install {
+        #[arg(long)]
+        json: bool,
+    },
+    Start {
+        #[arg(long)]
+        json: bool,
+    },
+    Stop {
+        #[arg(long)]
+        json: bool,
+    },
+    Restart {
+        #[arg(long)]
+        json: bool,
+    },
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
+    Logs {
+        #[arg(long)]
+        json: bool,
+    },
+    Uninstall {
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SetupSub {
+    /// Configure project-scoped Codex MCP + hooks for Moraine
+    Codex {
+        #[arg(long)]
+        project: PathBuf,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        json: bool,
+        /// Validate without writing
+        #[arg(long)]
+        check: bool,
+        /// Remove managed Moraine Codex configuration (with backups)
+        #[arg(long)]
+        remove: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum IntegrateSub {
+    /// Configure project-scoped Codex MCP + hooks (same as `setup codex`)
+    Codex {
+        #[arg(long)]
+        project: PathBuf,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        check: bool,
+        #[arg(long)]
+        remove: bool,
+    },
 }
 
 fn main() {
@@ -319,6 +449,24 @@ fn run() -> Result<i32> {
             }
         }
         Commands::HookCodex { socket, spool_dir } => hook_codex::run_hook_codex(socket, spool_dir),
+        Commands::Version { json, long } => cmd_version(json, long),
+        Commands::Doctor {
+            project,
+            integration,
+            json,
+        } => cmd_doctor(project, integration, json),
+        Commands::Service { cmd } => cmd_service(cmd),
+        Commands::Setup { cmd, json } => match cmd {
+            None => setup_cmd::setup_post_install(json),
+            Some(sub) => cmd_setup_codex(sub),
+        },
+        Commands::Integrate { cmd } => cmd_integrate(cmd),
+        Commands::Open {
+            path,
+            run_id,
+            project,
+            json,
+        } => cmd_open(path, run_id, project, json),
     }?;
     Ok(code)
 }
@@ -375,20 +523,23 @@ fn emit_core_err(json: bool, err: &CoreError) -> i32 {
 
 fn cmd_info(json: bool) -> Result<i32> {
     let paths = MorainePaths::default_ensure().ok();
+    let build = moraine_core::BuildIdentity::current();
     if json {
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "ok": true,
                 "name": "moraine",
-                "version": env!("CARGO_PKG_VERSION"),
+                "version": build.version,
+                "gitCommit": build.git_commit,
+                "schema": build.schema,
                 "dataDir": paths.as_ref().map(|p| p.data_dir.display().to_string()),
                 "historyDir": paths.as_ref().map(|p| p.history_dir.display().to_string()),
                 "configDir": paths.as_ref().map(|p| p.config_dir.display().to_string()),
             }))?
         );
     } else {
-        println!("moraine {}", env!("CARGO_PKG_VERSION"));
+        println!("moraine {}", build.version);
         if let Some(p) = paths {
             println!("data dir:    {}", p.data_dir.display());
             println!("history dir: {}", p.history_dir.display());
@@ -396,6 +547,191 @@ fn cmd_info(json: bool) -> Result<i32> {
         }
     }
     Ok(EXIT_OK)
+}
+
+fn cmd_version(json: bool, long: bool) -> Result<i32> {
+    let report = suite::collect_version_report();
+    if json || long {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("Moraine {}", report.cli.version);
+        if let Some(s) = &report.suite {
+            println!("suite {} ({})", s.version, s.manifest_path);
+        }
+        if report.service.online {
+            println!(
+                "service online{}",
+                report
+                    .service
+                    .version
+                    .as_ref()
+                    .map(|v| format!(" {v}"))
+                    .unwrap_or_default()
+            );
+        } else {
+            println!("service offline");
+        }
+        if let Some(w) = &report.warnings {
+            for line in w {
+                eprintln!("warning: {line}");
+            }
+        }
+    }
+    // Version inspection always exits 0; warnings are advisory (doctor is the gate).
+    Ok(EXIT_OK)
+}
+
+fn cmd_doctor(project: Option<PathBuf>, integration: Option<String>, json: bool) -> Result<i32> {
+    let report = doctor::run_doctor(project.as_deref(), integration.as_deref());
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!(
+            "Moraine doctor — {} {}",
+            report.build.product, report.build.version
+        );
+        for c in &report.checks {
+            let mark = match c.status.as_str() {
+                "pass" | "ok" => "PASS",
+                "warn" => "WARN",
+                "info" => "INFO",
+                _ => "FAIL",
+            };
+            println!("[{mark}] {}: {}", c.id, c.message);
+            if let (Some(o), Some(e)) = (&c.observed, &c.expected) {
+                if c.status == "fail" || c.status == "warn" {
+                    println!("       observed: {o}");
+                    println!("       expected: {e}");
+                }
+            }
+            if let Some(r) = &c.remediation {
+                if c.status == "fail" || c.status == "warn" {
+                    println!("       → {r}");
+                }
+            }
+        }
+        if let Some(p) = &report.project {
+            println!("project: {} initialized={}", p.path, p.initialized);
+        }
+        if let Some(i) = &report.integration {
+            println!("integration {}: configured={}", i.name, i.configured);
+        }
+        println!(
+            "{}",
+            if report.ok {
+                "doctor: all checks passed"
+            } else {
+                "doctor: one or more checks failed"
+            }
+        );
+    }
+    Ok(if report.ok { EXIT_OK } else { EXIT_ERR })
+}
+
+fn cmd_service(cmd: ServiceSub) -> Result<i32> {
+    match cmd {
+        ServiceSub::Install { json } => service_cmd::service_install(json)?,
+        ServiceSub::Start { json } => service_cmd::service_start(json)?,
+        ServiceSub::Stop { json } => service_cmd::service_stop(json)?,
+        ServiceSub::Restart { json } => service_cmd::service_restart(json)?,
+        ServiceSub::Status { json } => service_cmd::service_status(json)?,
+        ServiceSub::Logs { json } => service_cmd::service_logs(json)?,
+        ServiceSub::Uninstall { json } => service_cmd::service_uninstall(json)?,
+    }
+    Ok(EXIT_OK)
+}
+
+fn cmd_setup_codex(cmd: SetupSub) -> Result<i32> {
+    match cmd {
+        SetupSub::Codex {
+            project,
+            dry_run,
+            json,
+            check,
+            remove,
+        } => dispatch_codex_integration(&project, dry_run, json, check, remove),
+    }
+}
+
+fn cmd_integrate(cmd: IntegrateSub) -> Result<i32> {
+    match cmd {
+        IntegrateSub::Codex {
+            project,
+            dry_run,
+            json,
+            check,
+            remove,
+        } => dispatch_codex_integration(&project, dry_run, json, check, remove),
+    }
+}
+
+fn dispatch_codex_integration(
+    project: &std::path::Path,
+    dry_run: bool,
+    json: bool,
+    check: bool,
+    remove: bool,
+) -> Result<i32> {
+    if remove {
+        codex_setup::remove_codex(project, dry_run, json)?;
+    } else if check {
+        codex_setup::check_codex(project, json)?;
+    } else {
+        codex_setup::setup_codex(project, dry_run, json)?;
+    }
+    Ok(EXIT_OK)
+}
+
+fn cmd_open(
+    path: Option<PathBuf>,
+    run_id: Option<String>,
+    project: Option<PathBuf>,
+    json: bool,
+) -> Result<i32> {
+    let open_path = if let Some(p) = path {
+        Some(p)
+    } else if let (Some(rid), Some(proj)) = (run_id.as_ref(), project.as_ref()) {
+        // Best-effort: find run markdown under project .moraine/runs
+        let runs = proj.join(".moraine/runs");
+        let found = std::fs::read_dir(&runs).ok().and_then(|rd| {
+            rd.filter_map(|e| e.ok()).map(|e| e.path()).find(|p| {
+                p.extension().and_then(|x| x.to_str()) == Some("md")
+                    && p.file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n.contains(rid.as_str()) || n.ends_with(&format!("{rid}.md")))
+                        .unwrap_or(false)
+            })
+        });
+        found
+    } else {
+        None
+    };
+    let launched = if let Some(ref p) = open_path {
+        launch_desktop(p)?
+    } else {
+        launch_desktop_workspace(None)?
+    };
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "ok": launched,
+                "path": open_path.as_ref().map(|p| p.display().to_string()),
+                "runId": run_id,
+                "message": if launched {
+                    "launched installed desktop"
+                } else {
+                    "desktop binary not found; install suite with moraine-app or set PATH"
+                }
+            })
+        );
+    } else if launched {
+        println!("opened installed desktop");
+    } else {
+        eprintln!("error: could not launch moraine-app (install suite desktop component)");
+        return Ok(EXIT_ERR);
+    }
+    Ok(if launched { EXIT_OK } else { EXIT_ERR })
 }
 
 #[derive(Serialize)]

@@ -57,16 +57,48 @@ pub fn discovery_status() -> Result<DiscoveryStatusDto, String> {
     })
 }
 
+/// Loopback-only HTTP GET without shelling out to curl (C2 installed desktop).
 fn ureq_get(url: &str) -> Result<String, String> {
-    // Diagnostics-only probe via curl (loopback service). Direct FS scan is the fallback.
-    let out = std::process::Command::new("curl")
-        .args(["-fsS", "--max-time", "1", url])
-        .output()
-        .map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        return Err("curl failed".into());
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    let without = url
+        .strip_prefix("http://")
+        .ok_or_else(|| "only http loopback supported".to_string())?;
+    let (host_port, path) = without
+        .split_once('/')
+        .map(|(h, p)| (h, format!("/{p}")))
+        .unwrap_or((without, "/".into()));
+    if !host_port.starts_with("127.0.0.1") && !host_port.starts_with("localhost") {
+        return Err("refusing non-loopback discovery URL".into());
     }
-    String::from_utf8(out.stdout).map_err(|e| e.to_string())
+    let addr: std::net::SocketAddr = if host_port.contains(':') {
+        host_port
+            .parse()
+            .map_err(|e: std::net::AddrParseError| e.to_string())?
+    } else {
+        format!("{host_port}:80")
+            .parse()
+            .map_err(|e: std::net::AddrParseError| e.to_string())?
+    };
+    if !addr.ip().is_loopback() {
+        return Err("refusing non-loopback discovery URL".into());
+    }
+    let mut stream =
+        TcpStream::connect_timeout(&addr, Duration::from_millis(400)).map_err(|e| e.to_string())?;
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(2))).ok();
+    let req = format!("GET {path} HTTP/1.1\r\nHost: {host_port}\r\nConnection: close\r\n\r\n");
+    stream
+        .write_all(req.as_bytes())
+        .map_err(|e| e.to_string())?;
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    let raw = String::from_utf8(buf).map_err(|e| e.to_string())?;
+    raw.find("\r\n\r\n")
+        .map(|i| raw[i + 4..].to_string())
+        .ok_or_else(|| "invalid HTTP response".into())
 }
 
 #[tauri::command]
@@ -225,14 +257,42 @@ pub fn discovery_rebuild_index(scan_root: Option<String>) -> Result<serde_json::
 }
 
 fn ureq_post(url: &str) -> Result<String, String> {
-    let out = std::process::Command::new("curl")
-        .args(["-fsS", "-X", "POST", "--max-time", "5", url])
-        .output()
-        .map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        return Err("post failed".into());
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    let without = url
+        .strip_prefix("http://")
+        .ok_or_else(|| "only http loopback supported".to_string())?;
+    let (host_port, path) = without
+        .split_once('/')
+        .map(|(h, p)| (h, format!("/{p}")))
+        .unwrap_or((without, "/".into()));
+    if !host_port.starts_with("127.0.0.1") && !host_port.starts_with("localhost") {
+        return Err("refusing non-loopback discovery URL".into());
     }
-    String::from_utf8(out.stdout).map_err(|e| e.to_string())
+    let addr: std::net::SocketAddr = host_port
+        .parse()
+        .map_err(|e: std::net::AddrParseError| e.to_string())?;
+    if !addr.ip().is_loopback() {
+        return Err("refusing non-loopback discovery URL".into());
+    }
+    let mut stream =
+        TcpStream::connect_timeout(&addr, Duration::from_millis(500)).map_err(|e| e.to_string())?;
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+    let req = format!(
+        "POST {path} HTTP/1.1\r\nHost: {host_port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    stream
+        .write_all(req.as_bytes())
+        .map_err(|e| e.to_string())?;
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    let raw = String::from_utf8(buf).map_err(|e| e.to_string())?;
+    raw.find("\r\n\r\n")
+        .map(|i| raw[i + 4..].to_string())
+        .ok_or_else(|| "invalid HTTP response".into())
 }
 
 #[tauri::command]

@@ -6,6 +6,7 @@
 pub mod agent_protocol;
 pub mod annotation_ops;
 pub mod atomic;
+pub mod build_info;
 pub mod comments;
 pub mod discovery;
 pub mod document;
@@ -50,6 +51,12 @@ pub use annotation_ops::{
     reject_suggestion, reopen_annotation, resolve_annotation, update_annotation,
     AcceptanceRecoveryStatus, AnnotationMutation, AnnotationOpResult, BeginAcceptResult,
     ReconcileResult,
+};
+pub use build_info::{
+    build_profile, build_target, git_commit, product_version, BuildIdentity, SchemaCompat,
+    SuiteComponents, SuiteManifest, MCP_IMPLEMENTATION_VERSION, PRODUCT_NAME,
+    SCHEMA_CURRENT_WRITABLE, SCHEMA_MAXIMUM_READABLE, SCHEMA_MINIMUM_READABLE,
+    SERVICE_PROTOCOL_VERSION,
 };
 #[allow(deprecated)]
 pub use comments::{

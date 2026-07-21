@@ -16,10 +16,21 @@ Re-check keys if your Codex build differs.
 
 ## Local service (required for desktop-closed capture)
 
+**Preferred (installed suite):**
+
 ```bash
-cargo install --path crates/moraine-service
-moraine-service install   # writes systemd --user unit
-moraine-service start
+# after ./install.sh from a release bundle — see docs/INSTALL.md
+moraine service install
+moraine service start
+moraine doctor
+moraine setup codex --project /absolute/path/to/project
+```
+
+**Contributors only (source checkout):**
+
+```bash
+cargo build --release -p moraine-service -p moraine-cli
+# prefer suite install over cargo install to avoid PATH drift
 ```
 
 **Transport model:**
@@ -121,16 +132,23 @@ run_show
 run_checkpoint
 run_ready
 run_resume
+list_findings
+get_finding
+respond_to_finding
 ```
+
+Validate the **live** `tools/list` from the installed server (or
+`moraine doctor --project . --integration codex --json`). Do not assume a fixed
+five-tool set forever.
 
 `run_start` accepts optional `sessionId` to reconcile with a provisional run.
 
 There is **no** human decision or approval tool. Moraine records work; it does
-not authorize merge or deployment. Prefer desktop comments and human notes for
-review context (`moraine decide` is legacy/compatibility-only).
+not authorize merge or deployment. Prefer findings and append-only observations
+for review context (`moraine decide` is legacy/compatibility-only).
 
-If your Codex build supports `enabled_tools` / tool allowlists, pin the list to
-those five. If not, rely on the server tool list (still only five tools).
+If your Codex build supports tool allowlists, pin to the current `tools/list`
+result from this install.
 
 ## Expected agent behavior
 

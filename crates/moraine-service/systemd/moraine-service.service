@@ -4,8 +4,12 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=%h/.cargo/bin/moraine-service --http 127.0.0.1:33111 --unix-socket %t/moraine-service.sock
+# Prefer suite install: moraine service install rewrites ExecStart to the installed absolute path.
+# Do not point at ~/.cargo/bin in production installs.
+ExecStart=%h/.local/libexec/moraine/moraine-service --http 127.0.0.1:33111 --unix-socket %t/moraine-service.sock
 Restart=on-failure
+RestartSec=2
+Environment=RUST_LOG=info
 
 [Install]
 WantedBy=default.target

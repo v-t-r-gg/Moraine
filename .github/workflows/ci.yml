@@ -75,3 +75,46 @@ jobs:
             libssl-dev
       - name: cargo check moraine-app
         run: cargo check -p moraine-app
+
+  linux-release-artifact:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build CLI + service release suite
+        env:
+          MORAINE_GIT_COMMIT: ${{ github.sha }}
+          MORAINE_TARGET_TRIPLE: x86_64-unknown-linux-gnu
+          MORAINE_BUILD_PROFILE: release
+        run: |
+          set -euo pipefail
+          cargo build --release -p moraine-cli -p moraine-service
+          VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')
+          OUT="dist/moraine-${VERSION}-linux-x86_64"
+          mkdir -p "$OUT/bin" "$OUT/share/documentation" "$OUT/systemd"
+          cp target/release/moraine target/release/moraine-service "$OUT/bin/"
+          chmod 755 "$OUT/bin/"*
+          cp crates/moraine-service/systemd/moraine-service.service.in "$OUT/systemd/"
+          cp scripts/packaging/install.sh scripts/packaging/uninstall.sh "$OUT/"
+          chmod 755 "$OUT/install.sh" "$OUT/uninstall.sh"
+          cp LICENSE SECURITY.md docs/INSTALL.md docs/REDACTION.md "$OUT/share/documentation/" || true
+          VERSION="$VERSION" python3 scripts/packaging/write_manifest.py "$OUT"
+          tar -C dist -czf "dist/moraine-${VERSION}-linux-x86_64.tar.gz" "moraine-${VERSION}-linux-x86_64"
+          (cd dist && sha256sum "moraine-${VERSION}-linux-x86_64.tar.gz" > "moraine-${VERSION}-linux-x86_64.tar.gz.sha256")
+          CLEAN=$(mktemp -d)
+          export HOME="$CLEAN" MORAINE_PREFIX="$CLEAN/.local" XDG_CONFIG_HOME="$CLEAN/.config" PATH="$CLEAN/.local/bin:$PATH"
+          "dist/moraine-${VERSION}-linux-x86_64/install.sh"
+          test -x "$MORAINE_PREFIX/bin/moraine"
+          grep -q libexec/moraine/moraine-service "$XDG_CONFIG_HOME/systemd/user/moraine-service.service"
+          ! grep -q '.cargo/bin' "$XDG_CONFIG_HOME/systemd/user/moraine-service.service"
+          "$MORAINE_PREFIX/bin/moraine" version --json
+          "dist/moraine-${VERSION}-linux-x86_64/uninstall.sh"
+          test ! -e "$MORAINE_PREFIX/bin/moraine"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: moraine-linux-x86_64-suite
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error

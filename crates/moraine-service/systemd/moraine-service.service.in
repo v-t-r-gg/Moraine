@@ -1,0 +1,14 @@
+[Unit]
+Description=Moraine local integration runtime (per-user)
+After=network.target
+
+[Service]
+Type=simple
+# Installer substitutes the absolute suite path for the service binary placeholder.
+ExecStart=__MORAINE_SERVICE_BIN__ --http 127.0.0.1:33111 --unix-socket %t/moraine-service.sock
+Restart=on-failure
+RestartSec=2
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=default.target

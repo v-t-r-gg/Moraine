@@ -27,17 +27,24 @@
 
 ## Market context (primary sources, 2026)
 
-Cited for orientation; **not independent customer validation.**
+Cited for orientation; **not independent customer validation.** Web access was available for this pass.
 
-1. **MCP observability** is framed as enterprise monitoring of tool calls, policy, and identity — different from local run ledgers (Obot, 2026).
+1. **MCP observability** as enterprise monitoring of tool calls, policy, and identity — different from local run ledgers:  
+   https://obot.ai/blog/mcp-observability-how-to-monitor-ai-agent-activity-in-the-enterprise/ (Obot, 2026).
 
-2. **Coding-agent audit trails** emphasize gateway capture of tool/file/API actions for compliance (MintMCP, 2026).
+2. **Coding-agent audit trails** via gateway capture for compliance:  
+   https://www.mintmcp.com/blog/build-audit-trails-ai-coding-agents (MintMCP, 2026).
 
-3. **Agent observability tools** (Braintrust, LangSmith, Arize, Datadog, etc.) compete on traces/evals, not source-adjacent Markdown run records (Augment Code comparison, 2026).
+3. **Agent observability tools** (Braintrust, LangSmith, Arize, Datadog, etc.) compete on traces/evals:  
+   https://www.augmentcode.com/tools/best-ai-agent-observability-tools (Augment Code, 2026).
 
-4. **Claude Code-class agents** persist append-only JSONL session transcripts — Moraine’s differentiator must be a **semantic human-review ledger next to code**, not raw transcript storage (arXiv agent systems design space, 2026).
+4. **Claude Code-class agents** use append-only JSONL session transcripts (design-space paper):  
+   https://arxiv.org/html/2604.14228v1 (2026).
 
-5. **OpenHands / coding agents** push work into PRs/commits; review often lives at the PR (“Open-Source Agent Toolkit in 2026”).
+5. **OpenHands / coding agents** push work into PR/commit review surfaces:  
+   https://theaiengineer.substack.com/p/the-open-source-agent-toolkit-in (2026).
+
+Market implication: Moraine should not pitch as APM; pitch **source-adjacent semantic review ledger after the agent leaves.**
 
 ### Positioning implication
 

@@ -1,0 +1,15 @@
+{
+  "service_startup_s": 0.062,
+  "create_runs_s": 9.548,
+  "total_runs": 960,
+  "projects": 20,
+  "rebuild_s": 0.205,
+  "rebuild_body": "{\"ok\":true,\"projectCount\":20,\"revision\":2,\"revisionBefore\":1}",
+  "list_projects_s": 0.002,
+  "list_projects_n": 20,
+  "list_200_runs_s": 0.059,
+  "list_200_runs_n": 200,
+  "large_project_bytes": 442386,
+  "all_projects_bytes": 2120028,
+  "scale_base": "/tmp/moraine-scale-vxibjtmf"
+}

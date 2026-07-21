@@ -1,28 +1,43 @@
 # Moraine project evaluation — 2026-07
 
-**Evaluation branch:** `audit/project-evaluation-2026-07`  
-**Product baseline:** `4f8d1e8` (`origin/main`, PR #11 merged)  
-**Conclusion:** **Consolidate** before any new product milestone (including second-agent / packaging-as-M6).
+**Baseline product:** `4f8d1e85011d8ea49d02ea537c45b29b579ce52b` (`origin/main`, PR #11)  
+**Branch:** `audit/project-evaluation-2026-07`  
+**Conclusion:** **Consolidate** (not Continue, not Reframe)
 
-## Read order
+## Required deliverables (OBJECTIVE §14)
 
-1. [00_BASELINE.md](./00_BASELINE.md) — starting gate, PR #11/#12 disposition  
-2. [CAPABILITY_INVENTORY.md](./CAPABILITY_INVENTORY.md) — Pass A  
-3. [ARCHITECTURE_AND_INTEGRITY.md](./ARCHITECTURE_AND_INTEGRITY.md) — Pass B  
-4. [PRODUCT_AND_MARKET_EVALUATION.md](./PRODUCT_AND_MARKET_EVALUATION.md) — Pass C  
-5. [UX_ONBOARDING_RELEASE.md](./UX_ONBOARDING_RELEASE.md) — Pass D  
-6. [LIVE_SCENARIOS.md](./LIVE_SCENARIOS.md) — what was / was not exercised  
-7. [SUBSYSTEM_RETENTION.md](./SUBSYSTEM_RETENTION.md)  
-8. [SCORECARD.md](./SCORECARD.md)  
-9. [SYNTHESIS.md](./SYNTHESIS.md)  
-10. [RECOMMENDED_ROADMAP.md](./RECOMMENDED_ROADMAP.md) — next three milestones  
-11. Diagrams: [architecture](./diagrams/architecture.md), [domain](./diagrams/domain_model.md)  
-12. Data: [data/](./data/)
+| File | Role |
+|------|------|
+| [CURRENT_STATE.md](./CURRENT_STATE.md) | What Moraine is today |
+| [CAPABILITY_MATRIX.md](./CAPABILITY_MATRIX.md) | I/T/L/D/U matrix |
+| [CAPABILITY_INVENTORY.md](./CAPABILITY_INVENTORY.md) | Extended inventory |
+| [DOMAIN_MODEL_REVIEW.md](./DOMAIN_MODEL_REVIEW.md) | ~25 concepts |
+| [ARCHITECTURE_REVIEW.md](./ARCHITECTURE_REVIEW.md) | Boundaries & service |
+| [INTEGRITY_AND_SECURITY_REVIEW.md](./INTEGRITY_AND_SECURITY_REVIEW.md) | Trust |
+| [PRODUCT_AND_MARKET_EVALUATION.md](./PRODUCT_AND_MARKET_EVALUATION.md) | Pass C |
+| [UX_AND_ONBOARDING_REVIEW.md](./UX_AND_ONBOARDING_REVIEW.md) | Pass D |
+| [UX_ONBOARDING_RELEASE.md](./UX_ONBOARDING_RELEASE.md) | Extended UX notes |
+| [PERFORMANCE_AND_SCALE.md](./PERFORMANCE_AND_SCALE.md) | Measured scale |
+| [COMPATIBILITY_AND_PORTABILITY.md](./COMPATIBILITY_AND_PORTABILITY.md) | Support matrix |
+| [RELEASE_READINESS.md](./RELEASE_READINESS.md) | Packaging/beta |
+| [SUBSYSTEM_RETENTION.md](./SUBSYSTEM_RETENTION.md) | Keep/freeze/remove |
+| [RISK_REGISTER.md](./RISK_REGISTER.md) | P0–P3 with blockers |
+| [SCORECARD.md](./SCORECARD.md) | 17 areas 0–5 |
+| [RECOMMENDED_ROADMAP.md](./RECOMMENDED_ROADMAP.md) | C1–C3 |
+| [SYNTHESIS.md](./SYNTHESIS.md) | Final answers |
+| [LIVE_SCENARIOS.md](./LIVE_SCENARIOS.md) | Live honesty |
+| [00_BASELINE.md](./00_BASELINE.md) | Starting gate |
+
+## Diagrams
+
+| Diagram | File |
+|---------|------|
+| Runtime architecture | [diagrams/architecture.md](./diagrams/architecture.md) |
+| Domain model | [diagrams/domain_model.md](./diagrams/domain_model.md) |
+| Persistence & authority | [diagrams/persistence_authority.md](./diagrams/persistence_authority.md) |
+| Session→run reconciliation | [diagrams/session_reconciliation.md](./diagrams/session_reconciliation.md) |
+| Near-1.0 user workflow | [diagrams/user_workflow_near_1_0.md](./diagrams/user_workflow_near_1_0.md) |
 
 ## One-paragraph summary
 
-Moraine’s **ledger core is the right product**: source-adjacent, local-first, no verdict. M5 made the desktop a real discovery workspace. External beta is blocked by **install honesty**, **one-agent dogfood packaging**, and **completing redaction for agent-facing finding DTOs** (open PR #12, not on main). The next phase should **consolidate**, not expand to a second agent or broad packaging until those gates clear.
-
-## Feature freeze
-
-No product code changes on this branch. Evaluation artifacts only.
+Moraine’s **ledger core is sound** and matches the “no verdict” vision. M5 delivered a real discovery workspace. **External beta is blocked** by incomplete agent-facing redaction (PR #12 open), install honesty, and unproven cold Codex capture. Next milestones: **C1 seal redaction → C2 install+Codex pack → C3 beta harden** — not second-agent expansion first.

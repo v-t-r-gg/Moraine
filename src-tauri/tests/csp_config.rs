@@ -16,10 +16,7 @@ fn tauri_conf_defines_non_null_csp() {
         csp.contains("default-src"),
         "CSP should constrain default-src: {csp}"
     );
-    assert!(
-        csp.contains("'self'"),
-        "CSP should allow 'self': {csp}"
-    );
+    assert!(csp.contains("'self'"), "CSP should allow 'self': {csp}");
     // Loopback diagnostics / IPC only — no open https: world load.
     assert!(
         !csp.contains("https:"),

@@ -7,6 +7,7 @@ pub mod agent_protocol;
 pub mod annotation_ops;
 pub mod atomic;
 pub mod comments;
+pub mod discovery;
 pub mod document;
 pub mod error;
 pub mod history;
@@ -51,6 +52,12 @@ pub use annotation_ops::{
 pub use comments::{
     comments_sidecar_path, merge_comments, read_comments_sidecar, write_comments_sidecar,
     AnnotationKind, CommentRecord, CommentsFile, SuggestionDisposition,
+};
+pub use discovery::{
+    build_timeline, canonicalize_existing, dedupe_project_roots, filter_runs, filter_runs_ext,
+    list_run_summaries, load_run_detail, project_display_name, scan_project_roots,
+    summarize_project, summarize_run_path, ProjectRunCounts, ProjectSummary, RunDetail,
+    RunIntegrity, RunSummary, TimelineEntry,
 };
 pub use document::{Document, DocumentId, DocumentMeta, DocumentSnapshot};
 pub use error::{Error, Result};

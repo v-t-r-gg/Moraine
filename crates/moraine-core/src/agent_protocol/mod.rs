@@ -44,7 +44,7 @@ pub use ops::{
 };
 pub use project::{
     discover_project_root, ensure_project, find_run_by_id, init_project, project_meta_path,
-    resolve_existing_project, resolve_or_init_project, ProjectInitResult, ProjectMeta,
+    resolve_existing_project, resolve_or_init_project, runs_dir, ProjectInitResult, ProjectMeta,
     StartOpIndex, StartOpStatus, MORAINE_DIR, PROJECT_SCHEMA_VERSION,
 };
 pub use session::{

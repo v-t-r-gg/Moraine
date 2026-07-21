@@ -18,10 +18,23 @@
 * Deletion from Git history or backups
 * Proof that no local file retains prior content
 * An authenticated security action
+* **Value-global text scrubbing** across the repository
+
+## Target-scoped semantics
+
+Checkpoint redaction withholds content stored in **that checkpoint** and its amendment or supersession lineage. Moraine does **not** search for or automatically redact copies of the same text in independent findings, responses, observations, evidence artifacts, Git history, or other records. Those copies require separate remediation.
+
+A finding thread may remain fully visible after its checkpoint target is redacted: the finding **body** and **responses** are independent records. Only the **target claim / frozen checkpoint content** is withheld (shown as redacted target context).
+
+The trust claim for C1 is:
+
+> Target-scoped ordinary-view withholding across core, desktop, discovery, service, and MCP projections.
+
+Not: secure erasure, global duplicate scrubbing, evidence-artifact deletion, Git-history removal, or credential remediation.
 
 ## Ordinary projections (must withhold)
 
-After a checkpoint claim is redacted, ordinary DTOs and UI must not expose:
+After a checkpoint claim is redacted, ordinary DTOs and UI must not expose **content derived from that target**:
 
 * original / amended / superseding claim text
 * actions, rationales, risks, open questions from that checkpoint

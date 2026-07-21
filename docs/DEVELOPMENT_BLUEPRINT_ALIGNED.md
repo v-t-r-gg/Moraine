@@ -1078,7 +1078,13 @@ Acceptance criteria:
 
 **Goal:** Replace the Svelte/SvelteKit desktop frontend with React + TypeScript + Vite without changing the run model or product features.
 
-Status: **current** (this migration). React is the desktop framework; Rust/Tauri/core boundaries are unchanged. Svelte is not required for build or runtime.
+Status: **implemented** (React is the desktop framework).
+
+### Milestone 4.6 — Append-only ledger semantics
+
+**Goal:** Protocol runs are append-only for human/agent review context; checkpoints and agent claims are immutable; free-form Human notes are not the durable write path.
+
+Status: **current**. Operations: `human_observation_add`, `run_amend`, `entry_supersede`, `entry_redact`. Desktop: structured read-only timeline + Add observation; Legacy document mode for free-form Markdown only.
 
 ### Milestone 5 — Local run discovery and ledger-focused desktop UX
 

@@ -3,15 +3,18 @@
 //! Uses ordinary ATX headings and lists so Tiptap (`html: false`) round-trips
 //! preserve structure.
 //!
-//! **Authority model A:** Moraine-managed sections are projections of structured
-//! sidecar state. Human-authored free text that survives agent mutations lives
-//! only under `## Human notes`. Edits outside that region are not preserved on
-//! the next protocol operation.
+//! **Authority model A (M4.6):** Moraine-managed sections are projections of
+//! structured sidecar state. Agent checkpoints are immutable; amendments and
+//! observations are append-only. The `## Human notes` section remains for
+//! compatibility projection of observation bodies, not free-form rewrite of claims.
 
 use chrono::{DateTime, Utc};
 
 use super::git::GitContextSummary;
-use super::types::{AgentRunState, CheckpointRecord, LifecycleEvent, RunLifecycle};
+use super::types::{
+    AgentRunState, CheckpointRecord, LedgerRelationship, LifecycleEvent, RunLifecycle,
+    OP_ENTRY_REDACT, OP_ENTRY_SUPERSEDE, OP_HUMAN_OBSERVATION_ADD, OP_RUN_AMEND,
+};
 use crate::error::{Error, Result};
 
 pub const HUMAN_NOTES_HEADING: &str = "## Human notes";
@@ -74,7 +77,7 @@ pub fn render_run_markdown_with_id(
 
     out.push_str("## Protocol status\n\n");
     out.push_str(
-        "> **Managed regions:** Everything above `## Human notes` is regenerated from Moraine structured state. Human free-form edits and accepted suggestion text outside Human notes are **not** preserved on the next agent operation. Review managed content with comments / request-changes; put free-form notes only under Human notes.\n\n",
+        "> **Managed regions:** Everything above `## Human notes` is regenerated from Moraine structured state. Checkpoints and agent claims are **immutable**; corrections use append-only amendments (original claim retained). Observations are append-only. Free-form edits outside structured ops are not preserved on the next agent operation.\n\n",
     );
     out.push_str(&format!("- **Run ID:** `{run_id}`\n"));
     out.push_str(&format!(
@@ -114,9 +117,32 @@ pub fn render_run_markdown_with_id(
         out.push_str("_No checkpoints yet._\n\n");
     } else {
         for (i, cp) in agent.checkpoints.iter().enumerate() {
-            out.push_str(&format_checkpoint(i + 1, cp));
+            out.push_str(&format_checkpoint(i + 1, cp, agent));
             out.push('\n');
         }
+    }
+
+    out.push_str("## Human observations\n\n");
+    let observations: Vec<_> = agent
+        .append_only_ops
+        .iter()
+        .filter(|o| o.op_kind == OP_HUMAN_OBSERVATION_ADD)
+        .collect();
+    if observations.is_empty() {
+        out.push_str("_None recorded._\n\n");
+    } else {
+        for op in observations {
+            out.push_str(&format!(
+                "- **{}** (op `{}`): {}\n",
+                format_ts(op.created_at),
+                op.op_id,
+                op.new_content.as_deref().unwrap_or("").trim()
+            ));
+            if !op.reason.is_empty() {
+                out.push_str(&format!("  - reason: {}\n", escape_list_item(&op.reason)));
+            }
+        }
+        out.push('\n');
     }
 
     out.push_str("## Risks\n\n");
@@ -226,14 +252,69 @@ fn format_git(git: Option<&GitContextSummary>) -> String {
     s
 }
 
-fn format_checkpoint(n: usize, cp: &CheckpointRecord) -> String {
+fn format_checkpoint(n: usize, cp: &CheckpointRecord, agent: &AgentRunState) -> String {
     let mut s = String::new();
     s.push_str(&format!(
         "### Checkpoint {n} — {}\n\n",
         format_ts(cp.created_at)
     ));
     s.push_str(&format!("- **Op ID:** `{}`\n", cp.op_id));
-    s.push_str(&format!("- **Summary:** {}\n\n", cp.summary.trim()));
+
+    let related: Vec<_> = agent
+        .append_only_ops
+        .iter()
+        .filter(|o| o.target_id == Some(cp.op_id) && o.target_kind.as_deref() == Some("checkpoint"))
+        .collect();
+    let has_history = related.iter().any(|o| {
+        matches!(
+            o.relationship,
+            LedgerRelationship::Amended
+                | LedgerRelationship::Superseded
+                | LedgerRelationship::Redacted
+        )
+    });
+
+    if has_history {
+        s.push_str(&format!(
+            "\n**Original claim:**\n\n{}\n\n",
+            cp.summary.trim()
+        ));
+        for op in &related {
+            match op.relationship {
+                LedgerRelationship::Amended => {
+                    s.push_str("#### Amendment\n\n");
+                    s.push_str(&format!("{}\n\n", op.reason.trim()));
+                    if let Some(n) = &op.new_content {
+                        s.push_str(&format!("**Amended statement:**\n\n{}\n\n", n.trim()));
+                    }
+                }
+                LedgerRelationship::Superseded => {
+                    s.push_str("#### Supersession\n\n");
+                    s.push_str(&format!("{}\n\n", op.reason.trim()));
+                    if let Some(n) = &op.new_content {
+                        s.push_str(&format!("**Superseding statement:**\n\n{}\n\n", n.trim()));
+                    }
+                }
+                LedgerRelationship::Redacted => {
+                    s.push_str("#### Redaction\n\n");
+                    s.push_str(&format!(
+                        "Explicit redaction (op `{}`): {}\n\n",
+                        op.op_id,
+                        op.reason.trim()
+                    ));
+                    s.push_str(
+                        "Prior content is retained in the structured ledger and recoverable.\n\n",
+                    );
+                }
+                LedgerRelationship::Observation => {}
+            }
+        }
+        let current = super::append_ops::current_checkpoint_claim(agent, cp.op_id);
+        s.push_str(&format!("**Current statement:**\n\n{}\n\n", current.trim()));
+    } else {
+        s.push_str(&format!("- **Summary:** {}\n\n", cp.summary.trim()));
+    }
+
     if !cp.actions.is_empty() {
         s.push_str("#### Actions\n\n");
         for a in &cp.actions {
@@ -282,6 +363,12 @@ fn format_checkpoint(n: usize, cp: &CheckpointRecord) -> String {
         s.push_str(&format_git(Some(g)));
         s.push('\n');
     }
+    let _ = (
+        OP_RUN_AMEND,
+        OP_ENTRY_SUPERSEDE,
+        OP_ENTRY_REDACT,
+        OP_HUMAN_OBSERVATION_ADD,
+    );
     s
 }
 
@@ -336,6 +423,7 @@ mod tests {
             evidence: vec![],
             findings: vec![],
             finding_events: vec![],
+            append_only_ops: vec![],
         }
     }
 

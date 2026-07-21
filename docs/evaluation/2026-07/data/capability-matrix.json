@@ -1,0 +1,18 @@
+{
+  "baseline": "4f8d1e85011d8ea49d02ea537c45b29b579ce52b",
+  "columns": ["implemented", "tested", "liveValidated", "documented", "userReady"],
+  "capabilities": [
+    {"id": "agent_protocol_cli", "I": true, "T": true, "L": true, "D": true, "U": false},
+    {"id": "mcp_stdio", "I": true, "T": true, "L": false, "D": true, "U": false},
+    {"id": "local_service", "I": true, "T": true, "L": true, "D": true, "U": false},
+    {"id": "codex_hooks", "I": true, "T": true, "L": false, "D": true, "U": false},
+    {"id": "findings", "I": true, "T": true, "L": false, "D": true, "U": false},
+    {"id": "append_only_ops", "I": true, "T": true, "L": false, "D": true, "U": false},
+    {"id": "redaction_ui", "I": true, "T": true, "L": false, "D": true, "U": false},
+    {"id": "redaction_findings_mcp", "I": false, "T": false, "L": false, "D": false, "U": false, "note": "PR #12 open"},
+    {"id": "discovery_workspace", "I": true, "T": true, "L": false, "D": true, "U": false},
+    {"id": "evidence", "I": true, "T": true, "L": false, "D": true, "U": false},
+    {"id": "yjs_share", "I": true, "T": true, "L": false, "D": true, "U": false},
+    {"id": "packaging", "I": false, "T": false, "L": false, "D": false, "U": false}
+  ]
+}

@@ -191,6 +191,155 @@ pub struct IdempotencyRecord {
     pub created_at: DateTime<Utc>,
 }
 
+/// Human review finding kind (descriptive context, not a verdict).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FindingKind {
+    Clarification,
+    Inconsistency,
+    MissingEvidence,
+    RiskConcern,
+    FactualCorrection,
+    Other,
+}
+
+impl FindingKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Clarification => "clarification",
+            Self::Inconsistency => "inconsistency",
+            Self::MissingEvidence => "missing_evidence",
+            Self::RiskConcern => "risk_concern",
+            Self::FactualCorrection => "factual_correction",
+            Self::Other => "other",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim() {
+            "clarification" => Some(Self::Clarification),
+            "inconsistency" => Some(Self::Inconsistency),
+            "missing_evidence" => Some(Self::MissingEvidence),
+            "risk_concern" => Some(Self::RiskConcern),
+            "factual_correction" => Some(Self::FactualCorrection),
+            "other" => Some(Self::Other),
+            _ => None,
+        }
+    }
+}
+
+/// Finding lifecycle state. `addressed` means explicit attention only—not approval.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FindingState {
+    #[default]
+    Open,
+    Addressed,
+    Archived,
+}
+
+impl FindingState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Addressed => "addressed",
+            Self::Archived => "archived",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim() {
+            "open" => Some(Self::Open),
+            "addressed" => Some(Self::Addressed),
+            "archived" => Some(Self::Archived),
+            _ => None,
+        }
+    }
+}
+
+/// Target of a finding. This slice supports checkpoints only.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FindingTargetKind {
+    Checkpoint,
+}
+
+impl FindingTargetKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Checkpoint => "checkpoint",
+        }
+    }
+}
+
+/// Frozen target identity observed when the finding was created.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FindingTarget {
+    pub kind: FindingTargetKind,
+    /// Checkpoint `op_id` on the same run.
+    pub checkpoint_op_id: Uuid,
+    /// Run Markdown content hash at finding creation (snapshot hash).
+    pub snapshot_hash: String,
+    /// Full checkpoint record frozen at creation (original target snapshot).
+    pub checkpoint: CheckpointRecord,
+}
+
+/// Agent (or future author) response attached to a finding thread.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FindingResponse {
+    pub id: Uuid,
+    pub finding_id: Uuid,
+    pub body: String,
+    pub created_at: DateTime<Utc>,
+    pub idempotency_key: String,
+    /// Always `agent` for MCP responses in this slice.
+    pub author_kind: String,
+}
+
+/// Durable human review finding (descriptive; not a verdict).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FindingRecord {
+    pub id: Uuid,
+    pub kind: FindingKind,
+    pub state: FindingState,
+    pub body: String,
+    pub target: FindingTarget,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub responses: Vec<FindingResponse>,
+}
+
+/// Append-only ledger event for finding mutations.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FindingLedgerEvent {
+    pub event_id: Uuid,
+    /// One of: `finding.created`, `finding.responded`, `finding.state_changed`.
+    pub event: String,
+    pub finding_id: Uuid,
+    pub created_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_state: Option<FindingState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_state: Option<FindingState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<FindingKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoint_op_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_hash: Option<String>,
+}
+
+pub const FINDING_EVENT_CREATED: &str = "finding.created";
+pub const FINDING_EVENT_RESPONDED: &str = "finding.responded";
+pub const FINDING_EVENT_STATE_CHANGED: &str = "finding.state_changed";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct IncompleteOp {
@@ -266,6 +415,12 @@ pub struct AgentRunState {
     /// Mechanically captured evidence summaries attached to this run.
     #[serde(default)]
     pub evidence: Vec<EvidenceSummary>,
+    /// Human review findings (descriptive context; not verdicts).
+    #[serde(default)]
+    pub findings: Vec<FindingRecord>,
+    /// Append-only finding ledger events for history reconstruction.
+    #[serde(default)]
+    pub finding_events: Vec<FindingLedgerEvent>,
 }
 
 impl AgentRunState {

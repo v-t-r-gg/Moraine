@@ -6,6 +6,7 @@
   import HistoryPanel from "$lib/components/HistoryPanel.svelte";
   import CommentsPanel from "$lib/components/CommentsPanel.svelte";
   import RunReviewPanel from "$lib/components/RunReviewPanel.svelte";
+  import CheckpointFindingsPanel from "$lib/components/CheckpointFindingsPanel.svelte";
   import Editor from "$lib/components/Editor.svelte";
   import {
     appInfo,
@@ -96,6 +97,8 @@ See the project README and VISION.md for the full model.
   let sessionCfg = $state<SessionConfig>({ roomId: null, syncUrl: null });
   let localAuthor = $state("You");
   let runReview = $state<RunReviewDto | null>(null);
+  /** Bumped when run ledger / path changes so checkpoint findings reload. */
+  let findingsRefreshToken = $state(0);
   let recoveryBusy = $state(false);
   /** Hash of the last known persisted Markdown revision (from disk load/save). */
   let baseContentHash = $state<string | null>(null);
@@ -369,6 +372,7 @@ See the project README and VISION.md for the full model.
       if (runReview.contentHash) {
         baseContentHash = runReview.contentHash;
       }
+      findingsRefreshToken += 1;
     } catch (e) {
       status = `error: could not load run review (${e})`;
     }
@@ -1087,6 +1091,7 @@ See the project README and VISION.md for the full model.
       externalConflict={externalConflict}
       onReload={reloadFromDiskKeepingLocalCopy}
     />
+    <CheckpointFindingsPanel path={path} refreshToken={findingsRefreshToken} />
   {/if}
 
   <div class="flex min-h-0 flex-1">

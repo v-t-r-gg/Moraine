@@ -5,6 +5,7 @@
 //! discipline as annotation ops.
 
 mod evidence;
+mod findings;
 mod git;
 mod markdown;
 mod ops;
@@ -16,6 +17,14 @@ pub use evidence::{
     load_evidence_record, record_mechanical_evidence, redact_secrets, EvidenceRecord,
     MechanicalEvidenceRequest, OutputMetadata, EVIDENCE_DIR, EVIDENCE_SCHEMA_VERSION,
     MAX_COMMAND_LEN, MAX_OUTPUT_BYTES,
+};
+pub use findings::{
+    change_finding_state, change_finding_state_at_path, create_finding, create_finding_at_path,
+    get_finding, get_finding_at_path, list_findings, list_findings_at_path,
+    load_run_checkpoints_detail, respond_to_finding, respond_to_finding_at_path,
+    CheckpointSummaryDto, CreateFindingRequest, FindingDetail, FindingListItem,
+    FindingMutationResult, FindingTargetContext, FindingThreadItem, RunCheckpointsDetail,
+    MAX_FINDING_BODY_CHARS,
 };
 pub use git::{capture_git_context, GitContextSummary};
 pub use markdown::{
@@ -38,6 +47,9 @@ pub use session::{
 };
 pub use types::{
     AgentRunState, CaptureCoverage, CheckpointRecord, EvidenceItem, EvidenceKind,
-    EvidenceProvenance, EvidenceSummary, IdempotencyRecord, IncompleteOp, LifecycleEvent,
-    RationalItem, RunLifecycle, MAX_CHECKPOINT_ITEMS, MAX_FIELD_CHARS, MAX_SUMMARY_CHARS,
+    EvidenceProvenance, EvidenceSummary, FindingKind, FindingLedgerEvent, FindingRecord,
+    FindingResponse, FindingState, FindingTarget, FindingTargetKind, IdempotencyRecord,
+    IncompleteOp, LifecycleEvent, RationalItem, RunLifecycle, FINDING_EVENT_CREATED,
+    FINDING_EVENT_RESPONDED, FINDING_EVENT_STATE_CHANGED, MAX_CHECKPOINT_ITEMS, MAX_FIELD_CHARS,
+    MAX_SUMMARY_CHARS,
 };

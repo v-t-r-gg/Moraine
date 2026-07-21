@@ -35,7 +35,7 @@ moraine mcp --project /absolute/path/to/project
 If `--project` is omitted, discovery uses the current directory (and may create
 minimal `.moraine` structure).
 
-## Tools (exactly five)
+## Tools
 
 | Tool | Role |
 |------|------|
@@ -44,6 +44,11 @@ minimal `.moraine` structure).
 | `run_checkpoint` | Structured checkpoint |
 | `run_ready` | Active → ready_for_review (not approval) |
 | `run_resume` | Ready → active |
+| `list_findings` | List open findings (and target context) for a run |
+| `get_finding` | Full finding thread + original target checkpoint snapshot |
+| `respond_to_finding` | Agent response (requires `idempotencyKey`; not an approval) |
+
+Human create and state-change for findings go through the desktop/host path, not MCP.
 
 ## Server instructions (size budget)
 
@@ -82,7 +87,7 @@ Codes match the agent-run protocol (`project_not_found`, `run_not_found`,
 `invalid_checkpoint`, `revision_conflict`, `idempotency_conflict`,
 `run_state_conflict`, `run_record_structure_invalid`,
 `operation_recovery_required`, `unsupported_schema_version`,
-`idempotency_index_full`, …).
+`idempotency_index_full`, `finding_not_found`, `invalid_finding`, …).
 
 Normal domain errors do **not** terminate the server.
 

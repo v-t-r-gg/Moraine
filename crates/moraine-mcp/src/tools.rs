@@ -1,13 +1,13 @@
-//! MCP tool surface: run_start, run_show, run_checkpoint, run_ready, run_resume.
+//! MCP tool surface: run lifecycle tools plus finding list/get/respond.
 
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use moraine_core::{
-    run_checkpoint, run_ready, run_resume, run_show, run_start, CheckpointInput,
-    Error as CoreError, EvidenceItem, EvidenceKind, EvidenceProvenance, RationalItem,
-    RunShowOptions, RunStartRequest,
+    get_finding, list_findings, respond_to_finding, run_checkpoint, run_ready, run_resume,
+    run_show, run_start, CheckpointInput, Error as CoreError, EvidenceItem, EvidenceKind,
+    EvidenceProvenance, RationalItem, RunShowOptions, RunStartRequest,
 };
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -61,6 +61,9 @@ pub fn tool_names() -> &'static [&'static str] {
         "run_checkpoint",
         "run_ready",
         "run_resume",
+        "list_findings",
+        "get_finding",
+        "respond_to_finding",
     ]
 }
 
@@ -139,6 +142,35 @@ pub struct RunResumeArgs {
     pub idempotency_key: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ListFindingsArgs {
+    pub run_id: String,
+    /// When true (default), only findings in state `open` are returned.
+    #[serde(default = "default_true")]
+    pub open_only: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GetFindingArgs {
+    pub run_id: String,
+    pub finding_id: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RespondToFindingArgs {
+    pub run_id: String,
+    pub finding_id: String,
+    pub body: String,
+    pub idempotency_key: String,
 }
 
 #[tool_router]
@@ -273,6 +305,69 @@ impl MoraineMcp {
             Err(e) => core_err(e),
         }
     }
+
+    #[tool(
+        description = "List open review findings for a run (default openOnly=true) with target checkpoint context. Findings are descriptive context, not verdicts."
+    )]
+    async fn list_findings(
+        &self,
+        Parameters(args): Parameters<ListFindingsArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let run_id = parse_uuid(&args.run_id)?;
+        match list_findings(Some(self.project_root.as_ref()), run_id, args.open_only) {
+            Ok(items) => ok_json(json!({
+                "runId": run_id.to_string(),
+                "openOnly": args.open_only,
+                "count": items.len(),
+                "findings": items,
+            })),
+            Err(e) => core_err(e),
+        }
+    }
+
+    #[tool(
+        description = "Get a finding thread (human finding + agent responses chronologically) and the original frozen checkpoint target snapshot."
+    )]
+    async fn get_finding(
+        &self,
+        Parameters(args): Parameters<GetFindingArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let run_id = parse_uuid(&args.run_id)?;
+        let finding_id = parse_finding_uuid(&args.finding_id)?;
+        match get_finding(Some(self.project_root.as_ref()), run_id, finding_id) {
+            Ok(detail) => ok_json(serde_json::to_value(detail).unwrap_or(json!({}))),
+            Err(e) => core_err(e),
+        }
+    }
+
+    #[tool(
+        description = "Record an agent response on a finding. Requires runId, findingId, body, idempotencyKey. Same key+payload replays; same key+different payload conflicts. Not an approval."
+    )]
+    async fn respond_to_finding(
+        &self,
+        Parameters(args): Parameters<RespondToFindingArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let run_id = parse_uuid(&args.run_id)?;
+        let finding_id = parse_finding_uuid(&args.finding_id)?;
+        match respond_to_finding(
+            Some(self.project_root.as_ref()),
+            run_id,
+            finding_id,
+            &args.body,
+            &args.idempotency_key,
+        ) {
+            Ok(r) => ok_json(json!({
+                "findingId": r.finding_id.to_string(),
+                "runId": r.run_id.to_string(),
+                "state": r.state,
+                "kind": r.kind,
+                "idempotentReplay": r.idempotent_replay,
+                "responseId": r.response_id.map(|u| u.to_string()),
+                "finding": r.finding,
+            })),
+            Err(e) => core_err(e),
+        }
+    }
 }
 
 #[tool_handler]
@@ -368,6 +463,15 @@ fn parse_uuid(s: &str) -> Result<Uuid, McpError> {
     })
 }
 
+fn parse_finding_uuid(s: &str) -> Result<Uuid, McpError> {
+    Uuid::from_str(s.trim()).map_err(|_| {
+        McpError::invalid_params(
+            "invalid findingId",
+            Some(json!({ "code": "finding_not_found", "findingId": s })),
+        )
+    })
+}
+
 fn ok_json(value: serde_json::Value) -> Result<CallToolResult, McpError> {
     Ok(CallToolResult::success(vec![ContentBlock::text(
         value.to_string(),
@@ -427,10 +531,18 @@ mod tests {
             "rejected",
             "run_open",
             "project_init",
+            "accept",
+            "reject",
         ] {
             assert!(
                 !names.iter().any(|n| n.contains(forbidden)),
                 "forbidden tool fragment {forbidden} in {names:?}"
+            );
+        }
+        for required in ["list_findings", "get_finding", "respond_to_finding"] {
+            assert!(
+                names.iter().any(|n| n == required),
+                "missing finding tool {required} in {names:?}"
             );
         }
     }

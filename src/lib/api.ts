@@ -276,6 +276,130 @@ export async function getRunReview(path: string): Promise<RunReviewDto> {
   return invoke("get_run_review", { path });
 }
 
+/** Finding kinds (descriptive review context — not verdicts). */
+export type FindingKind =
+  | "clarification"
+  | "inconsistency"
+  | "missing_evidence"
+  | "risk_concern"
+  | "factual_correction"
+  | "other";
+
+export type FindingState = "open" | "addressed" | "archived";
+
+export interface FindingTargetDto {
+  kind: string;
+  checkpointOpId: string;
+  snapshotHash: string;
+  checkpointSummary: string;
+}
+
+export interface FindingListItemDto {
+  findingId: string;
+  runId: string;
+  kind: FindingKind | string;
+  state: FindingState | string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  responseCount: number;
+  target: FindingTargetDto;
+}
+
+export interface FindingThreadItemDto {
+  itemKind: "finding" | "response" | string;
+  id: string;
+  body: string;
+  createdAt: string;
+  authorKind?: string | null;
+  findingKind?: string | null;
+}
+
+export interface FindingDetailDto {
+  findingId: string;
+  runId: string;
+  kind: string;
+  state: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  target: FindingTargetDto;
+  targetSnapshot: {
+    opId: string;
+    summary: string;
+    createdAt: string;
+    [key: string]: unknown;
+  };
+  thread: FindingThreadItemDto[];
+  responses: Array<{
+    id: string;
+    findingId: string;
+    body: string;
+    createdAt: string;
+    idempotencyKey: string;
+    authorKind: string;
+  }>;
+  ledgerEvents: Array<{
+    eventId: string;
+    event: string;
+    findingId: string;
+    createdAt: string;
+    [key: string]: unknown;
+  }>;
+}
+
+export interface CheckpointSummaryDto {
+  opId: string;
+  summary: string;
+  createdAt: string;
+  openFindingCount: number;
+  findingCount: number;
+}
+
+export interface RunCheckpointsDetailDto {
+  runId: string;
+  contentHash: string;
+  checkpoints: CheckpointSummaryDto[];
+  findings: FindingListItemDto[];
+}
+
+export async function getRunCheckpoints(path: string): Promise<RunCheckpointsDetailDto> {
+  return invoke("get_run_checkpoints_cmd", { path });
+}
+
+export async function createFinding(
+  path: string,
+  checkpointOpId: string,
+  kind: FindingKind | string,
+  body: string,
+): Promise<{ findingId: string; finding: FindingDetailDto; state: string; kind: string }> {
+  return invoke("create_finding_cmd", {
+    path,
+    checkpointOpId,
+    kind,
+    body,
+  });
+}
+
+export async function listFindings(
+  path: string,
+  openOnly = false,
+): Promise<FindingListItemDto[]> {
+  return invoke("list_findings_cmd", { path, openOnly });
+}
+
+export async function getFinding(path: string, findingId: string): Promise<FindingDetailDto> {
+  return invoke("get_finding_cmd", { path, findingId });
+}
+
+export async function changeFindingState(
+  path: string,
+  findingId: string,
+  state: FindingState | string,
+): Promise<{ findingId: string; state: string; finding: FindingDetailDto }> {
+  return invoke("change_finding_state_cmd", { path, findingId, state });
+}
+
 export async function pickMarkdownFile(): Promise<string | null> {
   if (!isTauri) {
     return null;
@@ -498,6 +622,19 @@ function browserStub<T>(cmd: string, args?: Record<string, unknown>): T {
       } as T;
     case "ensure_run_id":
       return "00000000-0000-4000-8000-000000000000" as T;
+    case "get_run_checkpoints_cmd":
+      return {
+        runId: "00000000-0000-4000-8000-000000000000",
+        contentHash: "0".repeat(64),
+        checkpoints: [],
+        findings: [],
+      } as T;
+    case "list_findings_cmd":
+      return [] as T;
+    case "create_finding_cmd":
+    case "get_finding_cmd":
+    case "change_finding_state_cmd":
+      throw new Error("findings require the Tauri desktop host");
     default:
       console.warn("[moraine browser stub] unhandled command:", cmd, args);
       return undefined as T;

@@ -369,6 +369,8 @@ pub fn run_start(req: RunStartRequest) -> Result<AgentOpResult> {
         session_id: session_key.clone(),
         provisional: false,
         evidence: vec![],
+        findings: vec![],
+        finding_events: vec![],
     };
 
     let mut meta = RunMeta::new_run_with_id(run_id);
@@ -735,6 +737,8 @@ pub fn provisional_run_ensure(req: ProvisionalRunRequest) -> Result<AgentOpResul
         session_id: Some(session_key.clone()),
         provisional: true,
         evidence: vec![],
+        findings: vec![],
+        finding_events: vec![],
     };
 
     let mut meta = RunMeta::new_run_with_id(run_id);
@@ -1067,6 +1071,55 @@ struct MutCtx<'a> {
     agent: &'a mut AgentRunState,
 }
 
+/// Recover incomplete agent ops before any further mutation of agent state.
+///
+/// Caller must hold the sidecar lock. When Markdown already matches the pending
+/// expected hash, promotes `pending_agent` (so later writers do not wipe concurrent
+/// sidecar fields such as findings). When Markdown still matches the base hash,
+/// discards the pending mutation. Other hashes require manual recovery.
+pub(crate) fn recover_incomplete_agent_op(
+    md_path: &Path,
+    meta: &mut RunMeta,
+    actual_content_hash: &str,
+) -> Result<()> {
+    let Some(agent) = meta.agent.as_mut() else {
+        return Ok(());
+    };
+    let Some(inc) = agent.incomplete_op.clone() else {
+        return Ok(());
+    };
+    if actual_content_hash == inc.expected_content_hash {
+        // Markdown applied; promote pending once.
+        let mut pending = (*inc.pending_agent).clone();
+        pending.incomplete_op = None;
+        pending.record_idempotency(
+            inc.idempotency_key.clone(),
+            IdempotencyRecord {
+                payload_hash: inc.payload_hash.clone(),
+                op_id: inc.op_id,
+                kind: inc.kind.clone(),
+                content_hash: actual_content_hash.to_string(),
+                record_revision: pending.record_revision,
+                created_at: Utc::now(),
+            },
+        )?;
+        meta.agent = Some(pending);
+        write_run_meta_unlocked(md_path, meta)?;
+    } else if actual_content_hash == inc.base_content_hash {
+        // Markdown never applied; discard pending, keep committed state.
+        agent.incomplete_op = None;
+        write_run_meta_unlocked(md_path, meta)?;
+    } else {
+        return Err(Error::OperationRecoveryRequired {
+            message: format!(
+                "incomplete op {} phase {:?}: document hash matches neither base nor expected",
+                inc.op_id, inc.phase
+            ),
+        });
+    }
+    Ok(())
+}
+
 fn mutate_agent_run<F>(
     project: Option<&Path>,
     run_id: Uuid,
@@ -1096,39 +1149,7 @@ where
     let actual = content_hash(&markdown);
 
     // Recover incomplete ops before applying a new mutation.
-    if let Some(agent) = meta.agent.as_mut() {
-        if let Some(inc) = agent.incomplete_op.clone() {
-            if actual == inc.expected_content_hash {
-                // Markdown applied; promote pending once.
-                let mut pending = (*inc.pending_agent).clone();
-                pending.incomplete_op = None;
-                pending.record_idempotency(
-                    inc.idempotency_key.clone(),
-                    IdempotencyRecord {
-                        payload_hash: inc.payload_hash.clone(),
-                        op_id: inc.op_id,
-                        kind: inc.kind.clone(),
-                        content_hash: actual.clone(),
-                        record_revision: pending.record_revision,
-                        created_at: Utc::now(),
-                    },
-                )?;
-                meta.agent = Some(pending);
-                write_run_meta_unlocked(&md_path, &meta)?;
-            } else if actual == inc.base_content_hash {
-                // Markdown never applied; discard pending, keep committed state.
-                agent.incomplete_op = None;
-                write_run_meta_unlocked(&md_path, &meta)?;
-            } else {
-                return Err(Error::OperationRecoveryRequired {
-                    message: format!(
-                        "incomplete op {} phase {:?}: document hash matches neither base nor expected",
-                        inc.op_id, inc.phase
-                    ),
-                });
-            }
-        }
-    }
+    recover_incomplete_agent_op(&md_path, &mut meta, &actual)?;
 
     meta = load_or_migrate_locked(&md_path)?;
     let markdown = Document::read_file(&md_path)?;

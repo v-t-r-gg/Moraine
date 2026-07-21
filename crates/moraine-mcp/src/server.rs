@@ -23,7 +23,9 @@ private reasoning, full transcripts, or large logs.\n\n\
 Moraine captures Git branch/HEAD/working-tree facts mechanically—do not restate them. \
 Supply objective, rationales, risks, open questions, and concise agent-reported evidence. \
 On revision_conflict, call run_show and retry with the new contentHash. \
-Agent-reported evidence is not independently verified. Human decisions are not available through MCP.";
+Read human findings with list_findings/get_finding and reply via respond_to_finding \
+(idempotencyKey required). Findings are review context, not verdicts. \
+Human decisions are not available through MCP.";
     debug_assert!(s.len() <= SERVER_INSTRUCTIONS_MAX_BYTES);
     s.to_string()
 }

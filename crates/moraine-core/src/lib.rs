@@ -17,16 +17,23 @@ pub mod share;
 pub mod watcher;
 
 pub use agent_protocol::{
-    capture_git_context, derive_capture_coverage, ensure_project, find_run_by_id, init_project,
-    load_evidence_record, load_session, namespace_session_key, provisional_run_ensure,
-    record_mechanical_evidence, redact_secrets, resolve_confined_project, resolve_existing_project,
-    resolve_or_init_project, run_checkpoint, run_ready, run_resume, run_show, run_start,
+    capture_git_context, change_finding_state, change_finding_state_at_path, create_finding,
+    create_finding_at_path, derive_capture_coverage, ensure_project, find_run_by_id, get_finding,
+    get_finding_at_path, init_project, list_findings, list_findings_at_path,
+    load_evidence_record, load_run_checkpoints_detail, load_session, namespace_session_key,
+    provisional_run_ensure, record_mechanical_evidence, redact_secrets, resolve_confined_project,
+    resolve_existing_project, resolve_or_init_project, respond_to_finding,
+    respond_to_finding_at_path, run_checkpoint, run_ready, run_resume, run_show, run_start,
     session_observe, AgentOpResult, AgentRunState, CaptureCoverage, CheckpointInput,
-    CheckpointRecord, EvidenceItem, EvidenceKind, EvidenceProvenance, EvidenceRecord,
-    EvidenceSummary, GitContextSummary, MechanicalEvidenceRequest, OutputMetadata,
-    ProjectInitResult, ProjectMeta, ProvisionalRunRequest, RationalItem, RunLifecycle,
-    RunShowOptions, RunShowPacket, RunStartRequest, SessionObserveRequest, SessionObserveResult,
-    SessionRecord, MAX_JSON_RESPONSE_HINT,
+    CheckpointRecord, CheckpointSummaryDto, CreateFindingRequest, EvidenceItem, EvidenceKind,
+    EvidenceProvenance, EvidenceRecord, EvidenceSummary, FindingDetail, FindingKind,
+    FindingLedgerEvent, FindingListItem, FindingMutationResult, FindingRecord, FindingResponse,
+    FindingState, FindingTarget, FindingTargetContext, FindingTargetKind, FindingThreadItem,
+    GitContextSummary, MechanicalEvidenceRequest, OutputMetadata, ProjectInitResult, ProjectMeta,
+    ProvisionalRunRequest, RationalItem, RunCheckpointsDetail, RunLifecycle, RunShowOptions,
+    RunShowPacket, RunStartRequest, SessionObserveRequest, SessionObserveResult, SessionRecord,
+    FINDING_EVENT_CREATED, FINDING_EVENT_RESPONDED, FINDING_EVENT_STATE_CHANGED,
+    MAX_FINDING_BODY_CHARS, MAX_JSON_RESPONSE_HINT,
 };
 pub use annotation_ops::{
     acceptance_recovery_status, apply_mutation, begin_accept_suggestion, cancel_accept_suggestion,

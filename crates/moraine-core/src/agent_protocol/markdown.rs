@@ -334,6 +334,8 @@ mod tests {
             session_id: None,
             provisional: false,
             evidence: vec![],
+            findings: vec![],
+            finding_events: vec![],
         }
     }
 

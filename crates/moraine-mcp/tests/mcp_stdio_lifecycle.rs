@@ -170,6 +170,9 @@ fn mcp_initialize_tools_and_lifecycle() {
         },
         {
             let mut e = vec![
+                "get_finding",
+                "list_findings",
+                "respond_to_finding",
                 "run_checkpoint",
                 "run_ready",
                 "run_resume",
@@ -277,6 +280,149 @@ fn mcp_initialize_tools_and_lifecycle() {
     ));
     assert_eq!(bad["mcpIsError"], true);
     assert_eq!(bad["body"]["error"]["code"], "run_not_found");
+}
+
+#[test]
+fn mcp_findings_list_get_respond_idempotency() {
+    use moraine_core::{create_finding, CreateFindingRequest, FindingKind};
+    use uuid::Uuid;
+
+    let dir = tempdir().unwrap();
+    let mut c = McpClient::spawn(dir.path());
+    c.request(
+        "initialize",
+        json!({
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": { "name": "findings-test", "version": "0" }
+        }),
+    );
+    c.notify("notifications/initialized", json!({}));
+
+    let start = text_payload(&c.call_tool(
+        "run_start",
+        json!({
+            "objective": "findings MCP path",
+            "idempotencyKey": "find-mcp-start"
+        }),
+    ));
+    let run_id = start["runId"].as_str().unwrap().to_string();
+    let hash = start["contentHash"].as_str().unwrap().to_string();
+
+    let cp = text_payload(&c.call_tool(
+        "run_checkpoint",
+        json!({
+            "runId": run_id,
+            "expectedHash": hash,
+            "idempotencyKey": "find-mcp-cp",
+            "summary": "Checkpoint for finding",
+            "actions": ["did work"]
+        }),
+    ));
+    assert!(cp.get("contentHash").is_some(), "{cp}");
+    let cp_op_id = cp["opId"].as_str().unwrap().to_string();
+    let run_uuid = Uuid::parse_str(&run_id).unwrap();
+    let checkpoint_op_id = Uuid::parse_str(&cp_op_id).unwrap();
+
+    // Human create via the real host service (not MCP).
+    let created = create_finding(
+        Some(dir.path()),
+        run_uuid,
+        CreateFindingRequest {
+            kind: FindingKind::Clarification,
+            body: "Please clarify the validation step.".into(),
+            checkpoint_op_id,
+        },
+    )
+    .expect("create_finding");
+    let finding_id = created.finding_id.to_string();
+
+    let listed = text_payload(&c.call_tool(
+        "list_findings",
+        json!({ "runId": run_id }),
+    ));
+    assert_eq!(listed["count"], 1, "{listed}");
+    assert_eq!(listed["findings"][0]["findingId"], finding_id);
+    assert_eq!(listed["findings"][0]["target"]["checkpointOpId"], cp_op_id);
+    assert!(
+        listed["findings"][0]["target"]["checkpointSummary"]
+            .as_str()
+            .unwrap()
+            .contains("Checkpoint"),
+        "{listed}"
+    );
+
+    let got = text_payload(&c.call_tool(
+        "get_finding",
+        json!({ "runId": run_id, "findingId": finding_id }),
+    ));
+    assert_eq!(got["findingId"], finding_id);
+    assert_eq!(got["targetSnapshot"]["opId"], cp_op_id);
+    assert_eq!(got["thread"][0]["itemKind"], "finding");
+    assert_eq!(got["thread"][0]["body"], "Please clarify the validation step.");
+    assert!(!got["target"]["snapshotHash"].as_str().unwrap().is_empty());
+
+    let resp = text_payload(&c.call_tool(
+        "respond_to_finding",
+        json!({
+            "runId": run_id,
+            "findingId": finding_id,
+            "body": "Validation was cargo test -p widget.",
+            "idempotencyKey": "find-mcp-resp-1"
+        }),
+    ));
+    assert_eq!(resp["idempotentReplay"], false, "{resp}");
+    assert!(resp.get("responseId").is_some(), "{resp}");
+
+    let replay = text_payload(&c.call_tool(
+        "respond_to_finding",
+        json!({
+            "runId": run_id,
+            "findingId": finding_id,
+            "body": "Validation was cargo test -p widget.",
+            "idempotencyKey": "find-mcp-resp-1"
+        }),
+    ));
+    assert_eq!(replay["idempotentReplay"], true, "{replay}");
+    assert_eq!(replay["responseId"], resp["responseId"]);
+
+    let conflict = text_payload(&c.call_tool(
+        "respond_to_finding",
+        json!({
+            "runId": run_id,
+            "findingId": finding_id,
+            "body": "Different payload",
+            "idempotencyKey": "find-mcp-resp-1"
+        }),
+    ));
+    assert_eq!(conflict["mcpIsError"], true, "{conflict}");
+    assert_eq!(
+        conflict["body"]["error"]["code"],
+        "idempotency_conflict",
+        "{conflict}"
+    );
+
+    let got2 = text_payload(&c.call_tool(
+        "get_finding",
+        json!({ "runId": run_id, "findingId": finding_id }),
+    ));
+    assert_eq!(got2["thread"].as_array().unwrap().len(), 2);
+    assert_eq!(got2["thread"][1]["itemKind"], "response");
+    assert_eq!(
+        got2["thread"][1]["body"],
+        "Validation was cargo test -p widget."
+    );
+
+    // Authorization/integrity: wrong finding id
+    let missing = text_payload(&c.call_tool(
+        "get_finding",
+        json!({
+            "runId": run_id,
+            "findingId": "00000000-0000-4000-8000-000000000099"
+        }),
+    ));
+    assert_eq!(missing["mcpIsError"], true);
+    assert_eq!(missing["body"]["error"]["code"], "finding_not_found");
 }
 
 #[test]

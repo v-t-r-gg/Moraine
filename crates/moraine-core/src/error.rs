@@ -101,6 +101,12 @@ pub enum Error {
     #[error("idempotency index full (max {max})")]
     IdempotencyIndexFull { max: usize },
 
+    #[error("finding not found: {id}")]
+    FindingNotFound { id: uuid::Uuid },
+
+    #[error("invalid finding: {message}")]
+    InvalidFinding { message: String },
+
     #[error("{0}")]
     Other(String),
 }
@@ -139,6 +145,8 @@ impl Error {
             Self::OperationRecoveryRequired { .. } => "operation_recovery_required",
             Self::UnsupportedSchemaVersion { .. } => "unsupported_schema_version",
             Self::IdempotencyIndexFull { .. } => "idempotency_index_full",
+            Self::FindingNotFound { .. } => "finding_not_found",
+            Self::InvalidFinding { .. } => "invalid_finding",
             Self::Other(_) => "error",
         }
     }
@@ -281,6 +289,17 @@ impl Error {
                 "kind": "idempotency_index_full",
                 "max": max,
                 "message": format!("Idempotency index is full (max {max}); refuse silent eviction"),
+            }),
+            Self::FindingNotFound { id } => serde_json::json!({
+                "code": "finding_not_found",
+                "kind": "finding_not_found",
+                "findingId": id.to_string(),
+                "message": "No finding with this id was found on the run.",
+            }),
+            Self::InvalidFinding { message } => serde_json::json!({
+                "code": "invalid_finding",
+                "kind": "invalid_finding",
+                "message": message,
             }),
             other => serde_json::json!({
                 "code": other.kind_str(),

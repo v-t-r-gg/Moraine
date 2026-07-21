@@ -1,8 +1,12 @@
 //! CLI for agent run records and review helpers. Fail-fast share unless `--start`.
 
+mod codex_setup;
+mod doctor;
 mod hook_codex;
 mod relay;
 mod run_cli;
+mod service_cmd;
+mod suite;
 
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
@@ -38,6 +42,7 @@ const EXIT_RELAY: i32 = 3;
     about = "Moraine CLI: run records and review helpers for agents and scripts",
     long_about = "Create and inspect Markdown run records, share live review rooms, and read sidecar status.\n\
                   Agent protocol: moraine project init; moraine run start|show|checkpoint|ready|resume|open --json.\n\
+                  Install suite: moraine version|doctor|service|setup.\n\
                   Exit codes: 0 ok, 1 error, 2 not found, 3 relay down.\n\
                   Prefer --json on share/status/info/join/run/project when calling from scripts."
 )]
@@ -45,7 +50,8 @@ struct Cli {
     #[command(subcommand)]
     command: Commands,
 
-    #[arg(short, long, action = clap::ArgAction::Count, global = true)]
+    /// Increase log verbosity (`-v`, `-vv`). Global; not the same as `version --verbose`.
+    #[arg(short = 'v', action = clap::ArgAction::Count, global = true)]
     verbose: u8,
 }
 
@@ -235,6 +241,86 @@ On delivery failure, events are written to the local spool (exit 0)."
         #[arg(long)]
         spool_dir: Option<PathBuf>,
     },
+
+    /// Product version and installed-suite identity
+    Version {
+        #[arg(long)]
+        json: bool,
+        /// Include suite/service/desktop paths and PATH drift (same as --json detail).
+        /// Named `--verbose` here (not `-v`) so it does not collide with the global `-v` count.
+        #[arg(long = "verbose", visible_alias = "long")]
+        long: bool,
+    },
+
+    /// Installation and integration health report
+    Doctor {
+        #[arg(long)]
+        project: Option<PathBuf>,
+        #[arg(long)]
+        integration: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Per-user moraine-service lifecycle (systemd --user on Linux)
+    Service {
+        #[command(subcommand)]
+        cmd: ServiceSub,
+    },
+
+    /// Configure first-reference integrations (project-scoped)
+    Setup {
+        #[command(subcommand)]
+        cmd: SetupSub,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ServiceSub {
+    Install {
+        #[arg(long)]
+        json: bool,
+    },
+    Start {
+        #[arg(long)]
+        json: bool,
+    },
+    Stop {
+        #[arg(long)]
+        json: bool,
+    },
+    Restart {
+        #[arg(long)]
+        json: bool,
+    },
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
+    Logs {
+        #[arg(long)]
+        json: bool,
+    },
+    Uninstall {
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SetupSub {
+    /// Configure project-scoped Codex MCP + hooks for Moraine
+    Codex {
+        #[arg(long)]
+        project: PathBuf,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        json: bool,
+        /// Remove managed Moraine Codex configuration (with backups)
+        #[arg(long)]
+        remove: bool,
+    },
 }
 
 fn main() {
@@ -319,6 +405,14 @@ fn run() -> Result<i32> {
             }
         }
         Commands::HookCodex { socket, spool_dir } => hook_codex::run_hook_codex(socket, spool_dir),
+        Commands::Version { json, long } => cmd_version(json, long),
+        Commands::Doctor {
+            project,
+            integration,
+            json,
+        } => cmd_doctor(project, integration, json),
+        Commands::Service { cmd } => cmd_service(cmd),
+        Commands::Setup { cmd } => cmd_setup(cmd),
     }?;
     Ok(code)
 }
@@ -375,24 +469,126 @@ fn emit_core_err(json: bool, err: &CoreError) -> i32 {
 
 fn cmd_info(json: bool) -> Result<i32> {
     let paths = MorainePaths::default_ensure().ok();
+    let build = moraine_core::BuildIdentity::current();
     if json {
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "ok": true,
                 "name": "moraine",
-                "version": env!("CARGO_PKG_VERSION"),
+                "version": build.version,
+                "gitCommit": build.git_commit,
+                "schema": build.schema,
                 "dataDir": paths.as_ref().map(|p| p.data_dir.display().to_string()),
                 "historyDir": paths.as_ref().map(|p| p.history_dir.display().to_string()),
                 "configDir": paths.as_ref().map(|p| p.config_dir.display().to_string()),
             }))?
         );
     } else {
-        println!("moraine {}", env!("CARGO_PKG_VERSION"));
+        println!("moraine {}", build.version);
         if let Some(p) = paths {
             println!("data dir:    {}", p.data_dir.display());
             println!("history dir: {}", p.history_dir.display());
             println!("config dir:  {}", p.config_dir.display());
+        }
+    }
+    Ok(EXIT_OK)
+}
+
+fn cmd_version(json: bool, long: bool) -> Result<i32> {
+    let report = suite::collect_version_report();
+    if json || long {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("Moraine {}", report.cli.version);
+        if let Some(s) = &report.suite {
+            println!("suite {} ({})", s.version, s.manifest_path);
+        }
+        if report.service.online {
+            println!(
+                "service online{}",
+                report
+                    .service
+                    .version
+                    .as_ref()
+                    .map(|v| format!(" {v}"))
+                    .unwrap_or_default()
+            );
+        } else {
+            println!("service offline");
+        }
+        if let Some(w) = &report.warnings {
+            for line in w {
+                eprintln!("warning: {line}");
+            }
+        }
+    }
+    // Version inspection always exits 0; warnings are advisory (doctor is the gate).
+    Ok(EXIT_OK)
+}
+
+fn cmd_doctor(project: Option<PathBuf>, integration: Option<String>, json: bool) -> Result<i32> {
+    let report = doctor::run_doctor(project.as_deref(), integration.as_deref());
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!(
+            "Moraine doctor — {} {}",
+            report.build.product, report.build.version
+        );
+        for c in &report.checks {
+            let mark = if c.status == "ok" { "ok" } else { "FAIL" };
+            println!("[{mark}] {}: {}", c.id, c.message);
+            if let Some(r) = &c.remediation {
+                if c.status != "ok" {
+                    println!("       → {r}");
+                }
+            }
+        }
+        if let Some(p) = &report.project {
+            println!("project: {} initialized={}", p.path, p.initialized);
+        }
+        if let Some(i) = &report.integration {
+            println!("integration {}: configured={}", i.name, i.configured);
+        }
+        println!(
+            "{}",
+            if report.ok {
+                "doctor: all checks passed"
+            } else {
+                "doctor: one or more checks failed"
+            }
+        );
+    }
+    Ok(if report.ok { EXIT_OK } else { EXIT_ERR })
+}
+
+fn cmd_service(cmd: ServiceSub) -> Result<i32> {
+    match cmd {
+        ServiceSub::Install { json } => service_cmd::service_install(json)?,
+        ServiceSub::Start { json } => service_cmd::service_start(json)?,
+        ServiceSub::Stop { json } => service_cmd::service_stop(json)?,
+        ServiceSub::Restart { json } => service_cmd::service_restart(json)?,
+        ServiceSub::Status { json } => service_cmd::service_status(json)?,
+        ServiceSub::Logs { json } => service_cmd::service_logs(json)?,
+        ServiceSub::Uninstall { json } => service_cmd::service_uninstall(json)?,
+    }
+    Ok(EXIT_OK)
+}
+
+fn cmd_setup(cmd: SetupSub) -> Result<i32> {
+    match cmd {
+        SetupSub::Codex {
+            project,
+            dry_run,
+            json,
+            remove,
+        } => {
+            if remove {
+                codex_setup::remove_codex(&project, dry_run, json)?;
+            } else {
+                codex_setup::setup_codex(&project, dry_run, json)?;
+            }
         }
     }
     Ok(EXIT_OK)

@@ -2,6 +2,8 @@
 
 Short process notes for keeping `main` releasable. Product vision lives in [VISION.md](../VISION.md). Product direction: [DEVELOPMENT_BLUEPRINT.md](./DEVELOPMENT_BLUEPRINT.md).
 
+Desktop UI is **React + TypeScript + Vite** (Tauri host). Frontend scripts: `npm run typecheck`, `npm test`, `npm run build`.
+
 ## Branch model
 
 * **`main`**: releasable; no long multi-milestone work.

@@ -3,7 +3,7 @@ import type {
   DocumentSnapshot,
   HistoryEntry,
   HistoryEntryMeta,
-} from "./types";
+} from "@/shared/types";
 
 const isTauri =
   typeof window !== "undefined" &&
@@ -423,12 +423,12 @@ export async function pickSavePath(defaultPath?: string): Promise<string | null>
 }
 
 export function onFileChanged(
-  handler: (event: import("./types").FileChangedEvent) => void,
+  handler: (event: import("@/shared/types").FileChangedEvent) => void,
 ): () => void {
   if (!isTauri) return () => {};
   let unlisten: (() => void) | undefined;
   import("@tauri-apps/api/event").then(({ listen }) => {
-    listen<import("./types").FileChangedEvent>("file-changed", (e) => {
+    listen<import("@/shared/types").FileChangedEvent>("file-changed", (e) => {
       handler(e.payload);
     }).then((fn) => {
       unlisten = fn;

@@ -337,10 +337,7 @@ fn mcp_findings_list_get_respond_idempotency() {
     .expect("create_finding");
     let finding_id = created.finding_id.to_string();
 
-    let listed = text_payload(&c.call_tool(
-        "list_findings",
-        json!({ "runId": run_id }),
-    ));
+    let listed = text_payload(&c.call_tool("list_findings", json!({ "runId": run_id })));
     assert_eq!(listed["count"], 1, "{listed}");
     assert_eq!(listed["findings"][0]["findingId"], finding_id);
     assert_eq!(listed["findings"][0]["target"]["checkpointOpId"], cp_op_id);
@@ -359,7 +356,10 @@ fn mcp_findings_list_get_respond_idempotency() {
     assert_eq!(got["findingId"], finding_id);
     assert_eq!(got["targetSnapshot"]["opId"], cp_op_id);
     assert_eq!(got["thread"][0]["itemKind"], "finding");
-    assert_eq!(got["thread"][0]["body"], "Please clarify the validation step.");
+    assert_eq!(
+        got["thread"][0]["body"],
+        "Please clarify the validation step."
+    );
     assert!(!got["target"]["snapshotHash"].as_str().unwrap().is_empty());
 
     let resp = text_payload(&c.call_tool(
@@ -397,8 +397,7 @@ fn mcp_findings_list_get_respond_idempotency() {
     ));
     assert_eq!(conflict["mcpIsError"], true, "{conflict}");
     assert_eq!(
-        conflict["body"]["error"]["code"],
-        "idempotency_conflict",
+        conflict["body"]["error"]["code"], "idempotency_conflict",
         "{conflict}"
     );
 

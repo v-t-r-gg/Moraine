@@ -121,7 +121,10 @@ pub fn create_finding(
 }
 
 /// Create a finding for the run record at `md_path` (desktop host path).
-pub fn create_finding_at_path(md_path: &Path, req: CreateFindingRequest) -> Result<FindingMutationResult> {
+pub fn create_finding_at_path(
+    md_path: &Path,
+    req: CreateFindingRequest,
+) -> Result<FindingMutationResult> {
     let body = validate_finding_body(&req.body)?;
     with_agent_locked(md_path, |run_id, agent, snapshot_hash| {
         let cp = agent
@@ -208,7 +211,11 @@ pub fn list_findings_at_path(md_path: &Path, open_only: bool) -> Result<Vec<Find
 }
 
 /// Read a complete finding thread plus original target snapshot.
-pub fn get_finding(project: Option<&Path>, run_id: Uuid, finding_id: Uuid) -> Result<FindingDetail> {
+pub fn get_finding(
+    project: Option<&Path>,
+    run_id: Uuid,
+    finding_id: Uuid,
+) -> Result<FindingDetail> {
     let project = resolve_existing_project(project)?;
     let (_md_path, meta) = find_run_by_id(&project.project_root, run_id)?;
     let agent = meta
@@ -718,12 +725,7 @@ mod tests {
         )
         .unwrap();
         let op_id = cp.op_id.unwrap();
-        (
-            start.run_id,
-            project.project_root,
-            op_id,
-            cp.content_hash,
-        )
+        (start.run_id, project.project_root, op_id, cp.content_hash)
     }
 
     #[test]
@@ -743,16 +745,13 @@ mod tests {
         .unwrap();
         assert_eq!(created.state, "open");
         assert_eq!(created.kind, "missing_evidence");
-        assert_eq!(
-            created.finding.target.checkpoint_op_id,
-            cp_id
-        );
+        assert_eq!(created.finding.target.checkpoint_op_id, cp_id);
         assert!(!created.finding.target.snapshot_hash.is_empty());
+        assert_eq!(created.finding.target_snapshot.op_id, cp_id);
         assert_eq!(
-            created.finding.target_snapshot.op_id,
-            cp_id
+            created.finding.target_snapshot.summary,
+            "Implemented widget"
         );
-        assert_eq!(created.finding.target_snapshot.summary, "Implemented widget");
 
         let open = list_findings(Some(&root), run_id, true).unwrap();
         assert_eq!(open.len(), 1);
@@ -784,22 +783,11 @@ mod tests {
         assert_eq!(r_replay.response_id, r1.response_id);
 
         // Same key + different body → conflict
-        let conflict = respond_to_finding(
-            Some(&root),
-            run_id,
-            fid,
-            "Different body",
-            "resp-key-1",
-        );
+        let conflict = respond_to_finding(Some(&root), run_id, fid, "Different body", "resp-key-1");
         assert!(matches!(conflict, Err(Error::IdempotencyConflict { .. })));
 
-        let addressed = change_finding_state(
-            Some(&root),
-            run_id,
-            fid,
-            FindingState::Addressed,
-        )
-        .unwrap();
+        let addressed =
+            change_finding_state(Some(&root), run_id, fid, FindingState::Addressed).unwrap();
         assert_eq!(addressed.state, "addressed");
         assert!(list_findings(Some(&root), run_id, true).unwrap().is_empty());
         assert_eq!(list_findings(Some(&root), run_id, false).unwrap().len(), 1);
@@ -957,7 +945,10 @@ mod tests {
         // After create: incomplete cleared, finding present, pending fields promoted.
         let meta = load_run_meta_readonly(&md).unwrap().unwrap();
         let agent = meta.agent.as_ref().unwrap();
-        assert!(agent.incomplete_op.is_none(), "incomplete_op must be recovered");
+        assert!(
+            agent.incomplete_op.is_none(),
+            "incomplete_op must be recovered"
+        );
         assert_eq!(agent.findings.len(), 1);
         assert_eq!(agent.findings[0].id, created.finding_id);
         assert_eq!(agent.ready_summary.as_deref(), Some("ghost ready"));
@@ -996,18 +987,20 @@ mod tests {
         let meta = load_run_meta_readonly(&md).unwrap().unwrap();
         let committed = meta.agent.as_ref().unwrap().clone();
         let mut pending = committed.clone();
-        pending.checkpoints.push(crate::agent_protocol::types::CheckpointRecord {
-            op_id: Uuid::new_v4(),
-            idempotency_key: "ghost".into(),
-            created_at: Utc::now(),
-            summary: "should not appear".into(),
-            actions: vec![],
-            rationales: vec![],
-            evidence: vec![],
-            risks: vec![],
-            open_questions: vec![],
-            git: None,
-        });
+        pending
+            .checkpoints
+            .push(crate::agent_protocol::types::CheckpointRecord {
+                op_id: Uuid::new_v4(),
+                idempotency_key: "ghost".into(),
+                created_at: Utc::now(),
+                summary: "should not appear".into(),
+                actions: vec![],
+                rationales: vec![],
+                evidence: vec![],
+                risks: vec![],
+                open_questions: vec![],
+                git: None,
+            });
         pending.bump_revision().unwrap();
         let pending_md = render_run_markdown_with_id(run_id, &pending, "");
         let expected = content_hash(&pending_md);

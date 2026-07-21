@@ -63,7 +63,10 @@ pub fn create_finding_cmd(
 }
 
 #[tauri::command]
-pub fn list_findings_cmd(path: String, open_only: Option<bool>) -> Result<serde_json::Value, String> {
+pub fn list_findings_cmd(
+    path: String,
+    open_only: Option<bool>,
+) -> Result<serde_json::Value, String> {
     let path = PathBuf::from(path);
     let open_only = open_only.unwrap_or(false);
     let items = list_findings_at_path(&path, open_only).map_err(map_err)?;

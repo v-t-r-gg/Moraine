@@ -1,7 +1,6 @@
 # Dependencies / build
 node_modules
 /build
-/.svelte-kit
 /package
 dist
 target
@@ -37,3 +36,4 @@ coverage
 # Local ledger noise next to tracked docs (do not commit locks)
 *.moraine.json.lock
 Moraine-backup.git/
+/.svelte-kit

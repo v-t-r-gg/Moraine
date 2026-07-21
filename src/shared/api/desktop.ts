@@ -1,0 +1,20 @@
+/** Framework-neutral desktop host client (Tauri invoke + events). */
+export {
+  isTauri,
+  appInfo,
+  takeStartupPath,
+  openDocument,
+  getDocument,
+  setDocumentContent,
+  saveDocument,
+  reloadDocument,
+  readFile,
+  writeFile,
+  pickMarkdownFile,
+  pickSavePath,
+  onFileChanged,
+  historyList,
+  historyGet,
+  historyPush,
+  historyRestoreContent,
+} from "./index";

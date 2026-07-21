@@ -18,6 +18,7 @@ import {
   historyList,
   historyRestoreContent,
   isTauri,
+  isTauriRuntime,
   loadComments,
   onFileChanged,
   openDocument,
@@ -387,20 +388,24 @@ export function App() {
 
   // Mount: session config, app info, initial file, file watcher
   useEffect(() => {
+    let cancelled = false;
     setSessionCfg(resolveSessionConfig());
     void (async () => {
       try {
         const info = await appInfo();
+        if (cancelled) return;
         setStatus(
-          [info.name, info.version, !isTauri ? "browser" : null]
+          [info.name, info.version, !isTauriRuntime() ? "browser" : null]
             .filter(Boolean)
             .join(" · "),
         );
       } catch {
-        setStatus("Moraine");
+        if (!cancelled) setStatus("Moraine");
       }
-      if (isTauri) {
+      if (cancelled) return;
+      if (isTauriRuntime()) {
         const startup = await takeStartupPath();
+        if (cancelled) return;
         if (startup) {
           await loadPath(startup);
           return;
@@ -411,6 +416,7 @@ export function App() {
         } catch {
           /* create on open */
         }
+        if (cancelled) return;
         await loadPath(demo);
       } else {
         await loadPath("welcome.md");
@@ -418,6 +424,7 @@ export function App() {
     })();
 
     const unlisten = onFileChanged((ev) => {
+      if (cancelled) return;
       const run = async () => {
         const gen = ++watchGenRef.current;
         const current = docRef.current;
@@ -462,11 +469,11 @@ export function App() {
         if (gen !== watchGenRef.current) return;
         try {
           const snap = await reloadDocument(current.meta.id);
-          if (gen !== watchGenRef.current) return;
+          if (gen !== watchGenRef.current || cancelled) return;
           applyDocumentInPlace(snap);
           setStatus("Updated from disk");
         } catch (e) {
-          setStatus(`Reload failed: ${e}`);
+          if (!cancelled) setStatus(`Reload failed: ${e}`);
         }
       };
 
@@ -479,6 +486,7 @@ export function App() {
     });
 
     return () => {
+      cancelled = true;
       unlisten();
       clearSaveTimer();
       unsubCommentsRef.current?.();

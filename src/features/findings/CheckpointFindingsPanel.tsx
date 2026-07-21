@@ -242,9 +242,10 @@ export function CheckpointFindingsPanel({
                 onSubmit={(ev) => void submitFinding(ev)}
               >
                 <div className="font-medium">Add finding</div>
-                <label className="grid gap-0.5">
+                <label className="grid gap-0.5" htmlFor="finding-kind">
                   <span style={{ color: "var(--muted)" }}>Kind</span>
                   <select
+                    id="finding-kind"
                     className="rounded border px-2 py-1"
                     style={{
                       background: "var(--bg)",
@@ -261,9 +262,10 @@ export function CheckpointFindingsPanel({
                     ))}
                   </select>
                 </label>
-                <label className="grid gap-0.5">
+                <label className="grid gap-0.5" htmlFor="finding-body">
                   <span style={{ color: "var(--muted)" }}>Body</span>
                   <textarea
+                    id="finding-body"
                     className="min-h-[3.5rem] w-full rounded border px-2 py-1"
                     style={{
                       background: "var(--bg)",

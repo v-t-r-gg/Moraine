@@ -1,6 +1,7 @@
 /** Framework-neutral desktop host client (Tauri invoke + events). */
 export {
   isTauri,
+  isTauriRuntime,
   appInfo,
   takeStartupPath,
   openDocument,

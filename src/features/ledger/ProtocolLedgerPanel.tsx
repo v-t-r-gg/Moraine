@@ -40,6 +40,31 @@ export function currentClaim(
   return cur;
 }
 
+/** True when an explicit redaction targets this checkpoint (ordinary UI must withhold claim text). */
+export function isClaimRedacted(cpOpId: string, ops: AppendOnlyOpDto[]): boolean {
+  return ops.some(
+    (op) =>
+      op.targetId === cpOpId &&
+      op.targetKind === "checkpoint" &&
+      op.relationship === "redacted",
+  );
+}
+
+const REDACTED_MARKER = "[REDACTED]";
+
+/** Label for selectors / compact display; never surfaces redacted claim text. */
+export function checkpointLabel(
+  cpOpId: string,
+  summary: string,
+  ops: AppendOnlyOpDto[],
+  maxLen = 60,
+): string {
+  if (isClaimRedacted(cpOpId, ops)) return REDACTED_MARKER;
+  const t = summary.trim();
+  if (t.length <= maxLen) return t;
+  return `${t.slice(0, maxLen - 1)}…`;
+}
+
 /**
  * Structured read-only ledger for protocol runs: timeline of checkpoints,
  * observations, amendments. Canonical content is not free-form editable.
@@ -187,6 +212,7 @@ export function ProtocolLedgerPanel({
                   const related = ops.filter(
                     (o) => o.targetId === cp.opId && o.targetKind === "checkpoint",
                   );
+                  const redacted = isClaimRedacted(cp.opId, ops);
                   const current = currentClaim(cp.opId, cp.summary, ops);
                   const hasAmend = related.some(
                     (o) =>
@@ -194,11 +220,14 @@ export function ProtocolLedgerPanel({
                       o.relationship === "superseded" ||
                       o.relationship === "redacted",
                   );
+                  // Ordinary UI must not re-expose redacted claim text (sidecar may retain it).
+                  const originalDisplay = redacted ? REDACTED_MARKER : cp.summary;
                   return (
                     <li
                       key={cp.opId}
                       className="rounded border p-2"
                       style={{ borderColor: "var(--border)", background: "var(--bg)" }}
+                      data-redacted={redacted ? "true" : "false"}
                     >
                       <div className="font-medium" style={{ color: "var(--text)" }}>
                         {when(cp.createdAt)}
@@ -209,7 +238,7 @@ export function ProtocolLedgerPanel({
                             data-testid="original-claim"
                             style={{ color: "var(--text)", whiteSpace: "pre-wrap" }}
                           >
-                            Original claim: {cp.summary}
+                            Original claim: {originalDisplay}
                           </div>
                           {related
                             .filter((o) => o.relationship !== "observation")
@@ -218,17 +247,36 @@ export function ProtocolLedgerPanel({
                                 key={o.opId}
                                 className="rounded px-2 py-1"
                                 style={{ border: "1px solid var(--border)" }}
+                                data-testid={`ledger-op-${o.relationship}`}
                               >
                                 <div style={{ color: "var(--muted)" }}>
                                   {o.relationship} · {o.actorCategory} · {when(o.createdAt)}
                                 </div>
                                 <div style={{ color: "var(--text)" }}>{o.reason}</div>
-                                {o.newContent ? (
+                                {o.relationship === "redacted" ? (
+                                  <div
+                                    data-testid="redaction-marker"
+                                    style={{ whiteSpace: "pre-wrap" }}
+                                  >
+                                    {REDACTED_MARKER}
+                                  </div>
+                                ) : redacted ? (
+                                  <div
+                                    data-testid="withheld-claim"
+                                    style={{ color: "var(--muted)", whiteSpace: "pre-wrap" }}
+                                  >
+                                    {REDACTED_MARKER}
+                                    <span className="block text-[10px]">
+                                      Prior claim text withheld (target redacted).
+                                    </span>
+                                  </div>
+                                ) : o.newContent ? (
                                   <div style={{ whiteSpace: "pre-wrap" }}>{o.newContent}</div>
                                 ) : null}
-                                {o.relationship === "redacted" && o.previousContent ? (
+                                {o.relationship === "redacted" ? (
                                   <div style={{ color: "var(--muted)", fontSize: "10px" }}>
-                                    Prior content recoverable in ledger (not erased).
+                                    Prior content retained in structured ledger (not shown in
+                                    ordinary UI).
                                   </div>
                                 ) : null}
                               </div>
@@ -242,7 +290,7 @@ export function ProtocolLedgerPanel({
                         </div>
                       ) : (
                         <div className="mt-0.5" style={{ color: "var(--text)", whiteSpace: "pre-wrap" }}>
-                          {cp.summary}
+                          {checkpointLabel(cp.opId, cp.summary, ops, 4000)}
                         </div>
                       )}
                       <div className="mt-0.5 font-mono text-[10px]" style={{ color: "var(--muted)" }}>
@@ -305,7 +353,7 @@ export function ProtocolLedgerPanel({
                   <option value="">(none)</option>
                   {detail.checkpoints.map((cp) => (
                     <option key={cp.opId} value={cp.opId}>
-                      {cp.summary.slice(0, 60)}
+                      {checkpointLabel(cp.opId, cp.summary, ops)}
                     </option>
                   ))}
                 </select>
@@ -368,7 +416,7 @@ export function ProtocolLedgerPanel({
                 >
                   {detail.checkpoints.map((cp) => (
                     <option key={cp.opId} value={cp.opId}>
-                      {cp.summary.slice(0, 60)}
+                      {checkpointLabel(cp.opId, cp.summary, ops)}
                     </option>
                   ))}
                 </select>

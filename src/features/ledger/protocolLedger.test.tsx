@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { readFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
-import { currentClaim, ProtocolLedgerPanel } from "./ProtocolLedgerPanel";
+import { currentClaim, isClaimRedacted, ProtocolLedgerPanel } from "./ProtocolLedgerPanel";
 
 vi.mock("@/shared/api", async () => {
   const actual = await vi.importActual<typeof import("@/shared/api")>("@/shared/api");
@@ -60,6 +60,7 @@ describe("currentClaim helper", () => {
       },
     ];
     expect(currentClaim("cp1", "All concurrency tests pass.", ops)).toBe("[REDACTED]");
+    expect(isClaimRedacted("cp1", ops)).toBe(true);
     expect(ops[0]!.previousContent).toContain("All concurrency tests pass");
   });
 });
@@ -180,6 +181,68 @@ describe("ProtocolLedgerPanel", () => {
     expect(runAmend).not.toHaveBeenCalled();
   });
 
+  it("ordinary UI withholds redacted claim text (original, amend chain, current)", async () => {
+    const secret = "All concurrency tests pass.";
+    const amended = "All concurrency tests, including ordering, pass.";
+    vi.mocked(getRunCheckpoints).mockImplementation(async () => ({
+      runId: "r",
+      contentHash: "h",
+      checkpoints: [
+        {
+          opId: "cp1",
+          summary: secret,
+          createdAt: "2026-01-01T00:00:00Z",
+          openFindingCount: 0,
+          findingCount: 0,
+        },
+      ],
+      findings: [],
+    }));
+    vi.mocked(listAppendOps).mockImplementation(async () => [
+      {
+        opId: "a1",
+        opKind: "run_amend",
+        actorCategory: "agent",
+        createdAt: "2026-01-01T01:00:00Z",
+        reason: "Incomplete",
+        targetId: "cp1",
+        targetKind: "checkpoint",
+        previousSnapshotHash: "h",
+        previousContent: secret,
+        newContent: amended,
+        relationship: "amended",
+      },
+      {
+        opId: "r1",
+        opKind: "entry_redact",
+        actorCategory: "human",
+        createdAt: "2026-01-01T02:00:00Z",
+        reason: "sensitive",
+        targetId: "cp1",
+        targetKind: "checkpoint",
+        previousSnapshotHash: "h2",
+        previousContent: amended,
+        newContent: "[REDACTED]",
+        relationship: "redacted",
+      },
+    ]);
+
+    const { container } = render(<ProtocolLedgerPanel path="/tmp/run.md" />);
+    await waitFor(() => {
+      expect(within(container).getByTestId("original-claim")).toBeInTheDocument();
+    });
+    const body = container.textContent ?? "";
+    expect(within(container).getByTestId("original-claim").textContent).toContain("[REDACTED]");
+    expect(within(container).getByTestId("current-statement").textContent).toContain(
+      "[REDACTED]",
+    );
+    expect(within(container).getByTestId("redaction-marker")).toBeInTheDocument();
+    expect(body).not.toContain(secret);
+    expect(body).not.toContain(amended);
+    expect(body).toContain("sensitive"); // redaction reason is ok to show
+    expect(body).toMatch(/Prior content retained in structured ledger/i);
+  });
+
   it("ships bindings without general dirty/save for protocol ledger", () => {
     const src = readFileSync(
       join(root, "src/features/ledger/ProtocolLedgerPanel.tsx"),
@@ -189,6 +252,7 @@ describe("ProtocolLedgerPanel", () => {
     expect(src).toContain("humanObservationAdd");
     expect(src).toContain("runAmend");
     expect(src).toContain("append-only");
+    expect(src).toContain("isClaimRedacted");
     expect(src.toLowerCase()).not.toContain("approve");
   });
 

@@ -485,9 +485,18 @@ pub fn load_run_checkpoints_detail(md_path: &Path) -> Result<RunCheckpointsDetai
                         .iter()
                         .filter(|f| f.target.checkpoint_op_id == cp.op_id)
                         .collect();
+                    // Ordinary UI must not re-expose redacted claim text; original
+                    // summary remains available when not redacted (amend chains keep
+                    // Original claim vs Current statement in the protocol ledger UI).
+                    let summary = if crate::agent_protocol::append_ops::is_redacted(a, cp.op_id)
+                    {
+                        "[REDACTED]".into()
+                    } else {
+                        cp.summary.clone()
+                    };
                     CheckpointSummaryDto {
                         op_id: cp.op_id,
-                        summary: cp.summary.clone(),
+                        summary,
                         created_at: cp.created_at.to_rfc3339(),
                         open_finding_count: related
                             .iter()

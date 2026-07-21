@@ -1,8 +1,12 @@
 # Agent run: welcome path check
 
+> **Historical / compatibility sample.** Prefer the current product path:
+> installed suite → project init → agent/hooks capture → desktop **Projects → Runs → Ledger**.
+> Free-form Comment/Suggest on a Markdown path is secondary to the structured ledger workflow.
+
 **Status:** complete (example record)  
 **Agent:** example  
-**Human review:** open this file in Moraine; try Comment / Suggest on a selection
+**Human review:** for protocol runs use the ledger workspace; this file is a legacy-style sample
 
 ## Objective
 
@@ -15,13 +19,13 @@ Local Moraine checkout. No production systems involved.
 ## Actions taken
 
 1. Created this example run record under `examples/`.
-2. Documented CLI share/status usage in the project README.
+2. Documented agent-run ledger positioning (see root README for install-first flow).
 3. Did not modify application runtime code for this documentation pass.
 
 ## Decisions
 
-* Treat this file as a **sample run record**, not a generic shared note.
-* Keep evidence as manual links/notes only (no automatic capture in Moraine today).
+* Treat this file as a **sample / historical** run record, not the primary install workflow.
+* Prefer structured evidence and append-only observations on protocol runs; mechanical capture exists for supported hooks.
 
 ## Outcome
 

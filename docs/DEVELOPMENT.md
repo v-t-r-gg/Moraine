@@ -1,8 +1,62 @@
 # Development process
 
-Short process notes for keeping `main` releasable. Product vision lives in [VISION.md](../VISION.md). Product direction: [DEVELOPMENT_BLUEPRINT.md](./DEVELOPMENT_BLUEPRINT.md).
+Contributor process and **source-tree** workflows. End users install from a release bundle—see [INSTALL.md](./INSTALL.md) and the top-level [README.md](../README.md). Do not present `cargo run` / `npm run dev` as the normal user path.
 
-Desktop UI is **React + TypeScript + Vite** (Tauri host). Frontend scripts: `npm run typecheck`, `npm test`, `npm run build`.
+Product vision: [VISION.md](../VISION.md). Canonical blueprint: [DEVELOPMENT_BLUEPRINT_ALIGNED.md](./DEVELOPMENT_BLUEPRINT_ALIGNED.md) (stub: [DEVELOPMENT_BLUEPRINT.md](./DEVELOPMENT_BLUEPRINT.md)).
+
+Desktop UI is **React + TypeScript + Vite** (Tauri host).
+
+## Contributor setup (source checkout)
+
+```bash
+# Arch example
+./scripts/setup-arch.sh   # rust, node; webkit for desktop
+npm install
+
+# CLI / service (no WebKit required)
+cargo build -p moraine-cli -p moraine-service
+cargo run -p moraine-cli -- version --json
+
+# Desktop (dev)
+npm run typecheck
+npm test
+npm run build
+npm run tauri:dev
+# optional: MORAINE_OPEN=/absolute/path/to/run.md npm run tauri:dev
+
+# Optional legacy live relay (in-memory; local only; not the primary product path)
+cargo run -p moraine-server
+cargo run -p moraine-cli -- share path/to/file.md --json
+```
+
+**Rust MSRV:** workspace `rust-version` (currently `1.88`). CI includes an MSRV job.
+
+### Frontend scripts
+
+| Script | Purpose |
+|--------|---------|
+| `npm run typecheck` | `tsc --noEmit` |
+| `npm test` | Vitest |
+| `npm run build` | Production web assets for Tauri |
+| `npm run tauri:dev` | Dev desktop host |
+| `npm run tauri build -- --no-bundle` | Compile app without packaging |
+
+### Release bundle (developers)
+
+```bash
+./scripts/build-linux-release.sh
+# → dist/moraine-<version>-linux-x86_64.tar.gz
+```
+
+Requires the Rust toolchain (and Node for desktop packaging). The **artifact** installs without Rust/Node.
+
+### Checks
+
+```bash
+./scripts/check.sh
+cargo fmt --all -- --check
+cargo clippy -p moraine-core -p moraine-cli -p moraine-mcp -p moraine-server -p moraine-service -- -D warnings
+```
 
 ## Branch model
 
@@ -84,7 +138,9 @@ Dogfood for several real runs before starting the next major milestone. Classify
 |-----------|--------|
 | M4.5 React migration | complete |
 | M4.6 append-only ledger semantics | complete |
-| M5 local run discovery and ledger-focused UX | current |
-| M6 second agent, packaging, external beta | next |
+| M5 local run discovery and ledger-focused UX | complete |
+| C1 redaction ordinary projections | complete |
+| C2 stranger-safe Linux install + Codex pack | candidate (see ROADMAP) |
+| C3 beta hardening / surface freeze | next |
 
-See [ROADMAP.md](../ROADMAP.md) and [DEVELOPMENT_BLUEPRINT.md](./DEVELOPMENT_BLUEPRINT.md).
+See [ROADMAP.md](../ROADMAP.md) and [DEVELOPMENT_BLUEPRINT_ALIGNED.md](./DEVELOPMENT_BLUEPRINT_ALIGNED.md).

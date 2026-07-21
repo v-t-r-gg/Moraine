@@ -1,5 +1,8 @@
 # Agent run: PostgreSQL migration dry-run (example)
 
+> **Agent-run ledger example** (illustrative narrative). Real installs write protocol
+> runs under `<project>/.moraine/runs/` with a sidecar; this file is sample content only.
+
 **Run id:** example-2026-07-18-pg-migration  
 **Status:** needs human review  
 **Started / ended:** illustrative only  

@@ -10,7 +10,7 @@ The central object is an **agent run**, represented by a durable **run bundle**:
 * Append-only human observations (protocol runs); Legacy free-form document mode for non-protocol Markdown only
 * Comments / suggestions / findings
 
-Moraine is a **ledger**, not an approval gate. Live collaboration is optional infrastructure around that record. See [VISION.md](./VISION.md) and [docs/DEVELOPMENT_BLUEPRINT.md](./docs/DEVELOPMENT_BLUEPRINT.md).
+Moraine is a **ledger**, not an approval gate. Live collaboration is optional infrastructure around that record. See [VISION.md](./VISION.md) and the canonical blueprint [docs/DEVELOPMENT_BLUEPRINT_ALIGNED.md](./docs/DEVELOPMENT_BLUEPRINT_ALIGNED.md).
 
 ## Interaction surfaces
 

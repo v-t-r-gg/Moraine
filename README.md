@@ -1,228 +1,139 @@
 # Moraine
 
-**Local-first ledger for autonomous agent work.**
+**Local-first ledger for coding-agent work.**
 
-Moraine preserves durable, source-adjacent records of coding-agent runs: what the agent did, why, what evidence exists, what remains uncertain, and what humans noted. Files stay on disk next to the work.
+Moraine keeps durable, source-adjacent records of what an agent did, why, what evidence exists, what remains open, and what humans observed—as files on disk next to the work, not locked in a chat transcript.
 
-**Moraine records review activity; it does not render the verdict.** It is not an approval, merge, or deployment gate.
+**Moraine records review activity; it does not authorize merge or deployment.**
 
-Early-stage local-first project. Not a production hosted collaboration service and not a compliance-grade audit system.
+## Supported platform (beta)
 
-Repo: https://github.com/v-t-r-gg/Moraine  
-[VISION.md](./VISION.md) · [ARCHITECTURE.md](./ARCHITECTURE.md) · [ROADMAP.md](./ROADMAP.md) · [Development blueprint](./docs/DEVELOPMENT_BLUEPRINT.md)
+> **x86_64 Linux** with **systemd user** services (glibc). C2 is validated on Arch Linux and Ubuntu 24.04 LTS (install/CLI/service smoke). Other distributions, Windows, and macOS are not claimed for this beta.
 
-## Who uses what
+Early-stage / **beta**. Useful for local dogfood. Not a production multi-tenant or compliance-grade audit product.
 
-| Surface | Who | Role today |
-|---------|-----|------------|
-| CLI (`moraine`) | Agents, scripts, humans in a terminal | Agent run protocol, share room URL, status, local history helpers |
-| MCP (`moraine mcp`) | Coding agents (e.g. Codex) | Same protocol over local STDIO |
-| Local service (`moraine-service`) | Hooks / adapters | Capture runtime + **rebuildable noncanonical** project/run index |
-| GUI (Tauri + React / `npm run dev`) | Humans | **Ledger workspace**: discover projects/runs, inspect structured timeline, findings, append-only observations; Legacy document mode only for free-form Markdown |
-| Markdown + sidecar | Both | Durable narrative + structured ledger (canonical run data) |
+## Install (Linux)
 
-The desktop default is a **projects → runs → structured ledger** workspace, not a free-form document editor. Protocol runs are append-only (observations, amendments, supersessions, redactions)—not editable Human notes + Save. Capture continues while the desktop is closed. The service index is a cache only; run bundles remain authoritative.
-
-Collaborative editing supports live inspection. The durable **run record** is the center of the product, not "another multiplayer Markdown editor."
-
-## Setup (users)
-
-**Stranger-safe Linux install** (no Rust/Node/source checkout): see **[docs/INSTALL.md](./docs/INSTALL.md)**.
+No Rust, Node, or source checkout required for normal use. Full detail: **[docs/INSTALL.md](./docs/INSTALL.md)**.
 
 ```bash
 tar -xzf moraine-<version>-linux-x86_64.tar.gz
-cd moraine-<version>-linux-x86_64 && ./install.sh
-export PATH="$HOME/.local/bin:$PATH"   # before ~/.cargo/bin
+cd moraine-<version>-linux-x86_64
+./install.sh
+export PATH="$HOME/.local/bin:$PATH"   # prefer before ~/.cargo/bin
 moraine setup
 moraine doctor
 ```
 
-See **[docs/QUICKSTART.md](./docs/QUICKSTART.md)** and **[docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md)**.
-
-## Setup (contributors)
+## Three-minute quickstart
 
 ```bash
-./scripts/setup-arch.sh   # Arch: rust, node; webkit for desktop
-npm install
+# after install + moraine setup
+cd /path/to/your/repo
+moraine project init .
+moraine integrate codex --project .    # first reference agent; optional
+moraine doctor --project . --integration codex
+
+# ordinary coding task with Codex (desktop may stay closed)
+# later:
+moraine open                             # installed desktop ledger workspace
+# or open a run path once you have one under .moraine/runs/
 ```
 
-CLI and server do not require WebKit. Desktop does. Development scripts are **not** the normal user path.
+More: **[docs/QUICKSTART.md](./docs/QUICKSTART.md)** · Codex pack: **[docs/integrations/codex/](./docs/integrations/codex/)**.
 
-**Rust MSRV:** `1.88` (workspace `rust-version`). Required by `rmcp` 2.2 (edition 2024) and `rmcp-macros` → `darling`. CI runs an MSRV job.
+## Product workflow
 
-## Quick start
+1. **Install** one coherent Moraine suite (CLI, service, MCP/hooks via `moraine`, optional desktop).
+2. **Initialize** a project: `moraine project init` → project-local `.moraine/` run ledger.
+3. **Capture** while the agent works: Codex hooks (mechanical) + MCP tools (semantic) when the model calls them; service can stay up with the desktop closed.
+4. **Inspect** later in the installed desktop: projects → runs → structured timeline (checkpoints, evidence, findings, append-only observations).
+5. **Diagnose** drift with `moraine doctor`; **uninstall** product files without deleting project ledgers.
+
+| Surface | Role |
+|---------|------|
+| `moraine` CLI | Version, setup, doctor, service, project/run protocol, integrate |
+| `moraine mcp` | Local STDIO MCP (same core ops + findings tools) |
+| `moraine-service` | Per-user capture runtime + rebuildable discovery index |
+| Desktop (`moraine-app`) | Ledger workspace; offline direct path open when service is down |
+| `.moraine/runs/*` | Canonical run bundles (Markdown projection + sidecar) |
+
+## Demo / screenshot
+
+_Placeholder:_ installed desktop showing **Projects → Runs → Ledger** for a protocol run (timeline, findings, capture coverage). Add a real screenshot when available under `docs/screenshots/`.
+
+## Capability status
+
+| Capability | Current description |
+|------------|---------------------|
+| Semantic run protocol | **Implemented** |
+| Mechanical capture | **Implemented** for supported Codex hooks |
+| Evidence | **Minimal trustworthy capture** implemented |
+| Findings | **Implemented** |
+| Append-only correction | **Implemented** (observations, amend, supersede) |
+| Redaction | **Target-scoped ordinary-view withholding** |
+| Discovery desktop | **Implemented** |
+| Stranger-safe Linux install | **C2 candidate** (this PR / pack) |
+| Live collaboration | **Legacy/secondary**; unsupported for untrusted networks |
+| Windows | **Planned** |
+| macOS | **Planned** |
+| Hosted collaboration | **Not planned for beta** |
+
+## Example: agent-run ledger (current)
+
+After a bounded task, a project may contain:
+
+```text
+.moraine/
+  project.json
+  runs/
+    2026-07-21-add-hello-txt-821eec9a.md
+    2026-07-21-add-hello-txt-821eec9a.md.moraine.json
+  sessions/
+    …
+```
+
+Illustrative narrative shape: [examples/agent-run-migration.md](./examples/agent-run-migration.md) (sample **agent-run ledger** content; real runs are written under `.moraine/runs/` by protocol/hooks).
 
 ```bash
-# Optional: live share relay (in-memory; no auth)
-cargo run -p moraine-server
-
-# Agent/script: share a run record path (prints join URL)
-cargo run -p moraine-cli -- share path/to/run-record.md --json
-
-# Human: open the printed http://localhost:1420/?room=… URL
-npm run dev
-
-# Or open the file as desktop host
-npm run tauri:dev
-# MORAINE_OPEN=/absolute/path/to/run-record.md npm run tauri:dev
+moraine run show --run-id <uuid> --json
+moraine doctor --project . --integration codex
+moraine open --path .moraine/runs/<run>.md
 ```
 
-## Human and agent workflow
+## Protocol and integrations
 
-Intended loop:
-
-1. An agent performs a **bounded unit of work** (agent run).
-2. The agent starts a run and records sparse checkpoints (CLI or MCP)—no per-task Moraine prompt ceremony after one-time setup.
-3. The record may **link** or capture evidence (logs, PR URLs, command results). Provenance is shown explicitly.
-4. A human launches the desktop (no path required): discovers projects and runs from the local index, or opens a known path.
-5. On a protocol run, the human inspects the structured ledger timeline, findings, and evidence; adds **append-only observations** or other core-backed append-only ops—not free-form Human notes rewrites.
-6. Files remain for **hindsight review** and for optional Git tracking by the user.
-
-External systems (PR, CI, the agent session) retain responsibility for merge and disposition.
-
-### Example: agent finished a migration investigation
-
-Agent leaves `docs/runs/2026-07-18-pg-migration.md` (see `examples/agent-run-migration.md`). Script or agent:
-
-```bash
-moraine share docs/runs/2026-07-18-pg-migration.md --json
-moraine status docs/runs/2026-07-18-pg-migration.md
-```
-
-Human opens the join URL or the file as host, uses **Review** for questions and suggested wording, then **Save**. Later, anyone can reopen the same path without the relay.
-
-### MCP (local STDIO)
-
-Coding agents can use the same agent-run protocol without shelling out:
-
-```bash
-moraine mcp --project /absolute/path/to/project
-```
-
-Tools: `run_start`, `run_show`, `run_checkpoint`, `run_ready`, `run_resume`.  
-No decision/approval tools.  
-See [docs/MCP.md](./docs/MCP.md) and [docs/integrations/CODEX.md](./docs/integrations/CODEX.md).
-
-### Agent CLI usage
-
-Preferred **agent run protocol** (compact JSON; no full Markdown rewrite):
-
-```bash
-moraine project init [PATH] --json
-moraine run start --objective "…" --idempotency-key "…" [--project PATH] --json
-moraine run checkpoint --run-id UUID --expected-hash HEX --idempotency-key "…" --input FILE|- --json
-moraine run show --run-id UUID [--include-markdown] --json
-moraine run ready --run-id UUID --expected-hash HEX --idempotency-key "…" [--summary "…"] --json
-moraine run resume --run-id UUID --expected-hash HEX --idempotency-key "…" [--reason "…"] --json
-moraine run open --run-id UUID --json
-```
-
-See [docs/AGENT_RUN_PROTOCOL.md](./docs/AGENT_RUN_PROTOCOL.md).
-
-Other verified commands:
-
-```bash
-moraine info [--json]
-moraine status [path|room] [--json|--human]   # JSON default
-moraine init <path> [--json]                  # per-file ledger ensure
-moraine share <path> [--start] [--json] [--open] [--ui URL] [--server URL]
-moraine join <url|room> [--json] [--no-open]
-moraine cat <path>
-moraine write <path> [--content TEXT] [--history]   # stdin if --content omitted
-moraine edit <path> [--create] [--share]
-moraine history <path> [--json] [-n N]
-moraine restore <path> <entry-id> [--write]
-moraine watch <path>
-```
-
-Agent lifecycle `ready_for_review` means the run is ready for human **inspection**. It is **not** human approval.
-
-Exit codes: `0` ok, `1` error, `2` not found, `3` relay down.  
-With `--json`, failures are structured JSON on stdout; diagnostics on stderr.
-
-```bash
-# Start a protocol run (auto-creates .moraine when needed)
-moraine run start --objective "Fix flaky test" --idempotency-key "run-1" --json
-
-# Machine-friendly share
-moraine share run-record.md --json
-```
-
-### Human GUI review (ledger workspace)
-
-1. Start UI (`npm run tauri:dev` or `npm run dev`) — default shell is **Projects → Runs → Ledger**, not a welcome Markdown file.
-2. Select a project and run, or open a path (`MORAINE_OPEN`, Open dialog, or join `?room=`).
-3. Inspect the structured timeline (checkpoints, evidence, findings, observations, amendments).
-4. Add append-only observations / findings via structured actions (protocol runs).
-5. **Legacy document mode** only: free-form Markdown edit + host Save for non-protocol documents.
-6. Rebuild or rescan the local discovery index without mutating run bundles. Capture keeps working with the desktop closed.
-
-Host save for legacy free-form documents: autosave when solo; paused when remote peers are present; explicit Save always.
+- Agent protocol: [docs/AGENT_RUN_PROTOCOL.md](./docs/AGENT_RUN_PROTOCOL.md)
+- MCP tools: [docs/MCP.md](./docs/MCP.md) (live list from `tools/list`, not a fixed five-tool set)
+- Codex: [docs/integrations/CODEX.md](./docs/integrations/CODEX.md)
+- Redaction: [docs/REDACTION.md](./docs/REDACTION.md)
+- Troubleshooting: [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md)
 
 ## Why Moraine
 
-* **Tool independence:** plain files, not locked inside an agent chat UI.
-* **Durable readable narrative:** Markdown next to the work.
-* **Source-adjacent records:** path chosen by you; Git is optional and external.
-* **Live and hindsight review:** share room optional; files remain.
-* **CLI and MCP for automation:** status/share/protocol with JSON and exit codes.
-* **Structured review metadata:** comments and suggestions in a sidecar, not only freeform prose.
-* **No proprietary session viewer required** for the durable record.
-* **No verdict:** inspection and context, not merge authorization.
-
-Live multiplayer is a convenience, not the main differentiation.
-
-## Legacy: run-level decisions (compatibility only)
-
-Older sidecars may contain append-only run-level decisions (`approved` / `changes_requested` / `rejected`) bound to a content hash. That data is **preserved and still loadable**. The product no longer centers on recording new decisions.
-
-* Prefer comments, suggestions, human notes, and (upcoming) findings.
-* `moraine decide` remains available as **legacy / compatibility-only** (CLI only; stderr warning on use).
-* Decisions are **not** exposed through MCP or the desktop UI IPC.
-* Accepting a text **suggestion** is unrelated to run-level authorization.
-* Legacy `file.md.comments.json` is migrated into `.moraine.json` on **init**, legacy **decide**, desktop open, or comment save (not on `status`).
-
-```bash
-# status is read-only (does not create .moraine.json)
-moraine status run.md --json
-moraine init run.md --json
-```
-
-## Current status and limitations
-
-Early-stage MVP. Useful for local experiments and dogfooding, not a production multi-tenant service.
-
-| Area | Today |
-|------|--------|
-| Auth | None on relay or files |
-| Relay | In-memory, local-oriented, no durable server state |
-| Reviewer identity | User-provided label only (not authenticated) |
-| Evidence | Mostly manual links in Markdown; capture is near-term work |
-| Git | Not integrated (no auto-commit/PR) |
-| Annotations | Operation-based mutations; suggestion accept/reject are distinct; two-phase accept |
-| Run decisions | Compatibility only; preserved in sidecars; not primary UI |
-| Concurrent external editors | Limited handling; host Save and dirty flags |
-| Security | Do not expose the relay to untrusted networks |
-| Production deploy | Not claimed |
-
-## Host save (desktop)
-
-| Situation | Disk |
-|-----------|------|
-| Solo | Autosave ~1.2s |
-| Remote peers | Autosave paused |
-| Explicit Save | Always |
-
-## Checks
-
-```bash
-./scripts/check.sh
-```
+* Tool-independent durable files next to the work  
+* Sparse semantic checkpoints + honest mechanical capture coverage  
+* Human inspection without turning Moraine into a merge gate  
+* Desktop discovery without requiring a path at launch  
+* Installable suite without Rust/Node for normal use  
 
 ## Non-goals (now)
 
 Not an approval system, merge gate, general knowledge-management workspace, full agent observability stack, Git/PR replacement, compliance-grade audit product, or production hosted collab service. Agent narrative is not guaranteed true or complete.
 
+## Docs map
+
+| Doc | Audience |
+|-----|----------|
+| [docs/INSTALL.md](./docs/INSTALL.md) | Users (install/uninstall) |
+| [docs/QUICKSTART.md](./docs/QUICKSTART.md) | Users (first project) |
+| [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md) | **Contributors** (cargo/npm, process) |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | Design overview |
+| [docs/DEVELOPMENT_BLUEPRINT_ALIGNED.md](./docs/DEVELOPMENT_BLUEPRINT_ALIGNED.md) | Canonical product blueprint |
+| [ROADMAP.md](./ROADMAP.md) | Direction |
+
 ## License
 
 Licensed under the **Apache License, Version 2.0**. See [LICENSE](./LICENSE).
+
+Repo: https://github.com/v-t-r-gg/Moraine

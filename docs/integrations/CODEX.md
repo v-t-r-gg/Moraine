@@ -132,16 +132,23 @@ run_show
 run_checkpoint
 run_ready
 run_resume
+list_findings
+get_finding
+respond_to_finding
 ```
+
+Validate the **live** `tools/list` from the installed server (or
+`moraine doctor --project . --integration codex --json`). Do not assume a fixed
+five-tool set forever.
 
 `run_start` accepts optional `sessionId` to reconcile with a provisional run.
 
 There is **no** human decision or approval tool. Moraine records work; it does
-not authorize merge or deployment. Prefer desktop comments and human notes for
-review context (`moraine decide` is legacy/compatibility-only).
+not authorize merge or deployment. Prefer findings and append-only observations
+for review context (`moraine decide` is legacy/compatibility-only).
 
-If your Codex build supports `enabled_tools` / tool allowlists, pin the list to
-those five. If not, rely on the server tool list (still only five tools).
+If your Codex build supports tool allowlists, pin to the current `tools/list`
+result from this install.
 
 ## Expected agent behavior
 

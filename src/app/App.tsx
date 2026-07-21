@@ -7,6 +7,7 @@ import { CommentsPanel } from "@/features/annotations/CommentsPanel";
 import { RunReviewPanel } from "@/features/runs/RunReviewPanel";
 import { CheckpointFindingsPanel } from "@/features/findings/CheckpointFindingsPanel";
 import { ProtocolLedgerPanel } from "@/features/ledger/ProtocolLedgerPanel";
+import { Workspace } from "@/app/Workspace";
 import { Editor, type EditorHandle } from "@/features/editor/Editor";
 import { isProtocolRunMarkdown } from "@/features/editor/managedRegion";
 import {
@@ -190,7 +191,9 @@ export function App() {
   const pending = useMemo(() => countPending(commentList), [commentList]);
   /** Protocol runs use append-only ledger UX; free-form edit is Legacy mode only. */
   const isProtocolRun = useMemo(() => isProtocolRunMarkdown(markdown), [markdown]);
-  const legacyDocumentMode = !isProtocolRun;
+  const legacyDocumentMode = Boolean(doc) && !isProtocolRun;
+  /** Default shell is projects→runs→ledger; document editor is secondary / legacy. */
+  const [showWorkspace, setShowWorkspace] = useState(true);
 
   const clearSaveTimer = useCallback(() => {
     if (saveTimerRef.current) {
@@ -412,19 +415,18 @@ export function App() {
         const startup = await takeStartupPath();
         if (cancelled) return;
         if (startup) {
+          setShowWorkspace(true);
           await loadPath(startup);
           return;
         }
-        const demo = "/tmp/moraine-welcome.md";
-        try {
-          await writeFile(demo, WELCOME_MD);
-        } catch {
-          /* create on open */
+        // No path: open ledger workspace (do not create welcome Markdown).
+        setShowWorkspace(true);
+        if (!cancelled) {
+          setStatus("Ledger workspace · select a project and run");
         }
-        if (cancelled) return;
-        await loadPath(demo);
       } else {
-        await loadPath("welcome.md");
+        setShowWorkspace(true);
+        if (!cancelled) setStatus("Browser · discovery limited without Tauri host");
       }
     })();
 
@@ -1135,30 +1137,56 @@ export function App() {
         onViewMode={setViewMode}
       />
 
-      {isProtocolRun ? (
-        <div
-          className="border-b px-3 py-1 text-[11px] font-medium"
+      <div
+        className="flex border-b px-3 py-1 text-[11px] gap-2 items-center"
+        style={{ borderColor: "var(--border)", background: "var(--panel)" }}
+      >
+        <button
+          type="button"
+          className="rounded px-2 py-0.5 font-medium"
           style={{
-            background: "var(--accent-soft)",
-            borderColor: "var(--border)",
-            color: "var(--muted)",
+            background: showWorkspace ? "var(--accent-soft)" : "var(--bg)",
+            color: showWorkspace ? "var(--accent)" : "var(--muted)",
+            border: "1px solid var(--border)",
           }}
+          onClick={() => setShowWorkspace(true)}
         >
-          Protocol run · structured append-only ledger (claims not free-form editable)
-        </div>
-      ) : (
-        <div
-          className="border-b px-3 py-1 text-[11px] font-medium"
+          Workspace
+        </button>
+        <button
+          type="button"
+          className="rounded px-2 py-0.5 font-medium"
           style={{
-            background: "var(--panel)",
-            borderColor: "var(--border)",
-            color: "#b45309",
+            background: !showWorkspace ? "var(--accent-soft)" : "var(--bg)",
+            color: !showWorkspace ? "var(--accent)" : "var(--muted)",
+            border: "1px solid var(--border)",
           }}
+          onClick={() => setShowWorkspace(false)}
+          disabled={!doc}
         >
-          Legacy document mode · temporary free-form editing (not the protocol run UX)
-        </div>
-      )}
+          Document
+        </button>
+        {doc && isProtocolRun ? (
+          <span style={{ color: "var(--muted)" }}>
+            Protocol run · append-only ledger
+          </span>
+        ) : null}
+        {doc && legacyDocumentMode ? (
+          <span style={{ color: "#b45309" }}>
+            Legacy document mode · temporary free-form editing
+          </span>
+        ) : null}
+      </div>
 
+      {showWorkspace ? (
+        <Workspace
+          openPath={path}
+          onOpenRunPath={(p) => {
+            void loadPath(p);
+          }}
+        />
+      ) : (
+      <>
       {isTauri ? (
         <>
           <RunReviewPanel
@@ -1245,6 +1273,8 @@ export function App() {
           />
         ) : null}
       </div>
+      </>
+      )}
 
       <StatusBar
         wordCount={wordCount}

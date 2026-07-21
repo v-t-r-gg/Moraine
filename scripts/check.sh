@@ -16,7 +16,7 @@ cargo test -p moraine-cli
 cargo test -p moraine-mcp
 
 echo "== frontend =="
-npm run check
+npm run typecheck
 npm test
 npm run build
 

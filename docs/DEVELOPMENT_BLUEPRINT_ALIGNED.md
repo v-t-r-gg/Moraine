@@ -1055,6 +1055,8 @@ Acceptance criteria:
 
 **Goal:** Let human review context flow durably between the desktop and agent without introducing verdicts.
 
+Status: **M4 checkpoint findings implemented** (checkpoint-only targets, MCP list/get/respond, desktop thread). Amendment operations and non-checkpoint targets remain later slices. Findings-capable sidecars use schema **v5**.
+
 Scope:
 
 - typed review findings;
@@ -1071,6 +1073,12 @@ Acceptance criteria:
 - the agent can respond or amend the run;
 - the ledger preserves the complete exchange;
 - no approval or rejection state is introduced.
+
+### Milestone 4.5 — React desktop migration
+
+**Goal:** Replace the Svelte/SvelteKit desktop frontend with React + TypeScript + Vite without changing the run model or product features.
+
+Status: **current** (this migration). React is the desktop framework; Rust/Tauri/core boundaries are unchanged. Svelte is not required for build or runtime.
 
 ### Milestone 5 — Local run discovery and ledger-focused desktop UX
 

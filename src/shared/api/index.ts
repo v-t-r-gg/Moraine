@@ -3,15 +3,20 @@ import type {
   DocumentSnapshot,
   HistoryEntry,
   HistoryEntryMeta,
-} from "./types";
+} from "@/shared/types";
 
-const isTauri =
-  typeof window !== "undefined" &&
-  // @ts-expect-error Tauri injects this
-  (window.__TAURI_INTERNALS__ != null || window.__TAURI__ != null);
+/** Live check (not module-load snapshot) so tests and Strict Mode remounts see the real host. */
+export function isTauriRuntime(): boolean {
+  if (typeof window === "undefined") return false;
+  // @ts-expect-error Tauri injects these
+  return window.__TAURI_INTERNALS__ != null || window.__TAURI__ != null;
+}
+
+/** @deprecated Prefer isTauriRuntime(); kept for call-site compatibility. */
+export const isTauri = typeof window !== "undefined" && isTauriRuntime();
 
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  if (!isTauri) {
+  if (!isTauriRuntime()) {
     return browserStub<T>(cmd, args);
   }
   const { invoke: tauriInvoke } = await import("@tauri-apps/api/core");
@@ -401,7 +406,7 @@ export async function changeFindingState(
 }
 
 export async function pickMarkdownFile(): Promise<string | null> {
-  if (!isTauri) {
+  if (!isTauriRuntime()) {
     return null;
   }
   const { open } = await import("@tauri-apps/plugin-dialog");
@@ -414,7 +419,7 @@ export async function pickMarkdownFile(): Promise<string | null> {
 }
 
 export async function pickSavePath(defaultPath?: string): Promise<string | null> {
-  if (!isTauri) return null;
+  if (!isTauriRuntime()) return null;
   const { save } = await import("@tauri-apps/plugin-dialog");
   return save({
     defaultPath,
@@ -422,22 +427,61 @@ export async function pickSavePath(defaultPath?: string): Promise<string | null>
   });
 }
 
-export function onFileChanged(
-  handler: (event: import("./types").FileChangedEvent) => void,
+export type FileChangedHandler = (
+  event: import("@/shared/types").FileChangedEvent,
+) => void;
+
+export type TauriListen = <T>(
+  event: string,
+  handler: (event: { payload: T }) => void,
+) => Promise<() => void>;
+
+/**
+ * Core subscribe/unsubscribe for file-changed events.
+ * Accepts an injectable `listen` so tests drive the real cancel/late-resolve
+ * logic without depending on module-load Tauri detection.
+ *
+ * Cleanup is safe under React Strict Mode: if unlisten runs before `listen`
+ * resolves, the late registration is cancelled and any resolved unlisten is
+ * invoked immediately so duplicate handlers cannot accumulate.
+ */
+export function subscribeFileChanged(
+  listen: TauriListen,
+  handler: FileChangedHandler,
 ): () => void {
-  if (!isTauri) return () => {};
+  let cancelled = false;
   let unlisten: (() => void) | undefined;
-  import("@tauri-apps/api/event").then(({ listen }) => {
-    listen<import("./types").FileChangedEvent>("file-changed", (e) => {
-      handler(e.payload);
-    }).then((fn) => {
+  void listen<import("@/shared/types").FileChangedEvent>("file-changed", (e) => {
+    if (!cancelled) handler(e.payload);
+  })
+    .then((fn) => {
+      if (cancelled) {
+        fn();
+        return;
+      }
       unlisten = fn;
+    })
+    .catch(() => {
+      /* host unavailable */
     });
-  });
-  return () => unlisten?.();
+  return () => {
+    cancelled = true;
+    unlisten?.();
+    unlisten = undefined;
+  };
 }
 
-export { isTauri };
+/**
+ * Subscribe to host file-changed events (Tauri).
+ * No-op when not running under the desktop host.
+ */
+export function onFileChanged(handler: FileChangedHandler): () => void {
+  if (!isTauriRuntime()) return () => {};
+  return subscribeFileChanged(async (event, h) => {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen(event, h);
+  }, handler);
+}
 
 const browserDocs = new Map<string, DocumentSnapshot>();
 

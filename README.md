@@ -17,7 +17,7 @@ Repo: https://github.com/v-t-r-gg/Moraine
 |---------|-----|------------|
 | CLI (`moraine`) | Agents, scripts, humans in a terminal | Agent run protocol, share room URL, status, local history helpers |
 | MCP (`moraine mcp`) | Coding agents (e.g. Codex) | Same protocol over local STDIO |
-| GUI (Tauri / `npm run dev`) | Humans | Inspect run records, comments, suggestions, human notes, host Save |
+| GUI (Tauri + React / `npm run dev`) | Humans | Inspect run records, comments, suggestions, findings, human notes, host Save |
 | Markdown + sidecar | Both | Durable narrative + structured ledger |
 
 Collaborative editing supports live inspection. The durable **run record** is the center of the product, not "another multiplayer Markdown editor."

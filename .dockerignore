@@ -1,7 +1,6 @@
 target
 node_modules
 build
-.svelte-kit
 .git
 *.md
 !crates/moraine-server/README.md

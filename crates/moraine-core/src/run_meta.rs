@@ -21,7 +21,10 @@ use crate::error::{Error, Result};
 /// Current sidecar schema. Unknown greater versions are rejected.
 /// v3: suggestion disposition + two-phase acceptance fields.
 /// v4: optional agent-run protocol state (`agent` object).
-pub const SCHEMA_VERSION: u32 = 4;
+/// v5: findings-capable sidecars (`agent.findings` / `agent.findingEvents`).
+///     v4 and earlier load; writes promote to v5. Findings were briefly additive
+///     under v4 during M4 and are now a v5 compatibility boundary.
+pub const SCHEMA_VERSION: u32 = 5;
 
 pub fn moraine_sidecar_path(md_path: &Path) -> PathBuf {
     let mut s = md_path.as_os_str().to_os_string();
@@ -803,5 +806,324 @@ mod tests {
         let meta = load_run_meta_readonly(&md).unwrap().unwrap();
         assert_eq!(meta.comments.len(), 40);
         let _ = serde_json::to_string(&meta).unwrap();
+    }
+
+    /// v4 sidecars (pre-findings boundary) still load with empty findings defaults.
+    #[test]
+    fn schema_v4_loads_with_empty_findings() {
+        let dir = tempdir().unwrap();
+        let md = dir.path().join("v4.md");
+        fs::write(&md, "# run\n").unwrap();
+        let run_id = "00000000-0000-4000-8000-0000000000aa";
+        let side = moraine_sidecar_path(&md);
+        fs::write(
+            &side,
+            format!(
+                r#"{{
+  "schemaVersion": 4,
+  "run": {{
+    "id": "{run_id}",
+    "createdAt": "2020-01-01T00:00:00Z",
+    "updatedAt": "2020-01-01T00:00:00Z"
+  }},
+  "decisions": [],
+  "comments": [],
+  "agent": {{
+    "lifecycle": "active",
+    "recordRevision": 1,
+    "objective": "legacy v4",
+    "recordPath": ".moraine/runs/v4.md",
+    "startIdempotencyKey": "k",
+    "checkpoints": [],
+    "lifecycleEvents": [],
+    "idempotency": {{}},
+    "risks": [],
+    "openQuestions": [],
+    "captureCoverage": "unknown",
+    "provisional": false,
+    "evidence": []
+  }}
+}}"#
+            ),
+        )
+        .unwrap();
+        let meta = load_run_meta_readonly(&md).unwrap().unwrap();
+        assert_eq!(meta.schema_version, 4);
+        let agent = meta.agent.as_ref().unwrap();
+        assert!(agent.findings.is_empty());
+        assert!(agent.finding_events.is_empty());
+        assert_eq!(agent.objective, "legacy v4");
+        assert_eq!(meta.run.id.to_string(), run_id);
+    }
+
+    /// Writes promote v4 → v5 while preserving agent and annotation metadata.
+    #[test]
+    fn schema_v4_promotes_to_v5_on_write() {
+        let dir = tempdir().unwrap();
+        let md = dir.path().join("promote.md");
+        fs::write(&md, "# run\n").unwrap();
+        let run_id = "00000000-0000-4000-8000-0000000000bb";
+        let side = moraine_sidecar_path(&md);
+        fs::write(
+            &side,
+            format!(
+                r#"{{
+  "schemaVersion": 4,
+  "run": {{
+    "id": "{run_id}",
+    "createdAt": "2020-01-01T00:00:00Z",
+    "updatedAt": "2020-01-01T00:00:00Z"
+  }},
+  "decisions": [{{
+    "id": "00000000-0000-4000-8000-0000000000cc",
+    "decision": "approved",
+    "reviewerLabel": "alice",
+    "createdAt": "2020-01-02T00:00:00Z",
+    "contentHash": "abc"
+  }}],
+  "comments": [{{
+    "id": "00000000-0000-4000-8000-0000000000dd",
+    "body": "note",
+    "author": "alice",
+    "quote": "run",
+    "createdAt": "2020-01-02T00:00:00Z",
+    "resolved": false,
+    "kind": "comment",
+    "revision": 1
+  }}],
+  "agent": {{
+    "lifecycle": "active",
+    "recordRevision": 2,
+    "objective": "preserve me",
+    "recordPath": ".moraine/runs/promote.md",
+    "startIdempotencyKey": "start-k",
+    "checkpoints": [],
+    "lifecycleEvents": [],
+    "idempotency": {{}},
+    "risks": ["r1"],
+    "openQuestions": ["q1"],
+    "captureCoverage": "semantic_only",
+    "provisional": false,
+    "evidence": []
+  }}
+}}"#
+            ),
+        )
+        .unwrap();
+        let mut meta = load_run_meta_readonly(&md).unwrap().unwrap();
+        assert_eq!(meta.schema_version, 4);
+        write_run_meta(&md, &meta).unwrap();
+        meta = load_run_meta_readonly(&md).unwrap().unwrap();
+        assert_eq!(meta.schema_version, SCHEMA_VERSION);
+        assert_eq!(meta.schema_version, 5);
+        assert_eq!(meta.run.id.to_string(), run_id);
+        assert_eq!(meta.decisions.len(), 1);
+        assert_eq!(meta.comments.len(), 1);
+        assert_eq!(meta.comments[0].body, "note");
+        let agent = meta.agent.as_ref().unwrap();
+        assert_eq!(agent.objective, "preserve me");
+        assert_eq!(agent.risks, vec!["r1".to_string()]);
+        assert_eq!(agent.open_questions, vec!["q1".to_string()]);
+        assert_eq!(agent.record_revision, 2);
+        assert!(agent.findings.is_empty());
+    }
+
+    #[test]
+    fn schema_v5_round_trip_preserves_findings() {
+        use crate::{
+            AgentRunState, CheckpointRecord, FindingKind, FindingLedgerEvent, FindingRecord,
+            FindingState, FindingTarget, FindingTargetKind, RunLifecycle, FINDING_EVENT_CREATED,
+        };
+        use chrono::{TimeZone, Utc};
+
+        let dir = tempdir().unwrap();
+        let md = dir.path().join("v5.md");
+        fs::write(&md, "# run\n").unwrap();
+        let mut meta = RunMeta::new_run();
+        assert_eq!(meta.schema_version, 5);
+        let cp_id = Uuid::new_v4();
+        let finding_id = Uuid::new_v4();
+        let created = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let cp = CheckpointRecord {
+            op_id: cp_id,
+            idempotency_key: "cp".into(),
+            created_at: created,
+            summary: "did work".into(),
+            actions: vec![],
+            rationales: vec![],
+            evidence: vec![],
+            risks: vec![],
+            open_questions: vec![],
+            git: None,
+        };
+        let mut agent = AgentRunState {
+            lifecycle: RunLifecycle::Active,
+            record_revision: 1,
+            objective: "v5 round trip".into(),
+            record_path: ".moraine/runs/v5.md".into(),
+            project_id: None,
+            start_idempotency_key: "s".into(),
+            starting_git: None,
+            current_git: None,
+            checkpoints: vec![cp.clone()],
+            lifecycle_events: vec![],
+            ready_summary: None,
+            idempotency: Default::default(),
+            incomplete_op: None,
+            risks: vec![],
+            open_questions: vec![],
+            capture_coverage: Default::default(),
+            session_id: None,
+            provisional: false,
+            evidence: vec![],
+            findings: vec![FindingRecord {
+                id: finding_id,
+                kind: FindingKind::Clarification,
+                state: FindingState::Open,
+                body: "why?".into(),
+                target: FindingTarget {
+                    kind: FindingTargetKind::Checkpoint,
+                    checkpoint_op_id: cp_id,
+                    snapshot_hash: "deadbeef".into(),
+                    checkpoint: cp,
+                },
+                created_at: created,
+                updated_at: created,
+                responses: vec![],
+            }],
+            finding_events: vec![FindingLedgerEvent {
+                event_id: Uuid::new_v4(),
+                event: FINDING_EVENT_CREATED.into(),
+                finding_id,
+                created_at: created,
+                response_id: None,
+                from_state: None,
+                to_state: Some(FindingState::Open),
+                kind: Some(FindingKind::Clarification),
+                checkpoint_op_id: Some(cp_id),
+                snapshot_hash: Some("deadbeef".into()),
+            }],
+        };
+        meta.agent = Some(agent.clone());
+        write_run_meta(&md, &meta).unwrap();
+
+        let loaded = load_run_meta_readonly(&md).unwrap().unwrap();
+        assert_eq!(loaded.schema_version, 5);
+        let a = loaded.agent.as_ref().unwrap();
+        assert_eq!(a.findings.len(), 1);
+        assert_eq!(a.findings[0].body, "why?");
+        assert_eq!(a.findings[0].target.checkpoint_op_id, cp_id);
+        assert_eq!(a.finding_events.len(), 1);
+        assert_eq!(a.finding_events[0].event, FINDING_EVENT_CREATED);
+
+        // Mutating write must not drop findings.
+        agent = a.clone();
+        agent.risks.push("new risk".into());
+        meta.agent = Some(agent);
+        write_run_meta(&md, &meta).unwrap();
+        let again = load_run_meta_readonly(&md).unwrap().unwrap();
+        assert_eq!(again.agent.as_ref().unwrap().findings.len(), 1);
+        assert_eq!(
+            again.agent.as_ref().unwrap().risks,
+            vec!["new risk".to_string()]
+        );
+    }
+
+    #[test]
+    fn schema_future_version_rejected() {
+        let dir = tempdir().unwrap();
+        let md = dir.path().join("future.md");
+        fs::write(&md, "x\n").unwrap();
+        let path = moraine_sidecar_path(&md);
+        fs::write(
+            &path,
+            r#"{"schemaVersion":99,"run":{"id":"00000000-0000-4000-8000-000000000001","createdAt":"2020-01-01T00:00:00Z","updatedAt":"2020-01-01T00:00:00Z"},"decisions":[],"comments":[]}"#,
+        )
+        .unwrap();
+        let err = load_run_meta_readonly(&md).unwrap_err();
+        match err {
+            Error::UnsupportedSchemaVersion { version, max } => {
+                assert_eq!(version, 99);
+                assert_eq!(max, SCHEMA_VERSION);
+            }
+            other => panic!("expected UnsupportedSchemaVersion, got {other}"),
+        }
+    }
+
+    #[test]
+    fn findings_survive_reload_and_agent_checkpoint_after_v5() {
+        use crate::{
+            create_finding, init_project, run_checkpoint, run_start, CheckpointInput,
+            CreateFindingRequest, FindingKind, RunStartRequest,
+        };
+
+        let dir = tempdir().unwrap();
+        let _ = init_project(Some(dir.path())).unwrap();
+        let start = run_start(RunStartRequest {
+            objective: "schema v5 findings durability".into(),
+            idempotency_key: "v5-start".into(),
+            project: Some(dir.path().to_path_buf()),
+            session_id: None,
+        })
+        .unwrap();
+        let cp = run_checkpoint(
+            Some(dir.path()),
+            start.run_id,
+            &start.content_hash,
+            "v5-cp",
+            CheckpointInput {
+                summary: "checkpoint under v5".into(),
+                actions: vec![],
+                rationales: vec![],
+                evidence: vec![],
+                risks: vec![],
+                open_questions: vec![],
+            },
+        )
+        .unwrap();
+        let created = create_finding(
+            Some(dir.path()),
+            start.run_id,
+            CreateFindingRequest {
+                kind: FindingKind::MissingEvidence,
+                body: "need proof".into(),
+                checkpoint_op_id: cp.op_id.unwrap(),
+            },
+        )
+        .unwrap();
+
+        let meta = load_run_meta_readonly(&start.absolute_path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(meta.schema_version, 5);
+        assert_eq!(meta.agent.as_ref().unwrap().findings.len(), 1);
+
+        // Another agent op after finding must keep findings and stay on v5.
+        let hash = content_hash(&fs::read_to_string(&start.absolute_path).unwrap());
+        run_checkpoint(
+            Some(dir.path()),
+            start.run_id,
+            &hash,
+            "v5-cp2",
+            CheckpointInput {
+                summary: "more work".into(),
+                actions: vec![],
+                rationales: vec![],
+                evidence: vec![],
+                risks: vec![],
+                open_questions: vec![],
+            },
+        )
+        .unwrap();
+        let again = load_run_meta_readonly(&start.absolute_path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(again.schema_version, 5);
+        assert_eq!(again.agent.as_ref().unwrap().findings.len(), 1);
+        assert_eq!(
+            again.agent.as_ref().unwrap().findings[0].id,
+            created.finding_id
+        );
+        assert_eq!(again.agent.as_ref().unwrap().checkpoints.len(), 2);
     }
 }

@@ -16,9 +16,9 @@ Moraine is a **ledger**, not an approval gate. Live collaboration is optional in
 ```
   Agents / scripts                      Humans
         |                                  |
-   moraine CLI / MCP                  GUI (Tauri / web)
+   moraine CLI / MCP                  GUI (Tauri + React)
    project/run protocol,              inspect, comment,
-   status, share                      notes, Save
+   status, share                      notes, findings, Save
         |                                  |
         +---------- moraine-core ----------+
                     |            |
@@ -56,7 +56,7 @@ Business logic belongs in `moraine-core`. CLI, MCP, and Tauri commands call the 
 | `moraine-mcp` | Local STDIO MCP server over core protocol operations |
 | `moraine-server` | Live Yjs relay only |
 | `src-tauri` | Desktop host shell (IPC, dialogs, watcher bridge) |
-| `src/` | Review UI (Tiptap + Yjs) |
+| `src/` | React + TypeScript + Vite review UI (Tiptap + Yjs); Tauri desktop host |
 
 ## Flows
 

@@ -296,7 +296,24 @@ export interface FindingTargetDto {
   kind: string;
   checkpointOpId: string;
   snapshotHash: string;
+  /** Ordinary projection: `[REDACTED]` when targetRedacted is true. */
   checkpointSummary: string;
+  /** True when checkpoint claim content is withheld from ordinary readers. */
+  targetRedacted?: boolean;
+}
+
+/** Sanitized frozen-target projection (content omitted when redacted). */
+export interface FindingTargetSnapshotDto {
+  opId: string;
+  createdAt: string;
+  snapshotHash: string;
+  redacted?: boolean;
+  summary?: string | null;
+  actions?: string[];
+  risks?: string[];
+  openQuestions?: string[];
+  rationales?: string[];
+  evidenceLabels?: string[];
 }
 
 export interface FindingListItemDto {
@@ -329,12 +346,8 @@ export interface FindingDetailDto {
   createdAt: string;
   updatedAt: string;
   target: FindingTargetDto;
-  targetSnapshot: {
-    opId: string;
-    summary: string;
-    createdAt: string;
-    [key: string]: unknown;
-  };
+  /** Content fields withheld when target is redacted. */
+  targetSnapshot: FindingTargetSnapshotDto;
   thread: FindingThreadItemDto[];
   responses: Array<{
     id: string;

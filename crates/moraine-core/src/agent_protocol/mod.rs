@@ -28,10 +28,11 @@ pub use evidence::{
 pub use findings::{
     change_finding_state, change_finding_state_at_path, create_finding, create_finding_at_path,
     get_finding, get_finding_at_path, list_findings, list_findings_at_path,
-    load_run_checkpoints_detail, respond_to_finding, respond_to_finding_at_path,
-    CheckpointSummaryDto, CreateFindingRequest, FindingDetail, FindingListItem,
-    FindingMutationResult, FindingTargetContext, FindingThreadItem, RunCheckpointsDetail,
-    MAX_FINDING_BODY_CHARS,
+    load_run_checkpoints_detail, project_target_context, project_target_snapshot,
+    respond_to_finding, respond_to_finding_at_path, CheckpointSummaryDto, CreateFindingRequest,
+    FindingDetail, FindingListItem, FindingMutationResult, FindingTargetContext,
+    FindingTargetSnapshotDto, FindingThreadItem, RunCheckpointsDetail, MAX_FINDING_BODY_CHARS,
+    REDACTED_CHECKPOINT_SUMMARY,
 };
 pub use git::{capture_git_context, GitContextSummary};
 pub use markdown::{

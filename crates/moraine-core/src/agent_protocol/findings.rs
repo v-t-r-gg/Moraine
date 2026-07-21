@@ -15,13 +15,17 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use super::append_ops::is_redacted;
 use super::ops::recover_incomplete_agent_op;
 use super::project::{find_run_by_id, resolve_existing_project};
 use super::types::{
-    AgentRunState, CheckpointRecord, FindingKind, FindingLedgerEvent, FindingRecord,
-    FindingResponse, FindingState, FindingTarget, FindingTargetKind, IdempotencyRecord,
-    FINDING_EVENT_CREATED, FINDING_EVENT_RESPONDED, FINDING_EVENT_STATE_CHANGED, MAX_FIELD_CHARS,
+    AgentRunState, FindingKind, FindingLedgerEvent, FindingRecord, FindingResponse, FindingState,
+    FindingTarget, FindingTargetKind, IdempotencyRecord, FINDING_EVENT_CREATED,
+    FINDING_EVENT_RESPONDED, FINDING_EVENT_STATE_CHANGED, MAX_FIELD_CHARS,
 };
+
+/// Ordinary API/desktop/agent projection marker for redacted checkpoint targets.
+pub const REDACTED_CHECKPOINT_SUMMARY: &str = "[REDACTED]";
 use crate::atomic::SidecarLock;
 use crate::document::Document;
 use crate::error::{Error, Result};
@@ -32,6 +36,12 @@ use crate::run_meta::{
 /// Maximum finding / response body length (plain text).
 pub const MAX_FINDING_BODY_CHARS: usize = MAX_FIELD_CHARS;
 
+/// Ordinary projection of a finding's checkpoint target (not the canonical sidecar record).
+///
+/// When the target checkpoint has been redacted, `checkpoint_summary` is
+/// `[REDACTED]` and `target_redacted` is true. Canonical frozen content may
+/// still exist in the run sidecar for integrity; ordinary readers must not
+/// receive it through this DTO.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FindingTargetContext {
@@ -39,6 +49,9 @@ pub struct FindingTargetContext {
     pub checkpoint_op_id: Uuid,
     pub snapshot_hash: String,
     pub checkpoint_summary: String,
+    /// True when ordinary readers must not see the frozen checkpoint claim text.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub target_redacted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -69,6 +82,36 @@ pub struct FindingThreadItem {
     pub finding_kind: Option<String>,
 }
 
+/// Sanitized frozen-target projection for ordinary APIs.
+///
+/// When `redacted` is true, claim content fields are omitted; only identity /
+/// timing metadata remain. The canonical sidecar may retain full content.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FindingTargetSnapshotDto {
+    pub op_id: Uuid,
+    pub created_at: String,
+    /// Snapshot hash recorded when the finding was created (not claim text).
+    pub snapshot_hash: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub redacted: bool,
+    /// Present only when the target checkpoint is not redacted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub risks: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open_questions: Vec<String>,
+    /// Rationale choice/reason strings; empty when redacted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rationales: Vec<String>,
+    /// Evidence labels only (not full commands/results) when not redacted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_labels: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FindingDetail {
@@ -80,8 +123,8 @@ pub struct FindingDetail {
     pub created_at: String,
     pub updated_at: String,
     pub target: FindingTargetContext,
-    /// Full checkpoint record frozen when the finding was created.
-    pub target_snapshot: CheckpointRecord,
+    /// Ordinary projection of the frozen checkpoint. Content withheld when redacted.
+    pub target_snapshot: FindingTargetSnapshotDto,
     /// Chronological thread: human finding first, then agent responses by time.
     pub thread: Vec<FindingThreadItem>,
     pub responses: Vec<FindingResponse>,
@@ -529,7 +572,7 @@ fn list_from_agent(run_id: Uuid, agent: &AgentRunState, open_only: bool) -> Vec<
             created_at: f.created_at.to_rfc3339(),
             updated_at: f.updated_at.to_rfc3339(),
             response_count: f.responses.len(),
-            target: target_context(&f.target),
+            target: project_target_context(agent, &f.target),
         })
         .collect()
 }
@@ -582,20 +625,71 @@ fn detail_from_agent(
         body: f.body.clone(),
         created_at: f.created_at.to_rfc3339(),
         updated_at: f.updated_at.to_rfc3339(),
-        target: target_context(&f.target),
-        target_snapshot: f.target.checkpoint.clone(),
+        target: project_target_context(agent, &f.target),
+        target_snapshot: project_target_snapshot(agent, &f.target),
         thread,
         responses,
         ledger_events,
     })
 }
 
-fn target_context(t: &FindingTarget) -> FindingTargetContext {
+/// Single redaction-aware projection for ordinary finding target context.
+///
+/// Used by list/get/respond/desktop/MCP. Does not mutate the sidecar.
+pub fn project_target_context(agent: &AgentRunState, t: &FindingTarget) -> FindingTargetContext {
+    let redacted = is_redacted(agent, t.checkpoint_op_id);
     FindingTargetContext {
         kind: t.kind.as_str().into(),
         checkpoint_op_id: t.checkpoint_op_id,
         snapshot_hash: t.snapshot_hash.clone(),
-        checkpoint_summary: t.checkpoint.summary.clone(),
+        checkpoint_summary: if redacted {
+            REDACTED_CHECKPOINT_SUMMARY.into()
+        } else {
+            t.checkpoint.summary.clone()
+        },
+        target_redacted: redacted,
+    }
+}
+
+/// Single redaction-aware projection for frozen checkpoint snapshots.
+///
+/// Redacted targets keep only identity/timestamp/hash — no summary, actions,
+/// rationales, evidence, risks, or questions.
+pub fn project_target_snapshot(
+    agent: &AgentRunState,
+    t: &FindingTarget,
+) -> FindingTargetSnapshotDto {
+    let redacted = is_redacted(agent, t.checkpoint_op_id);
+    let cp = &t.checkpoint;
+    if redacted {
+        return FindingTargetSnapshotDto {
+            op_id: cp.op_id,
+            created_at: cp.created_at.to_rfc3339(),
+            snapshot_hash: t.snapshot_hash.clone(),
+            redacted: true,
+            summary: None,
+            actions: vec![],
+            risks: vec![],
+            open_questions: vec![],
+            rationales: vec![],
+            evidence_labels: vec![],
+        };
+    }
+    FindingTargetSnapshotDto {
+        op_id: cp.op_id,
+        created_at: cp.created_at.to_rfc3339(),
+        snapshot_hash: t.snapshot_hash.clone(),
+        redacted: false,
+        summary: Some(cp.summary.clone()),
+        actions: cp.actions.clone(),
+        risks: cp.risks.clone(),
+        open_questions: cp.open_questions.clone(),
+        rationales: cp
+            .rationales
+            .iter()
+            .map(|r| format!("{}: {}", r.choice, r.reason))
+            .collect(),
+        evidence_labels: cp.evidence.iter().map(|e| e.label.clone()).collect(),
     }
 }
 
@@ -757,9 +851,11 @@ mod tests {
         assert!(!created.finding.target.snapshot_hash.is_empty());
         assert_eq!(created.finding.target_snapshot.op_id, cp_id);
         assert_eq!(
-            created.finding.target_snapshot.summary,
-            "Implemented widget"
+            created.finding.target_snapshot.summary.as_deref(),
+            Some("Implemented widget")
         );
+        assert!(!created.finding.target.target_redacted);
+        assert!(!created.finding.target_snapshot.redacted);
 
         let open = list_findings(Some(&root), run_id, true).unwrap();
         assert_eq!(open.len(), 1);
@@ -808,7 +904,10 @@ mod tests {
         assert_eq!(detail.thread[1].item_kind, "response");
         assert_eq!(detail.thread[1].author_kind.as_deref(), Some("agent"));
         assert_eq!(detail.state, "addressed");
-        assert_eq!(detail.target_snapshot.summary, "Implemented widget");
+        assert_eq!(
+            detail.target_snapshot.summary.as_deref(),
+            Some("Implemented widget")
+        );
 
         let events: Vec<_> = detail
             .ledger_events
@@ -1070,5 +1169,114 @@ mod tests {
         .unwrap();
         let detail = get_finding(Some(&root), run_id, created.finding_id).unwrap();
         assert_eq!(detail.body, "Still durable after discard recovery?");
+    }
+
+    /// Redacted checkpoint targets must not leak claim content through ordinary
+    /// finding projections (list/get/respond paths share detail_from_agent).
+    #[test]
+    fn redacted_checkpoint_withheld_from_finding_projections() {
+        use crate::agent_protocol::append_ops::{entry_redact, RedactRequest};
+        use crate::agent_protocol::types::ActorCategory;
+
+        let dir = tempdir().unwrap();
+        let (run_id, root, cp_id, _hash) = start_with_checkpoint(dir.path());
+        let secret = "Implemented widget";
+
+        let created = create_finding(
+            Some(&root),
+            run_id,
+            CreateFindingRequest {
+                kind: FindingKind::MissingEvidence,
+                body: "What proved the widget works?".into(),
+                checkpoint_op_id: cp_id,
+            },
+        )
+        .unwrap();
+        assert_eq!(created.finding.target.checkpoint_summary.as_str(), secret);
+        assert_eq!(
+            created.finding.target_snapshot.summary.as_deref(),
+            Some(secret)
+        );
+        assert!(!created.finding.target_snapshot.actions.is_empty());
+
+        entry_redact(
+            Some(&root),
+            run_id,
+            RedactRequest {
+                target_id: cp_id,
+                target_kind: "checkpoint".into(),
+                reason: "sensitive claim".into(),
+                actor_category: ActorCategory::Human,
+            },
+        )
+        .unwrap();
+
+        // list_findings
+        let listed = list_findings(Some(&root), run_id, false).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].target.target_redacted);
+        assert_eq!(
+            listed[0].target.checkpoint_summary,
+            REDACTED_CHECKPOINT_SUMMARY
+        );
+        assert!(!listed[0].target.checkpoint_summary.contains(secret));
+
+        // get_finding
+        let detail = get_finding(Some(&root), run_id, created.finding_id).unwrap();
+        assert!(detail.target.target_redacted);
+        assert_eq!(
+            detail.target.checkpoint_summary,
+            REDACTED_CHECKPOINT_SUMMARY
+        );
+        assert_eq!(detail.target.checkpoint_op_id, cp_id);
+        assert!(!detail.target.snapshot_hash.is_empty());
+        assert!(detail.target_snapshot.redacted);
+        assert!(detail.target_snapshot.summary.is_none());
+        assert!(detail.target_snapshot.actions.is_empty());
+        assert!(detail.target_snapshot.risks.is_empty());
+        assert!(detail.target_snapshot.open_questions.is_empty());
+        assert!(detail.target_snapshot.rationales.is_empty());
+        assert!(detail.target_snapshot.evidence_labels.is_empty());
+
+        // respond_to_finding returns projected FindingDetail
+        let responded = respond_to_finding(
+            Some(&root),
+            run_id,
+            created.finding_id,
+            "cargo test -p widget exited 0",
+            "resp-after-redact",
+        )
+        .unwrap();
+        assert!(responded.finding.target.target_redacted);
+        assert_eq!(
+            responded.finding.target.checkpoint_summary,
+            REDACTED_CHECKPOINT_SUMMARY
+        );
+        assert!(responded.finding.target_snapshot.redacted);
+        assert!(responded.finding.target_snapshot.summary.is_none());
+
+        // JSON must not re-expose secret claim content
+        let json = serde_json::to_string(&detail).unwrap();
+        assert!(
+            !json.contains(secret),
+            "serialized get_finding leaked redacted claim: {json}"
+        );
+        let list_json = serde_json::to_string(&listed).unwrap();
+        assert!(
+            !list_json.contains(secret),
+            "serialized list_findings leaked redacted claim: {list_json}"
+        );
+
+        // Sidecar still retains canonical frozen snapshot for integrity.
+        let md = finding_run_path(Some(&root), run_id).unwrap();
+        let meta = load_run_meta_readonly(&md).unwrap().unwrap();
+        let agent = meta.agent.as_ref().unwrap();
+        let stored = agent
+            .findings
+            .iter()
+            .find(|f| f.id == created.finding_id)
+            .unwrap();
+        assert_eq!(stored.target.checkpoint.summary, secret);
+        assert!(is_redacted(agent, cp_id));
     }
 }

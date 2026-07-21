@@ -97,8 +97,10 @@ function detailWithThread(state: string, withResponse: boolean): FindingDetailDt
     },
     targetSnapshot: {
       opId: "cp1",
-      summary: "Implemented widget",
       createdAt: "2026-01-01T00:00:00Z",
+      snapshotHash: "h",
+      summary: "Implemented widget",
+      redacted: false,
     },
     thread,
     responses: withResponse

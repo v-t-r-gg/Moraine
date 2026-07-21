@@ -94,18 +94,30 @@ pub fn run_doctor(project: Option<&Path>, integration: Option<&str>) -> DoctorRe
     ));
 
     let manifest_ok = suite.manifest.is_file();
+    // Missing suite is FAIL: checking only the CLI binary is not a healthy install (§14).
     checks.push(check(
         "suite.manifest",
-        if manifest_ok { "pass" } else { "warn" },
+        if manifest_ok { "pass" } else { "fail" },
         if manifest_ok {
             format!("manifest at {}", suite.manifest.display())
         } else {
-            "suite manifest missing (development binary or incomplete install)".into()
+            "suite manifest missing — not an installed Moraine suite (CLI-only / cargo dev)".into()
         },
         Some(&suite.manifest.display().to_string()),
         Some("present manifest.json under share/moraine"),
-        Some("Install with the release bundle install.sh"),
+        Some("Install with the release bundle: ./install.sh (see docs/INSTALL.md)"),
     ));
+    let suite_service = suite.service.is_file();
+    if !manifest_ok {
+        checks.push(check(
+            "suite.installed",
+            "fail",
+            "no installed suite under the discovered prefix; doctor cannot claim product health",
+            Some(&suite.prefix.display().to_string()),
+            Some("~/.local/share/moraine/manifest.json (or MORAINE_PREFIX)"),
+            Some("Extract the release bundle and run ./install.sh"),
+        ));
+    }
 
     if let Some(m) = suite.read_manifest() {
         let coherent = m.components_coherent();
@@ -196,19 +208,13 @@ pub fn run_doctor(project: Option<&Path>, integration: Option<&str>) -> DoctorRe
     // Service binary + unit ExecStart
     checks.push(check(
         "service.binary",
-        if suite.service.is_file() {
-            "pass"
-        } else if manifest_ok {
-            "fail"
-        } else {
-            "info"
-        },
-        if suite.service.is_file() {
+        if suite_service { "pass" } else { "fail" },
+        if suite_service {
             format!("service binary {}", suite.service.display())
         } else if manifest_ok {
             "suite manifest present but service binary missing".into()
         } else {
-            "no installed service binary (ok for pure cargo dev)".into()
+            "no installed service binary".into()
         },
         Some(&suite.service.display().to_string()),
         Some("libexec/moraine/moraine-service present"),
@@ -549,25 +555,58 @@ pub fn run_doctor(project: Option<&Path>, integration: Option<&str>) -> DoctorRe
             ));
         }
 
-        // Best-effort MCP tools/list via installed CLI (short timeout subprocess).
-        if cfg_ok {
-            let tools_probe = Command::new(&current)
-                .args(["mcp", "--help"])
-                .output()
-                .ok()
-                .map(|o| o.status.success())
-                .unwrap_or(false);
+        // Actual MCP tools/list from the installed CLI (STDIO JSON-RPC), not --help.
+        if cfg_ok && project.as_ref().map(|p| p.initialized).unwrap_or(false) {
+            let root = project
+                .as_ref()
+                .map(|p| PathBuf::from(&p.path))
+                .unwrap_or_else(|| root.clone());
+            match probe_mcp_tools_list(&current, &root) {
+                Ok(names) => {
+                    let expected: Vec<String> = moraine_mcp::tool_names()
+                        .iter()
+                        .map(|s| (*s).to_string())
+                        .collect();
+                    let missing: Vec<_> = expected
+                        .iter()
+                        .filter(|e| !names.iter().any(|n| n == *e))
+                        .cloned()
+                        .collect();
+                    let ok = missing.is_empty() && !names.is_empty();
+                    details.push(format!("mcp tools/list: {}", names.join(", ")));
+                    checks.push(check(
+                        "integration.codex.mcp_tools",
+                        if ok { "pass" } else { "fail" },
+                        if ok {
+                            format!("MCP tools/list ok ({} tools)", names.len())
+                        } else {
+                            format!("MCP tools/list incomplete; missing: {}", missing.join(", "))
+                        },
+                        Some(&names.join(",")),
+                        Some(&expected.join(",")),
+                        (!ok).then_some("Reinstall suite; ensure moraine mcp --project works"),
+                    ));
+                }
+                Err(e) => {
+                    details.push(format!("mcp tools/list failed: {e}"));
+                    checks.push(check(
+                        "integration.codex.mcp_tools",
+                        "fail",
+                        format!("MCP tools/list failed: {e}"),
+                        Some(&e),
+                        Some("initialize + tools/list over STDIO"),
+                        Some("moraine mcp --project <path> must start; check suite install"),
+                    ));
+                }
+            }
+        } else if cfg_ok {
             checks.push(check(
-                "integration.codex.mcp_cli",
-                if tools_probe { "pass" } else { "warn" },
-                if tools_probe {
-                    "moraine mcp subcommand available"
-                } else {
-                    "moraine mcp help failed"
-                },
+                "integration.codex.mcp_tools",
+                "warn",
+                "skipped MCP tools/list (project not initialized)",
                 None,
-                Some("installed moraine mcp"),
-                None,
+                Some("initialized project for STDIO probe"),
+                Some("moraine project init <path>"),
             ));
         }
 
@@ -612,6 +651,106 @@ fn which_on_path(name: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Spawn `moraine mcp --project` and perform JSON-RPC initialize + tools/list.
+fn probe_mcp_tools_list(cli: &Path, project: &Path) -> Result<Vec<String>, String> {
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let mut child = Command::new(cli)
+        .args(["mcp", "--project"])
+        .arg(project)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("spawn moraine mcp: {e}"))?;
+    let mut stdin = child.stdin.take().ok_or("mcp stdin")?;
+    let mut stdout = BufReader::new(child.stdout.take().ok_or("mcp stdout")?);
+
+    let send =
+        |stdin: &mut std::process::ChildStdin, body: &serde_json::Value| -> Result<(), String> {
+            let line = serde_json::to_string(body).map_err(|e| e.to_string())?;
+            writeln!(stdin, "{line}").map_err(|e| e.to_string())?;
+            stdin.flush().map_err(|e| e.to_string())?;
+            Ok(())
+        };
+    let mut read_id = |id: u64| -> Result<serde_json::Value, String> {
+        let deadline = Instant::now() + Duration::from_secs(4);
+        loop {
+            if Instant::now() > deadline {
+                return Err(format!("timeout waiting for MCP response id={id}"));
+            }
+            let mut buf = String::new();
+            let n = stdout.read_line(&mut buf).map_err(|e| e.to_string())?;
+            if n == 0 {
+                return Err("EOF from MCP server".into());
+            }
+            let v: serde_json::Value =
+                serde_json::from_str(buf.trim()).map_err(|e| format!("bad MCP JSON: {e}"))?;
+            if v.get("id") == Some(&serde_json::json!(id)) {
+                return Ok(v);
+            }
+        }
+    };
+
+    send(
+        &mut stdin,
+        &serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": { "name": "moraine-doctor", "version": "0.1.0" }
+            }
+        }),
+    )?;
+    let init = read_id(1)?;
+    if init.get("error").is_some() {
+        let _ = child.kill();
+        return Err(format!("initialize error: {init}"));
+    }
+    send(
+        &mut stdin,
+        &serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+            "params": {}
+        }),
+    )?;
+    send(
+        &mut stdin,
+        &serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+            "params": {}
+        }),
+    )?;
+    let tools = read_id(2)?;
+    let _ = child.kill();
+    let _ = child.wait();
+    let names = tools
+        .pointer("/result/tools")
+        .and_then(|t| t.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| {
+                    t.get("name")
+                        .and_then(|n| n.as_str())
+                        .map(|s| s.to_string())
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if names.is_empty() {
+        return Err(format!("empty tools/list: {tools}"));
+    }
+    Ok(names)
 }
 
 fn libc_uid() -> u32 {

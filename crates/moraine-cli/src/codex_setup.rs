@@ -198,10 +198,18 @@ args = ["mcp", "--project", "{project}"]
         out
     };
 
-    // Hooks merge
+    // Hooks merge — refuse malformed existing files (do not wipe user data).
     let mut hooks_doc = if hooks_path.is_file() {
         let raw = fs::read_to_string(&hooks_path)?;
-        serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| json!({ "hooks": {} }))
+        match serde_json::from_str::<Value>(&raw) {
+            Ok(v) => v,
+            Err(e) => {
+                bail!(
+                    "refusing to modify malformed hooks.json at {}: {e}; fix or remove the file, then re-run",
+                    hooks_path.display()
+                );
+            }
+        }
     } else {
         json!({ "hooks": {} })
     };

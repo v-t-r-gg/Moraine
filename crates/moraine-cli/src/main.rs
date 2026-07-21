@@ -28,7 +28,7 @@ use serde::Serialize;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
-use relay::{health_ok, launch_desktop, try_spawn_server};
+use relay::{health_ok, launch_desktop, launch_desktop_workspace, try_spawn_server};
 
 /// Exit codes for scripts/agents.
 const EXIT_OK: i32 = 0;
@@ -283,6 +283,20 @@ On delivery failure, events are written to the local spool (exit 0)."
         #[command(subcommand)]
         cmd: IntegrateSub,
     },
+
+    /// Open the installed desktop (ledger workspace or a run path)
+    Open {
+        /// Optional Markdown run path
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Optional run id (resolved under project if --project set)
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long)]
+        project: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -447,6 +461,12 @@ fn run() -> Result<i32> {
             Some(sub) => cmd_setup_codex(sub),
         },
         Commands::Integrate { cmd } => cmd_integrate(cmd),
+        Commands::Open {
+            path,
+            run_id,
+            project,
+            json,
+        } => cmd_open(path, run_id, project, json),
     }?;
     Ok(code)
 }
@@ -660,6 +680,58 @@ fn dispatch_codex_integration(
         codex_setup::setup_codex(project, dry_run, json)?;
     }
     Ok(EXIT_OK)
+}
+
+fn cmd_open(
+    path: Option<PathBuf>,
+    run_id: Option<String>,
+    project: Option<PathBuf>,
+    json: bool,
+) -> Result<i32> {
+    let open_path = if let Some(p) = path {
+        Some(p)
+    } else if let (Some(rid), Some(proj)) = (run_id.as_ref(), project.as_ref()) {
+        // Best-effort: find run markdown under project .moraine/runs
+        let runs = proj.join(".moraine/runs");
+        let found = std::fs::read_dir(&runs).ok().and_then(|rd| {
+            rd.filter_map(|e| e.ok()).map(|e| e.path()).find(|p| {
+                p.extension().and_then(|x| x.to_str()) == Some("md")
+                    && p.file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n.contains(rid.as_str()) || n.ends_with(&format!("{rid}.md")))
+                        .unwrap_or(false)
+            })
+        });
+        found
+    } else {
+        None
+    };
+    let launched = if let Some(ref p) = open_path {
+        launch_desktop(p)?
+    } else {
+        launch_desktop_workspace(None)?
+    };
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "ok": launched,
+                "path": open_path.as_ref().map(|p| p.display().to_string()),
+                "runId": run_id,
+                "message": if launched {
+                    "launched installed desktop"
+                } else {
+                    "desktop binary not found; install suite with moraine-app or set PATH"
+                }
+            })
+        );
+    } else if launched {
+        println!("opened installed desktop");
+    } else {
+        eprintln!("error: could not launch moraine-app (install suite desktop component)");
+        return Ok(EXIT_ERR);
+    }
+    Ok(if launched { EXIT_OK } else { EXIT_ERR })
 }
 
 #[derive(Serialize)]

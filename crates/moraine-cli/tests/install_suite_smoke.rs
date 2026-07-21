@@ -45,6 +45,38 @@ fn doctor_json_runs_without_project() {
 }
 
 #[test]
+fn doctor_fails_without_installed_suite() {
+    let dir = tempdir().unwrap();
+    // Empty prefix: no suite manifest → must not claim healthy install.
+    let out = Command::new(moraine_bin())
+        .args(["doctor", "--json"])
+        .env("MORAINE_PREFIX", dir.path())
+        .env(
+            "PATH",
+            format!(
+                "{}:/usr/bin:/bin",
+                moraine_bin().parent().unwrap().display()
+            ),
+        )
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "doctor must exit nonzero without suite"
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["ok"], false);
+    let checks = v["checks"].as_array().unwrap();
+    assert!(
+        checks.iter().any(|c| {
+            c["id"] == "suite.manifest" && c["status"] == "fail"
+                || c["id"] == "suite.installed" && c["status"] == "fail"
+        }),
+        "expected suite fail checks: {v}"
+    );
+}
+
+#[test]
 fn doctor_does_not_create_moraine_dir_in_temp() {
     let dir = tempdir().unwrap();
     let _ = Command::new(moraine_bin())
@@ -185,6 +217,34 @@ fn setup_bare_json() {
         )
     });
     assert!(v.get("cli").is_some() || v.get("next").is_some());
+}
+
+#[test]
+fn setup_codex_refuses_malformed_hooks_json() {
+    let dir = tempdir().unwrap();
+    let p = dir.path().to_str().unwrap();
+    assert!(run(&["project", "init", p, "--json"]).status.success());
+    let codex = dir.path().join(".codex");
+    fs::create_dir_all(&codex).unwrap();
+    fs::write(codex.join("hooks.json"), "NOT JSON {{{").unwrap();
+    let before = fs::read_to_string(codex.join("hooks.json")).unwrap();
+    let out = run(&["setup", "codex", "--project", p, "--json"]);
+    assert!(
+        !out.status.success(),
+        "must refuse malformed hooks: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let after = fs::read_to_string(codex.join("hooks.json")).unwrap();
+    assert_eq!(before, after, "must not wipe malformed hooks.json");
+    let err = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(
+        err.contains("malformed") || err.contains("refusing"),
+        "actionable error: {err}"
+    );
 }
 
 fn out_both(o: &std::process::Output) -> String {

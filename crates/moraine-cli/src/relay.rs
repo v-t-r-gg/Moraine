@@ -75,6 +75,11 @@ fn server_bins() -> Vec<PathBuf> {
 pub fn launch_desktop(path: &Path) -> Result<bool> {
     let abs = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let mut bins = Vec::new();
+    // Prefer installed suite desktop (C2), then PATH, then cargo target (dev only).
+    let suite_app = crate::suite::SuitePaths::discover().desktop;
+    if suite_app.is_file() {
+        bins.push(suite_app);
+    }
     for n in ["moraine-app", "moraine-desktop"] {
         if which_exists(n) {
             bins.push(PathBuf::from(n));
@@ -95,6 +100,35 @@ pub fn launch_desktop(path: &Path) -> Result<bool> {
             .stderr(Stdio::null());
         if cmd.spawn().is_ok() {
             eprintln!("opened in {}: {}", bin.display(), abs.display());
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Launch installed desktop workspace (optional run path or run id hint).
+pub fn launch_desktop_workspace(open_path: Option<&Path>) -> Result<bool> {
+    if let Some(p) = open_path {
+        return launch_desktop(p);
+    }
+    // No path: still prefer suite binary so ledger workspace can open.
+    let suite_app = crate::suite::SuitePaths::discover().desktop;
+    let bins = if suite_app.is_file() {
+        vec![suite_app]
+    } else {
+        ["moraine-app", "moraine-desktop"]
+            .into_iter()
+            .filter(|n| which_exists(n))
+            .map(PathBuf::from)
+            .collect()
+    };
+    for bin in bins {
+        let mut cmd = Command::new(&bin);
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        if cmd.spawn().is_ok() {
+            eprintln!("opened desktop workspace via {}", bin.display());
             return Ok(true);
         }
     }

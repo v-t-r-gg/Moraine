@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install Moraine suite from an extracted release directory (C2).
-# User-scoped by default. Idempotent. Does not require root or sudo.
+# User-scoped by default. Idempotent. Does not require root, sudo, or Python.
 set -euo pipefail
 
 PREFIX="${MORAINE_PREFIX:-$HOME/.local}"
@@ -36,26 +36,34 @@ if [ ! -x "$BUNDLE_ROOT/bin/moraine" ] || [ ! -x "$BUNDLE_ROOT/bin/moraine-servi
   exit 1
 fi
 
-# Validate component versions agree (desktop may be "missing").
-python3 - "$MANIFEST" <<'PY'
-import json, sys
-from pathlib import Path
-m = json.loads(Path(sys.argv[1]).read_text())
-v = m.get("version")
-c = m.get("components") or {}
-for key in ("cli", "service"):
-    if c.get(key) != v:
-        print(f"error: components.{key}={c.get(key)!r} does not match version={v!r}", file=sys.stderr)
-        sys.exit(1)
-desk = c.get("desktop")
-if desk not in (v, "missing", "", None):
-    print(f"error: components.desktop={desk!r} does not match version={v!r}", file=sys.stderr)
-    sys.exit(1)
-if m.get("product") != "Moraine":
-    print("error: manifest product must be Moraine", file=sys.stderr)
-    sys.exit(1)
-PY
-VERSION=$(python3 -c "import json;print(json.load(open('$MANIFEST'))['version'])")
+# Minimal JSON string field reader (no python). Expects "key": "value" on a line.
+json_str() {
+  local key="$1" file="$2"
+  sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" "$file" | head -1
+}
+
+PRODUCT=$(json_str product "$MANIFEST")
+VERSION=$(json_str version "$MANIFEST")
+CLI_V=$(json_str cli "$MANIFEST")
+SVC_V=$(json_str service "$MANIFEST")
+DESK_V=$(json_str desktop "$MANIFEST")
+
+if [ "$PRODUCT" != "Moraine" ]; then
+  echo "error: manifest product must be Moraine (got: ${PRODUCT:-empty})" >&2
+  exit 1
+fi
+if [ -z "$VERSION" ]; then
+  echo "error: manifest version missing" >&2
+  exit 1
+fi
+if [ "$CLI_V" != "$VERSION" ] || [ "$SVC_V" != "$VERSION" ]; then
+  echo "error: components.cli/service must match version=$VERSION (cli=$CLI_V service=$SVC_V)" >&2
+  exit 1
+fi
+if [ -n "$DESK_V" ] && [ "$DESK_V" != "$VERSION" ] && [ "$DESK_V" != "missing" ]; then
+  echo "error: components.desktop=$DESK_V does not match version=$VERSION" >&2
+  exit 1
+fi
 
 BIN_DIR="$PREFIX/bin"
 LIBEXEC="$PREFIX/libexec/moraine"
@@ -84,15 +92,11 @@ stage_tree() {
     cp -f "$BUNDLE_ROOT/bin/moraine-app" "$STAGE_ROOT/lib/moraine/moraine-app"
     chmod 755 "$STAGE_ROOT/lib/moraine/moraine-app"
   fi
-  cp -f "$MANIFEST" "$STAGE_ROOT/share/moraine/manifest.json"
-  python3 - <<PY
-import json
-from pathlib import Path
-p = Path("$STAGE_ROOT/share/moraine/manifest.json")
-m = json.loads(p.read_text())
-m["prefix"] = "$PREFIX"
-p.write_text(json.dumps(m, indent=2) + "\n")
-PY
+  # Copy manifest and inject prefix (no python dependency)
+  {
+    sed '$d' "$MANIFEST"
+    printf '  ,"prefix": "%s"\n}\n' "$(printf '%s' "$PREFIX" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  } > "$STAGE_ROOT/share/moraine/manifest.json"
   if [ -f "$BUNDLE_ROOT/LICENSE" ]; then
     cp -f "$BUNDLE_ROOT/LICENSE" "$STAGE_ROOT/share/moraine/LICENSE"
   fi
@@ -134,10 +138,7 @@ backup_existing() {
     "$UNIT_DIR/moraine-service.service"
   do
     if [ -e "$p" ]; then
-      mkdir -p "$ROLLBACK_ROOT/$(dirname "${p#"$HOME/"}")" 2>/dev/null || true
-      # Keep simple absolute mirror under rollback root
-      local rel
-      rel=$(echo "$p" | sed 's|^/||')
+      rel=$(printf '%s' "$p" | sed 's|^/||')
       mkdir -p "$ROLLBACK_ROOT/$(dirname "$rel")"
       cp -a "$p" "$ROLLBACK_ROOT/$rel"
     fi
@@ -146,7 +147,6 @@ backup_existing() {
 
 rollback_install() {
   echo "error: install failed; rolling back previous suite files if present" >&2
-  # Best-effort restore from rollback mirror
   if [ -d "$ROLLBACK_ROOT" ]; then
     (
       cd "$ROLLBACK_ROOT"
@@ -202,19 +202,27 @@ else
 fi
 
 if [ "$JSON" = 1 ]; then
-  python3 - <<PY
-import json
-actions = """$(printf '%s\n' "${ACTIONS[@]}" | sed 's/\\/\\\\/g; s/"/\\"/g')""".strip().splitlines()
-print(json.dumps({
-  "ok": True,
-  "prefix": "$PREFIX",
-  "version": "$VERSION",
-  "dryRun": bool($DRY_RUN),
-  "actions": actions,
-  "pathHint": "ensure $BIN_DIR is on PATH before ~/.cargo/bin",
-  "serviceStart": "not auto-started; run: moraine service start",
-}, indent=2))
-PY
+  # Pure-bash JSON (escape paths minimally)
+  esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+  echo "{"
+  echo "  \"ok\": true,"
+  echo "  \"prefix\": \"$(esc "$PREFIX")\","
+  echo "  \"version\": \"$(esc "$VERSION")\","
+  echo "  \"dryRun\": $([ "$DRY_RUN" = 1 ] && echo true || echo false),"
+  echo "  \"actions\": ["
+  i=0
+  for a in "${ACTIONS[@]}"; do
+    i=$((i + 1))
+    if [ "$i" -lt "${#ACTIONS[@]}" ]; then
+      echo "    \"$(esc "$a")\","
+    else
+      echo "    \"$(esc "$a")\""
+    fi
+  done
+  echo "  ],"
+  echo "  \"pathHint\": \"ensure $BIN_DIR is on PATH before ~/.cargo/bin\","
+  echo "  \"serviceStart\": \"not auto-started; run: moraine service start\""
+  echo "}"
 else
   echo "Moraine $VERSION installed to $PREFIX"
   for a in "${ACTIONS[@]}"; do echo "  - $a"; done
@@ -222,7 +230,7 @@ else
   echo "Next:"
   echo "  export PATH=\"$BIN_DIR:\$PATH\"   # if needed; prefer before ~/.cargo/bin"
   echo "  moraine version --verbose"
-  echo "  moraine service start"
+  echo "  moraine setup"
   echo "  moraine doctor"
   echo "  moraine setup codex --project /path/to/repo"
   echo

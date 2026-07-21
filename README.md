@@ -33,9 +33,11 @@ Collaborative editing supports live inspection. The durable **run record** is th
 tar -xzf moraine-<version>-linux-x86_64.tar.gz
 cd moraine-<version>-linux-x86_64 && ./install.sh
 export PATH="$HOME/.local/bin:$PATH"   # before ~/.cargo/bin
-moraine service start
+moraine setup
 moraine doctor
 ```
+
+See **[docs/QUICKSTART.md](./docs/QUICKSTART.md)** and **[docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md)**.
 
 ## Setup (contributors)
 

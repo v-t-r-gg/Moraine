@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Remove Moraine suite product files; retain project ledgers and user spool by default.
+# No Python required.
 set -euo pipefail
 
 PREFIX="${MORAINE_PREFIX:-$HOME/.local}"
@@ -65,16 +66,27 @@ if [ -d "$CACHE" ]; then
   fi
 fi
 
+esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
 if [ "$JSON" = 1 ]; then
-  python3 - <<PY
-import json
-print(json.dumps({
-  "ok": True,
-  "dryRun": bool($DRY_RUN),
-  "actions": $(python3 -c 'import json,os; print(json.dumps("""'"$(printf '%s\n' "${ACTIONS[@]}")"'""".strip().splitlines()))'),
-  "retained": $(python3 -c 'import json; print(json.dumps("""'"$(printf '%s\n' "${RETAINED[@]}")"'""".strip().splitlines()))'),
-}, indent=2))
-PY
+  echo "{"
+  echo "  \"ok\": true,"
+  echo "  \"dryRun\": $([ "$DRY_RUN" = 1 ] && echo true || echo false),"
+  echo "  \"actions\": ["
+  i=0
+  for a in "${ACTIONS[@]}"; do
+    i=$((i + 1))
+    if [ "$i" -lt "${#ACTIONS[@]}" ]; then echo "    \"$(esc "$a")\","; else echo "    \"$(esc "$a")\""; fi
+  done
+  echo "  ],"
+  echo "  \"retained\": ["
+  i=0
+  for r in "${RETAINED[@]}"; do
+    i=$((i + 1))
+    if [ "$i" -lt "${#RETAINED[@]}" ]; then echo "    \"$(esc "$r")\","; else echo "    \"$(esc "$r")\""; fi
+  done
+  echo "  ]"
+  echo "}"
 else
   echo "Moraine product files removed from $PREFIX"
   for a in "${ACTIONS[@]}"; do echo "  - $a"; done

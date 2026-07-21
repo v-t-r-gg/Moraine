@@ -31,9 +31,15 @@ export interface HistoryEntry extends HistoryEntryMeta {
 export interface AppInfo {
   name: string;
   version: string;
+  gitCommit?: string;
   dataDir: string;
   historyDir: string;
   configDir: string;
+  /** C2 About / Diagnostics */
+  serviceOnline?: boolean;
+  serviceVersion?: string | null;
+  serviceCompatible?: boolean;
+  doctorHint?: string;
 }
 
 export interface FileChangedEvent {

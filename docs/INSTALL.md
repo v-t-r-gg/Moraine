@@ -1,6 +1,6 @@
 # Install Moraine (Linux x86_64)
 
-**Supported profile (C2):** x86_64 Linux with **systemd user** services. Validated development target: Arch Linux. Clean target: Ubuntu 24.04 LTS when exercised. Other distributions are unverified.
+**Supported profile (C2):** x86_64 Linux with **systemd user** services (glibc). Validated on **Arch Linux** (development host + clean temporary HOME) and **Ubuntu 24.04 LTS** userland (ubuntu-base rootfs via bubblewrap for install/CLI/service smoke; full graphical/WebKit and interactive `systemctl --user` login session still depend on a real desktop install). Other distributions are unverified.
 
 You do **not** need Rust, Cargo, Node.js, npm, or a Moraine source checkout for normal use.
 

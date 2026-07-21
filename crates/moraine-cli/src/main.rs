@@ -6,6 +6,7 @@ mod hook_codex;
 mod relay;
 mod run_cli;
 mod service_cmd;
+mod setup_cmd;
 mod suite;
 
 use std::io::{self, Read, Write};
@@ -268,10 +269,19 @@ On delivery failure, events are written to the local spool (exit 0)."
         cmd: ServiceSub,
     },
 
-    /// Configure first-reference integrations (project-scoped)
+    /// Post-install suite check (and optional project integrations)
     Setup {
+        /// Integration subcommand; omit for bare post-install setup
         #[command(subcommand)]
-        cmd: SetupSub,
+        cmd: Option<SetupSub>,
+        #[arg(long, global = true)]
+        json: bool,
+    },
+
+    /// Alias for project-scoped integrations (`setup codex`)
+    Integrate {
+        #[command(subcommand)]
+        cmd: IntegrateSub,
     },
 }
 
@@ -317,7 +327,27 @@ enum SetupSub {
         dry_run: bool,
         #[arg(long)]
         json: bool,
+        /// Validate without writing
+        #[arg(long)]
+        check: bool,
         /// Remove managed Moraine Codex configuration (with backups)
+        #[arg(long)]
+        remove: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum IntegrateSub {
+    /// Configure project-scoped Codex MCP + hooks (same as `setup codex`)
+    Codex {
+        #[arg(long)]
+        project: PathBuf,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        check: bool,
         #[arg(long)]
         remove: bool,
     },
@@ -412,7 +442,11 @@ fn run() -> Result<i32> {
             json,
         } => cmd_doctor(project, integration, json),
         Commands::Service { cmd } => cmd_service(cmd),
-        Commands::Setup { cmd } => cmd_setup(cmd),
+        Commands::Setup { cmd, json } => match cmd {
+            None => setup_cmd::setup_post_install(json),
+            Some(sub) => cmd_setup_codex(sub),
+        },
+        Commands::Integrate { cmd } => cmd_integrate(cmd),
     }?;
     Ok(code)
 }
@@ -537,10 +571,21 @@ fn cmd_doctor(project: Option<PathBuf>, integration: Option<String>, json: bool)
             report.build.product, report.build.version
         );
         for c in &report.checks {
-            let mark = if c.status == "ok" { "ok" } else { "FAIL" };
+            let mark = match c.status.as_str() {
+                "pass" | "ok" => "PASS",
+                "warn" => "WARN",
+                "info" => "INFO",
+                _ => "FAIL",
+            };
             println!("[{mark}] {}: {}", c.id, c.message);
+            if let (Some(o), Some(e)) = (&c.observed, &c.expected) {
+                if c.status == "fail" || c.status == "warn" {
+                    println!("       observed: {o}");
+                    println!("       expected: {e}");
+                }
+            }
             if let Some(r) = &c.remediation {
-                if c.status != "ok" {
+                if c.status == "fail" || c.status == "warn" {
                     println!("       → {r}");
                 }
             }
@@ -576,20 +621,43 @@ fn cmd_service(cmd: ServiceSub) -> Result<i32> {
     Ok(EXIT_OK)
 }
 
-fn cmd_setup(cmd: SetupSub) -> Result<i32> {
+fn cmd_setup_codex(cmd: SetupSub) -> Result<i32> {
     match cmd {
         SetupSub::Codex {
             project,
             dry_run,
             json,
+            check,
             remove,
-        } => {
-            if remove {
-                codex_setup::remove_codex(&project, dry_run, json)?;
-            } else {
-                codex_setup::setup_codex(&project, dry_run, json)?;
-            }
-        }
+        } => dispatch_codex_integration(&project, dry_run, json, check, remove),
+    }
+}
+
+fn cmd_integrate(cmd: IntegrateSub) -> Result<i32> {
+    match cmd {
+        IntegrateSub::Codex {
+            project,
+            dry_run,
+            json,
+            check,
+            remove,
+        } => dispatch_codex_integration(&project, dry_run, json, check, remove),
+    }
+}
+
+fn dispatch_codex_integration(
+    project: &std::path::Path,
+    dry_run: bool,
+    json: bool,
+    check: bool,
+    remove: bool,
+) -> Result<i32> {
+    if remove {
+        codex_setup::remove_codex(project, dry_run, json)?;
+    } else if check {
+        codex_setup::check_codex(project, json)?;
+    } else {
+        codex_setup::setup_codex(project, dry_run, json)?;
     }
     Ok(EXIT_OK)
 }

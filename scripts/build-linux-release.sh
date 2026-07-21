@@ -7,7 +7,15 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 VERSION="${MORAINE_VERSION:-$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')}"
-COMMIT="${MORAINE_GIT_COMMIT:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}"
+# Always embed the commit of the tree being packaged (dirty trees get -dirty suffix).
+if [ -n "${MORAINE_GIT_COMMIT:-}" ]; then
+  COMMIT="$MORAINE_GIT_COMMIT"
+else
+  COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+  if git -C "$ROOT" status --porcelain 2>/dev/null | grep -q .; then
+    COMMIT="${COMMIT}-dirty"
+  fi
+fi
 TARGET="${MORAINE_TARGET_TRIPLE:-x86_64-unknown-linux-gnu}"
 OUT_DIR="${MORAINE_RELEASE_DIR:-$ROOT/dist}"
 STAGE="$OUT_DIR/moraine-${VERSION}-linux-x86_64"

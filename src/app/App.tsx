@@ -402,8 +402,25 @@ export function App() {
       try {
         const info = await appInfo();
         if (cancelled) return;
+        const svc =
+          info.serviceOnline === undefined
+            ? null
+            : info.serviceOnline
+              ? info.serviceCompatible === false
+                ? `service ${info.serviceVersion ?? "?"} (mismatch)`
+                : `service ${info.serviceVersion ?? "ok"}`
+              : "service offline";
         setStatus(
-          [info.name, info.version, !isTauriRuntime() ? "browser" : null]
+          [
+            info.name,
+            info.version,
+            info.gitCommit && info.gitCommit !== "unknown"
+              ? info.gitCommit.slice(0, 7)
+              : null,
+            svc,
+            info.doctorHint ? "doctor: moraine doctor" : null,
+            !isTauriRuntime() ? "browser" : null,
+          ]
             .filter(Boolean)
             .join(" · "),
         );

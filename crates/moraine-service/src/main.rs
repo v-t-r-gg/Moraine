@@ -140,6 +140,11 @@ async fn main() -> Result<()> {
             .join("moraine-service/spool")
     });
     std::fs::create_dir_all(&spool_dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&spool_dir, std::fs::Permissions::from_mode(0o700));
+    }
     tokio::fs::create_dir_all(spool_dir.join("processed"))
         .await
         .ok();

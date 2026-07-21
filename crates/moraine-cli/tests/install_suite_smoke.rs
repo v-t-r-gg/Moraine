@@ -1,5 +1,6 @@
-//! C2 smoke: version/doctor do not create project state; suite paths are coherent.
+//! C2 smoke: version/doctor/setup; suite paths; Codex merge safety.
 
+use std::fs;
 use std::process::Command;
 use tempfile::tempdir;
 
@@ -9,12 +10,13 @@ fn moraine_bin() -> std::path::PathBuf {
     p
 }
 
+fn run(args: &[&str]) -> std::process::Output {
+    Command::new(moraine_bin()).args(args).output().unwrap()
+}
+
 #[test]
 fn version_json_has_build_identity() {
-    let out = Command::new(moraine_bin())
-        .args(["version", "--json"])
-        .output()
-        .unwrap();
+    let out = run(&["version", "--json"]);
     assert!(
         out.status.success(),
         "stderr={}",
@@ -28,14 +30,18 @@ fn version_json_has_build_identity() {
 
 #[test]
 fn doctor_json_runs_without_project() {
-    let out = Command::new(moraine_bin())
-        .args(["doctor", "--json"])
-        .output()
-        .unwrap();
-    // doctor may exit 1 if suite not installed; still valid JSON
+    let out = run(&["doctor", "--json"]);
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert!(v["checks"].as_array().unwrap().len() >= 3);
     assert_eq!(v["build"]["product"], "Moraine");
+    // statuses use pass/warn/fail/info
+    for c in v["checks"].as_array().unwrap() {
+        let st = c["status"].as_str().unwrap();
+        assert!(
+            matches!(st, "pass" | "warn" | "fail" | "info" | "ok"),
+            "unexpected status {st}"
+        );
+    }
 }
 
 #[test]
@@ -53,51 +59,138 @@ fn doctor_does_not_create_moraine_dir_in_temp() {
 }
 
 #[test]
-fn setup_codex_dry_run_json() {
+fn setup_codex_requires_initialized_project() {
     let dir = tempdir().unwrap();
-    let out = Command::new(moraine_bin())
-        .args([
-            "setup",
-            "codex",
-            "--project",
-            dir.path().to_str().unwrap(),
-            "--dry-run",
-            "--json",
-        ])
-        .output()
-        .unwrap();
+    let out = run(&[
+        "setup",
+        "codex",
+        "--project",
+        dir.path().to_str().unwrap(),
+        "--json",
+    ]);
     assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
+        !out.status.success(),
+        "must fail without project init: {}",
+        String::from_utf8_lossy(&out.stdout)
     );
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["ok"], true);
-    assert_eq!(v["dryRun"], true);
-    assert!(!dir.path().join(".codex").exists());
 }
 
 #[test]
-fn setup_codex_writes_config_and_hooks() {
+fn setup_codex_merges_hooks_and_preserves_user() {
     let dir = tempdir().unwrap();
-    let out = Command::new(moraine_bin())
-        .args([
-            "setup",
-            "codex",
-            "--project",
-            dir.path().to_str().unwrap(),
-            "--json",
-        ])
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let cfg = std::fs::read_to_string(dir.path().join(".codex/config.toml")).unwrap();
+    let p = dir.path().to_str().unwrap();
+    let init = run(&["project", "init", p, "--json"]);
+    assert!(init.status.success(), "{}", out_both(&init));
+
+    // Pre-seed unrelated hooks + config
+    let codex = dir.path().join(".codex");
+    fs::create_dir_all(&codex).unwrap();
+    fs::write(
+        codex.join("config.toml"),
+        "model = \"gpt-test\"\n\n[mcp_servers.other]\ncommand = \"echo\"\n",
+    )
+    .unwrap();
+    fs::write(
+        codex.join("hooks.json"),
+        r#"{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "echo user-hook" }] }
+    ]
+  }
+}"#,
+    )
+    .unwrap();
+
+    let out = run(&["setup", "codex", "--project", p, "--json"]);
+    assert!(out.status.success(), "{}", out_both(&out));
+
+    let cfg = fs::read_to_string(codex.join("config.toml")).unwrap();
+    assert!(cfg.contains("model = \"gpt-test\""));
+    assert!(cfg.contains("[mcp_servers.other]"));
     assert!(cfg.contains("[mcp_servers.moraine]"));
-    assert!(cfg.contains("mcp"));
-    let hooks = std::fs::read_to_string(dir.path().join(".codex/hooks.json")).unwrap();
-    assert!(hooks.contains("hook-codex"));
+    assert!(cfg.contains("# --- Moraine (managed) ---"));
+
+    let hooks: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(codex.join("hooks.json")).unwrap()).unwrap();
+    let ups = hooks["hooks"]["UserPromptSubmit"].as_array().unwrap();
+    assert!(
+        ups.iter().any(|g| g["hooks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|h| h["command"] == "echo user-hook")),
+        "user hook must survive merge: {hooks}"
+    );
+    assert!(
+        ups.iter().any(|g| g["hooks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|h| h["command"].as_str().unwrap_or("").contains("hook-codex"))),
+        "managed hook must be present: {hooks}"
+    );
+
+    // Idempotent second run
+    let out2 = run(&["setup", "codex", "--project", p, "--json"]);
+    assert!(out2.status.success());
+    let hooks2: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(codex.join("hooks.json")).unwrap()).unwrap();
+    let managed_count = hooks2["hooks"]["UserPromptSubmit"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|g| {
+            g["hooks"].as_array().unwrap().iter().any(|h| {
+                h.get("moraine-managed")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                    || h["command"].as_str().unwrap_or("").contains("hook-codex")
+            })
+        })
+        .count();
+    assert_eq!(managed_count, 1, "must not duplicate managed handlers");
+
+    // Remove managed only
+    let rm = run(&["setup", "codex", "--project", p, "--remove", "--json"]);
+    assert!(
+        rm.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rm.stdout)
+    );
+    let cfg_after = fs::read_to_string(codex.join("config.toml")).unwrap();
+    assert!(cfg_after.contains("[mcp_servers.other]"));
+    assert!(!cfg_after.contains("[mcp_servers.moraine]"));
+    let hooks_after: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(codex.join("hooks.json")).unwrap()).unwrap();
+    let ups_after = hooks_after["hooks"]["UserPromptSubmit"].as_array().unwrap();
+    assert!(ups_after.iter().any(|g| g["hooks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|h| h["command"] == "echo user-hook")));
+    assert!(!serde_json::to_string(&hooks_after)
+        .unwrap()
+        .contains("hook-codex"));
+}
+
+#[test]
+fn setup_bare_json() {
+    let out = run(&["setup", "--json"]);
+    // may warn if suite not installed; still returns JSON
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| {
+        panic!(
+            "expected json stdout: {}",
+            String::from_utf8_lossy(&out.stdout)
+        )
+    });
+    assert!(v.get("cli").is_some() || v.get("next").is_some());
+}
+
+fn out_both(o: &std::process::Output) -> String {
+    format!(
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&o.stdout),
+        String::from_utf8_lossy(&o.stderr)
+    )
 }

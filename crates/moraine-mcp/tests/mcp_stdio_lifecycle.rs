@@ -94,14 +94,13 @@ impl McpClient {
     }
 
     fn call_tool(&mut self, name: &str, arguments: Value) -> Value {
-        let resp = self.request(
+        self.request(
             "tools/call",
             json!({
                 "name": name,
                 "arguments": arguments,
             }),
-        );
-        resp
+        )
     }
 }
 

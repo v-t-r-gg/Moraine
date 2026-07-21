@@ -275,7 +275,7 @@ fn m3_evidence_capture_full_flow() {
     // 8. Replay deduplication check
     assert!(event_already_seen(&spool, "ev-cmd3-finish"));
     let replay_path = spool.join("event-id-ev-cmd3-finish.json");
-    fs::write(&replay_path, &serde_json::to_vec(&cmd3_finish).unwrap()).unwrap();
+    fs::write(&replay_path, serde_json::to_vec(&cmd3_finish).unwrap()).unwrap();
     rt.block_on(process_spool_file(&replay_path, &processed, &failed))
         .unwrap();
 

@@ -8,7 +8,6 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-const MORAINE_DIR: &str = ".moraine";
 /// Maximum accepted event payload (bytes).
 pub const MAX_EVENT_BYTES: usize = 1024 * 1024;
 /// Soft cap on pending event files in the spool root.
@@ -553,39 +552,101 @@ pub async fn rebuild_index(
     use serde_json::json;
     use std::fs;
 
+    // Preserve monotonic revision when rewriting the rebuildable cache only.
+    let prev_revision = read_index_revision_from_file(&out_file);
+    let roots = moraine_core::scan_project_roots(&base, max_depth);
     let mut projects = vec![];
-    let mut stack = vec![(base.clone(), 0usize)];
-    while let Some((cur, depth)) = stack.pop() {
-        if depth > max_depth {
-            continue;
-        }
-        if cur.join(MORAINE_DIR).is_dir() {
-            let proj = moraine_core::resolve_existing_project(Some(&cur)).ok();
-            let runs = cur.join(MORAINE_DIR).join("runs");
-            let run_count = count_run_records(&runs);
-            projects.push(json!({
-                "root": cur.display().to_string(),
-                "run_count": run_count,
-                "meta": proj.map(|m| json!({"id": m.project_id, "created": m.created}))
-            }));
-            continue;
-        }
-        if let Ok(entries) = fs::read_dir(&cur) {
-            for e in entries.flatten() {
-                let p = e.path();
-                if p.is_dir() {
-                    stack.push((p, depth + 1));
-                }
+    for root in roots {
+        match moraine_core::summarize_project(&root) {
+            Ok(summary) => {
+                projects.push(json!({
+                    "projectId": summary.project_id.to_string(),
+                    "name": summary.name,
+                    "root": summary.root_path,
+                    "rootPath": summary.root_path,
+                    "available": summary.available,
+                    "run_count": summary.run_counts.recent,
+                    "runCounts": summary.run_counts,
+                    "openFindingCount": summary.open_finding_count,
+                    "lastActivityAt": summary.last_activity_at,
+                    "warning": summary.warning,
+                    "meta": {
+                        "id": summary.project_id.to_string(),
+                        "created": summary.available
+                    }
+                }));
+            }
+            Err(e) => {
+                projects.push(json!({
+                    "projectId": null,
+                    "name": root.file_name().and_then(|n| n.to_str()).unwrap_or("unknown"),
+                    "root": root.display().to_string(),
+                    "rootPath": root.display().to_string(),
+                    "available": false,
+                    "run_count": 0,
+                    "warning": e.to_string(),
+                    "meta": null
+                }));
             }
         }
     }
 
-    let doc = json!({"projects": projects, "scanned_at": chrono::Utc::now()});
+    let revision = prev_revision.saturating_add(1);
+    let doc = json!({
+        "schemaVersion": 1,
+        "revision": revision,
+        "projects": projects,
+        "scanned_at": chrono::Utc::now(),
+        "scannedAt": chrono::Utc::now(),
+    });
     let raw = serde_json::to_vec_pretty(&doc)?;
+    if let Some(parent) = out_file.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
     let tmp = out_file.with_extension("json.tmp");
     tokio::fs::write(&tmp, &raw).await?;
     tokio::fs::rename(&tmp, &out_file).await?;
     Ok(())
+}
+
+fn read_index_revision_from_file(path: &Path) -> u64 {
+    let raw = std::fs::read_to_string(path).ok();
+    raw.and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|v| v.get("revision").and_then(|r| r.as_u64()))
+        .unwrap_or(0)
+}
+
+/// List run summaries for a project root (index/cache helper; read-only on bundles).
+pub fn list_project_runs(project_root: &Path) -> Result<Vec<moraine_core::RunSummary>> {
+    let resolved = moraine_core::resolve_existing_project(Some(project_root))?;
+    Ok(moraine_core::list_run_summaries(
+        &resolved.project_root,
+        resolved.project_id,
+    ))
+}
+
+/// Resolve project by UUID from the rebuildable index document.
+pub fn find_project_root_in_index(spool_dir: &Path, project_id: &str) -> Option<PathBuf> {
+    let doc = read_index_projects(spool_dir)?;
+    let projects = doc.get("projects")?.as_array()?;
+    for p in projects {
+        let id = p
+            .get("projectId")
+            .or_else(|| p.pointer("/meta/id"))
+            .and_then(|v| v.as_str());
+        if id == Some(project_id) {
+            let root = p
+                .get("rootPath")
+                .or_else(|| p.get("root"))
+                .and_then(|v| v.as_str())?;
+            return Some(PathBuf::from(root));
+        }
+    }
+    None
+}
+
+pub fn index_revision(spool_dir: &Path) -> u64 {
+    read_index_revision_from_file(&spool_dir.join("index.json"))
 }
 
 /// Count canonical run Markdown records, excluding sidecars and lock files.

@@ -1,5 +1,9 @@
 use anyhow::Result;
-use axum::{extract::State, routing::get, Json, Router};
+use axum::{
+    extract::{Path as AxumPath, State},
+    routing::{get, post},
+    Json, Router,
+};
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -12,7 +16,6 @@ use tokio::{
 };
 use tracing::{error, info};
 
-const MORAINE_DIR: &str = ".moraine";
 const MAX_SPOOL_FILES: usize = moraine_service::MAX_PENDING_EVENTS;
 
 #[derive(Clone)]
@@ -158,6 +161,10 @@ async fn main() -> Result<()> {
         .route("/health", get(|| async { Json(Health { status: "ok" }) }))
         .route("/status", get(handle_status))
         .route("/projects", get(handle_projects))
+        .route("/projects/{project_id}/runs", get(handle_project_runs))
+        .route("/runs/{run_id}", get(handle_run_detail))
+        .route("/index/rebuild", post(handle_rebuild))
+        .route("/projects/{project_id}/rescan", post(handle_rescan_project))
         .with_state(state);
     let listener = TcpListener::bind(http_addr).await?;
 
@@ -251,8 +258,10 @@ async fn handle_status(State(state): State<AppState>) -> Json<Value> {
                 .ok()
                 .map(|d| d.as_secs())
         });
+    let revision = moraine_service::index_revision(&state.spool_dir);
     Json(json!({
         "status": "ok",
+        "online": true,
         "spoolDir": state.spool_dir.display().to_string(),
         "spool": {
             "pending": pending,
@@ -260,6 +269,8 @@ async fn handle_status(State(state): State<AppState>) -> Json<Value> {
             "failed": failed,
         },
         "indexMtimeUnix": index_mtime,
+        "revision": revision,
+        "indexRevision": revision,
     }))
 }
 
@@ -267,31 +278,133 @@ async fn handle_projects(State(state): State<AppState>) -> Json<Value> {
     if let Some(doc) = moraine_service::read_index_projects(&state.spool_dir) {
         return Json(doc);
     }
+    // Fallback one-shot scan (does not write a second durable index here).
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let roots = moraine_core::scan_project_roots(&cwd, 4);
     let mut projects = vec![];
-    let mut dirs = vec![cwd];
-    while let Some(d) = dirs.pop() {
-        if d.join(MORAINE_DIR).is_dir() {
-            let meta = moraine_core::resolve_existing_project(Some(&d)).ok();
-            let runs = d.join(MORAINE_DIR).join("runs");
-            let run_count = moraine_service::count_run_records(&runs);
+    for d in roots {
+        if let Ok(s) = moraine_core::summarize_project(&d) {
             projects.push(json!({
-                "root": d.display().to_string(),
-                "run_count": run_count,
-                "meta": meta.map(|m| json!({"id": m.project_id, "created": m.created}))
+                "projectId": s.project_id.to_string(),
+                "name": s.name,
+                "root": s.root_path,
+                "rootPath": s.root_path,
+                "available": s.available,
+                "run_count": s.run_counts.recent,
+                "runCounts": s.run_counts,
+                "openFindingCount": s.open_finding_count,
+                "lastActivityAt": s.last_activity_at,
+                "warning": s.warning,
             }));
-            continue;
         }
-        if let Ok(entries) = std::fs::read_dir(&d) {
-            for e in entries.flatten().take(20) {
-                let p = e.path();
-                if p.is_dir() {
-                    dirs.push(p);
+    }
+    Json(json!({
+        "projects": projects,
+        "revision": 0,
+        "fallback": true,
+    }))
+}
+
+async fn handle_project_runs(
+    State(state): State<AppState>,
+    AxumPath(project_id): AxumPath<String>,
+) -> Json<Value> {
+    let root =
+        moraine_service::find_project_root_in_index(&state.spool_dir, &project_id).or_else(|| {
+            // Fallback: scan cwd
+            let cwd = std::env::current_dir().ok()?;
+            moraine_core::scan_project_roots(&cwd, 4)
+                .into_iter()
+                .find(|p| {
+                    moraine_core::resolve_existing_project(Some(p))
+                        .map(|r| r.project_id.to_string() == project_id)
+                        .unwrap_or(false)
+                })
+        });
+    let Some(root) = root else {
+        return Json(json!({
+            "error": { "code": "project_not_found", "projectId": project_id },
+            "runs": []
+        }));
+    };
+    match moraine_service::list_project_runs(&root) {
+        Ok(runs) => Json(json!({
+            "projectId": project_id,
+            "rootPath": root.display().to_string(),
+            "runs": runs,
+            "revision": moraine_service::index_revision(&state.spool_dir),
+        })),
+        Err(e) => Json(json!({
+            "error": { "code": "list_failed", "message": e.to_string() },
+            "projectId": project_id,
+            "runs": []
+        })),
+    }
+}
+
+async fn handle_run_detail(
+    State(state): State<AppState>,
+    AxumPath(run_id): AxumPath<String>,
+) -> Json<Value> {
+    let Ok(uid) = uuid::Uuid::parse_str(&run_id) else {
+        return Json(json!({ "error": { "code": "invalid_run_id", "runId": run_id } }));
+    };
+    // Search indexed projects for the run (read-only).
+    if let Some(doc) = moraine_service::read_index_projects(&state.spool_dir) {
+        if let Some(projects) = doc.get("projects").and_then(|p| p.as_array()) {
+            for p in projects {
+                let root = p
+                    .get("rootPath")
+                    .or_else(|| p.get("root"))
+                    .and_then(|v| v.as_str())
+                    .map(PathBuf::from);
+                let Some(root) = root else { continue };
+                if let Ok((md, _meta)) = moraine_core::find_run_by_id(&root, uid) {
+                    let pid = moraine_core::resolve_existing_project(Some(&root))
+                        .map(|r| r.project_id)
+                        .unwrap_or(uuid::Uuid::nil());
+                    let detail = moraine_core::load_run_detail(&md, pid);
+                    return Json(json!({
+                        "run": detail,
+                        "projectRoot": root.display().to_string()
+                    }));
                 }
             }
         }
     }
-    Json(json!({"projects": projects}))
+    Json(json!({ "error": { "code": "run_not_found", "runId": run_id } }))
+}
+
+async fn handle_rebuild(State(state): State<AppState>) -> Json<Value> {
+    let base = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let out = state.spool_dir.join("index.json");
+    let before = moraine_service::index_revision(&state.spool_dir);
+    match moraine_service::rebuild_index(base, out, 6).await {
+        Ok(()) => {
+            let after = moraine_service::index_revision(&state.spool_dir);
+            let doc = moraine_service::read_index_projects(&state.spool_dir);
+            Json(json!({
+                "ok": true,
+                "revisionBefore": before,
+                "revision": after,
+                "projectCount": doc.as_ref()
+                    .and_then(|d| d.get("projects"))
+                    .and_then(|p| p.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0),
+            }))
+        }
+        Err(e) => Json(json!({ "ok": false, "error": e.to_string() })),
+    }
+}
+
+async fn handle_rescan_project(
+    State(state): State<AppState>,
+    AxumPath(project_id): AxumPath<String>,
+) -> Json<Value> {
+    // Rescan is a full index rebuild that re-reads project roots (index-only mutation).
+    let _ = project_id;
+    handle_rebuild(State(state)).await
 }
 
 async fn unix_listener_loop(

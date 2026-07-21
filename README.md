@@ -25,14 +25,26 @@ The desktop default is a **projects → runs → structured ledger** workspace, 
 
 Collaborative editing supports live inspection. The durable **run record** is the center of the product, not "another multiplayer Markdown editor."
 
-## Setup
+## Setup (users)
+
+**Stranger-safe Linux install** (no Rust/Node/source checkout): see **[docs/INSTALL.md](./docs/INSTALL.md)**.
+
+```bash
+tar -xzf moraine-<version>-linux-x86_64.tar.gz
+cd moraine-<version>-linux-x86_64 && ./install.sh
+export PATH="$HOME/.local/bin:$PATH"   # before ~/.cargo/bin
+moraine service start
+moraine doctor
+```
+
+## Setup (contributors)
 
 ```bash
 ./scripts/setup-arch.sh   # Arch: rust, node; webkit for desktop
 npm install
 ```
 
-CLI and server do not require WebKit. Desktop does.
+CLI and server do not require WebKit. Desktop does. Development scripts are **not** the normal user path.
 
 **Rust MSRV:** `1.88` (workspace `rust-version`). Required by `rmcp` 2.2 (edition 2024) and `rmcp-macros` → `darling`. CI runs an MSRV job.
 

@@ -16,10 +16,21 @@ Re-check keys if your Codex build differs.
 
 ## Local service (required for desktop-closed capture)
 
+**Preferred (installed suite):**
+
 ```bash
-cargo install --path crates/moraine-service
-moraine-service install   # writes systemd --user unit
-moraine-service start
+# after ./install.sh from a release bundle — see docs/INSTALL.md
+moraine service install
+moraine service start
+moraine doctor
+moraine setup codex --project /absolute/path/to/project
+```
+
+**Contributors only (source checkout):**
+
+```bash
+cargo build --release -p moraine-service -p moraine-cli
+# prefer suite install over cargo install to avoid PATH drift
 ```
 
 **Transport model:**

@@ -31,7 +31,7 @@ High-level direction. Product model: [VISION.md](./VISION.md), [ARCHITECTURE.md]
 
 ## Now
 
-* **C2 — Stranger-safe Linux installation and first reference-integration pack** (Codex is the current concrete adapter)
+* **C2 — Stranger-safe Linux installation and first reference-integration pack** (Codex is the current concrete adapter) — *in progress on `feat/stranger-safe-install-reference-pack`*
 * Keep CI green
 
 ## Next (bounded milestones)

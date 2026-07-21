@@ -17,8 +17,11 @@ Repo: https://github.com/v-t-r-gg/Moraine
 |---------|-----|------------|
 | CLI (`moraine`) | Agents, scripts, humans in a terminal | Agent run protocol, share room URL, status, local history helpers |
 | MCP (`moraine mcp`) | Coding agents (e.g. Codex) | Same protocol over local STDIO |
-| GUI (Tauri + React / `npm run dev`) | Humans | Inspect run records, comments, suggestions, findings, human notes, host Save |
-| Markdown + sidecar | Both | Durable narrative + structured ledger |
+| Local service (`moraine-service`) | Hooks / adapters | Capture runtime + **rebuildable noncanonical** project/run index |
+| GUI (Tauri + React / `npm run dev`) | Humans | **Ledger workspace**: discover projects/runs, inspect structured timeline, findings, append-only observations; Legacy document mode only for free-form Markdown |
+| Markdown + sidecar | Both | Durable narrative + structured ledger (canonical run data) |
+
+The desktop default is a **projects → runs → structured ledger** workspace, not a free-form document editor. Protocol runs are append-only (observations, amendments, supersessions, redactions)—not editable Human notes + Save. Capture continues while the desktop is closed. The service index is a cache only; run bundles remain authoritative.
 
 Collaborative editing supports live inspection. The durable **run record** is the center of the product, not "another multiplayer Markdown editor."
 
@@ -57,8 +60,8 @@ Intended loop:
 1. An agent performs a **bounded unit of work** (agent run).
 2. The agent starts a run and records sparse checkpoints (CLI or MCP)—no per-task Moraine prompt ceremony after one-time setup.
 3. The record may **link** or capture evidence (logs, PR URLs, command results). Provenance is shown explicitly.
-4. A human opens the record in Moraine (live via share URL, or later by opening the file).
-5. The human comments, challenges claims, suggests text changes, edits **Human notes**, and Saves when host.
+4. A human launches the desktop (no path required): discovers projects and runs from the local index, or opens a known path.
+5. On a protocol run, the human inspects the structured ledger timeline, findings, and evidence; adds **append-only observations** or other core-backed append-only ops—not free-form Human notes rewrites.
 6. Files remain for **hindsight review** and for optional Git tracking by the user.
 
 External systems (PR, CI, the agent session) retain responsibility for merge and disposition.
@@ -131,16 +134,16 @@ moraine run start --objective "Fix flaky test" --idempotency-key "run-1" --json
 moraine share run-record.md --json
 ```
 
-### Human GUI review
+### Human GUI review (ledger workspace)
 
-1. Start UI (`npm run tauri:dev` or `npm run dev`).
-2. Open a run record (dialog, `MORAINE_OPEN`, or join `?room=`).
-3. Read the narrative. Select text → **Comment** or **Suggest**.
-4. **Review** sidebar: resolve comments; Accept/Reject suggestions.
-5. Edit **Human notes** when present. **Save** as host: writes `.md` and `file.md.moraine.json`.
-6. Reopen later for hindsight; marks rehydrate from quote text when the text still matches.
+1. Start UI (`npm run tauri:dev` or `npm run dev`) — default shell is **Projects → Runs → Ledger**, not a welcome Markdown file.
+2. Select a project and run, or open a path (`MORAINE_OPEN`, Open dialog, or join `?room=`).
+3. Inspect the structured timeline (checkpoints, evidence, findings, observations, amendments).
+4. Add append-only observations / findings via structured actions (protocol runs).
+5. **Legacy document mode** only: free-form Markdown edit + host Save for non-protocol documents.
+6. Rebuild or rescan the local discovery index without mutating run bundles. Capture keeps working with the desktop closed.
 
-Host save: autosave when solo; paused when remote peers are present; explicit Save always.
+Host save for legacy free-form documents: autosave when solo; paused when remote peers are present; explicit Save always.
 
 ## Why Moraine
 

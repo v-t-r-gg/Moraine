@@ -131,6 +131,73 @@ export async function discoveryAddExistingProject(path: string): Promise<Project
   return invoke("discovery_add_existing_project", { path });
 }
 
+/**
+ * Bounded revision polling for discovery index changes (no per-run FS watchers).
+ * Calls `onChange` when `status.revision` increases or online flag flips.
+ * Returns an unsubscribe that clears the timer (Strict Mode / unmount safe).
+ */
+export function subscribeDiscoveryRevision(
+  onChange: (status: DiscoveryStatusDto) => void,
+  options?: { intervalMs?: number; signal?: AbortSignal },
+): () => void {
+  const intervalMs = options?.intervalMs ?? 2500;
+  let lastRevision = -1;
+  let lastOnline: boolean | null = null;
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  const tick = async () => {
+    if (stopped || options?.signal?.aborted) return;
+    try {
+      const st = await discoveryStatus();
+      if (stopped) return;
+      const changed =
+        st.revision !== lastRevision || lastOnline === null || st.online !== lastOnline;
+      if (changed) {
+        lastRevision = st.revision;
+        lastOnline = st.online;
+        onChange(st);
+      }
+    } catch {
+      if (!stopped && lastOnline !== false) {
+        lastOnline = false;
+        onChange({
+          online: false,
+          revision: lastRevision < 0 ? 0 : lastRevision,
+          mode: "error",
+          message: "discovery status probe failed",
+        });
+      }
+    } finally {
+      if (!stopped && !options?.signal?.aborted) {
+        timer = setTimeout(() => {
+          void tick();
+        }, intervalMs);
+      }
+    }
+  };
+
+  void tick();
+
+  const onAbort = () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+  };
+  options?.signal?.addEventListener("abort", onAbort, { once: true });
+
+  return () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    options?.signal?.removeEventListener("abort", onAbort);
+  };
+}
+
+/** One-shot status + revision snapshot for callers that prefer polling themselves. */
+export async function discoveryRevision(): Promise<number> {
+  const st = await discoveryStatus();
+  return st.revision;
+}
+
 function browserDiscoveryStub<T>(cmd: string, _args?: Record<string, unknown>): T {
   switch (cmd) {
     case "discovery_status":

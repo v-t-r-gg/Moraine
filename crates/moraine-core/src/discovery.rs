@@ -511,8 +511,10 @@ pub fn build_timeline(meta: &RunMeta, agent: &AgentRunState) -> Vec<TimelineEntr
         let ts = cp.created_at.to_rfc3339();
         let current = current_checkpoint_claim(agent, cp.op_id);
         let redacted = is_redacted(agent, cp.op_id);
+        // Ordinary UI must not re-expose redacted claim text (sidecar may retain
+        // prior content for local integrity only).
         let summary = if redacted {
-            format!("Checkpoint (redacted): {}", truncate(&current, 100))
+            "Checkpoint (redacted): [REDACTED]".into()
         } else if current != cp.summary {
             format!(
                 "Checkpoint: {} → {}",
@@ -522,42 +524,61 @@ pub fn build_timeline(meta: &RunMeta, agent: &AgentRunState) -> Vec<TimelineEntr
         } else {
             format!("Checkpoint: {}", truncate(&cp.summary, 120))
         };
-        let mut detail = format!("Original claim:\n{}\n", cp.summary);
-        for op in &agent.append_only_ops {
-            if op.target_id != Some(cp.op_id) {
-                continue;
-            }
-            if op.target_kind.as_deref() != Some("checkpoint") {
-                continue;
-            }
-            match op.relationship {
-                LedgerRelationship::Amended => {
-                    detail.push_str(&format!(
-                        "\nAmendment ({reason}):\nPrior: {prior}\nNew: {new}\n",
-                        reason = op.reason,
-                        prior = op.previous_content.as_deref().unwrap_or("—"),
-                        new = op.new_content.as_deref().unwrap_or("")
-                    ));
+        let detail = if redacted {
+            let reason = agent
+                .append_only_ops
+                .iter()
+                .rev()
+                .find(|op| {
+                    op.target_id == Some(cp.op_id)
+                        && op.relationship == LedgerRelationship::Redacted
+                })
+                .map(|op| op.reason.as_str())
+                .unwrap_or("redacted");
+            format!(
+                "Original claim:\n[REDACTED]\n\nRedaction (explicit): {reason}\n\
+Prior claim text retained in structured ledger (not shown in ordinary UI).\n\n\
+Current statement:\n[REDACTED]\n"
+            )
+        } else {
+            let mut detail = format!("Original claim:\n{}\n", cp.summary);
+            for op in &agent.append_only_ops {
+                if op.target_id != Some(cp.op_id) {
+                    continue;
                 }
-                LedgerRelationship::Superseded => {
-                    detail.push_str(&format!(
-                        "\nSupersession: {}\n{}\n",
-                        op.reason,
-                        op.new_content.as_deref().unwrap_or("")
-                    ));
+                if op.target_kind.as_deref() != Some("checkpoint") {
+                    continue;
                 }
-                LedgerRelationship::Redacted => {
-                    detail.push_str(&format!(
-                        "\nRedaction (explicit): {}\nPrior content retained in ledger.\n",
-                        op.reason
-                    ));
+                match op.relationship {
+                    LedgerRelationship::Amended => {
+                        detail.push_str(&format!(
+                            "\nAmendment ({reason}):\nPrior: {prior}\nNew: {new}\n",
+                            reason = op.reason,
+                            prior = op.previous_content.as_deref().unwrap_or("—"),
+                            new = op.new_content.as_deref().unwrap_or("")
+                        ));
+                    }
+                    LedgerRelationship::Superseded => {
+                        detail.push_str(&format!(
+                            "\nSupersession: {}\n{}\n",
+                            op.reason,
+                            op.new_content.as_deref().unwrap_or("")
+                        ));
+                    }
+                    LedgerRelationship::Redacted => {
+                        detail.push_str(&format!(
+                            "\nRedaction (explicit): {}\nPrior content retained in ledger.\n",
+                            op.reason
+                        ));
+                    }
+                    LedgerRelationship::Observation => {}
                 }
-                LedgerRelationship::Observation => {}
             }
-        }
-        if current != cp.summary {
-            detail.push_str(&format!("\nCurrent statement:\n{current}\n"));
-        }
+            if current != cp.summary {
+                detail.push_str(&format!("\nCurrent statement:\n{current}\n"));
+            }
+            detail
+        };
         entries.push(TimelineEntry {
             id: format!("checkpoint:{}", cp.op_id),
             timestamp: ts.clone(),
@@ -679,9 +700,18 @@ pub fn build_timeline(meta: &RunMeta, agent: &AgentRunState) -> Vec<TimelineEntr
                 format!("Redaction (explicit): {}", truncate(&op.reason, 100))
             }
         };
+        // If the target was redacted, withhold prior/new claim text in ordinary UI.
+        let target_redacted = op
+            .target_id
+            .map(|id| is_redacted(agent, id))
+            .unwrap_or(false);
         let detail = match op.relationship {
             LedgerRelationship::Redacted => Some(format!(
                 "Reason: {}\nPrior content retained in structured ledger (not shown in ordinary UI).",
+                op.reason
+            )),
+            _ if target_redacted => Some(format!(
+                "Reason: {}\nPrior/new content withheld (target redacted; not shown in ordinary UI).",
                 op.reason
             )),
             _ => Some(format!(
@@ -856,8 +886,9 @@ pub fn filter_runs_ext<'a>(
 mod tests {
     use super::*;
     use crate::{
-        init_project, run_amend, run_checkpoint, run_start, ActorCategory, AmendRequest,
-        CheckpointInput, RunStartRequest,
+        entry_redact, entry_supersede, init_project, run_amend, run_checkpoint, run_start,
+        ActorCategory, AmendRequest, CheckpointInput, RedactRequest, RunStartRequest,
+        SupersedeRequest, SCHEMA_VERSION,
     };
     use std::path::Path;
     use tempfile::tempdir;
@@ -993,5 +1024,193 @@ mod tests {
         let b = a.clone();
         let d = dedupe_project_roots(vec![a, b]);
         assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn redaction_hides_sensitive_claim_in_ordinary_ui() {
+        let dir = tempdir().unwrap();
+        let (pid, root, md, cp_id) = setup_run(dir.path());
+        let secret = "All concurrency tests pass.";
+        let run_id = load_run_meta_readonly(&md).unwrap().unwrap().run.id;
+        entry_redact(
+            Some(&root),
+            run_id,
+            RedactRequest {
+                target_id: cp_id,
+                target_kind: "checkpoint".into(),
+                reason: "contains secrets".into(),
+                actor_category: ActorCategory::Human,
+            },
+        )
+        .unwrap();
+
+        let detail = load_run_detail(&md, pid);
+        let cp = detail
+            .timeline
+            .iter()
+            .find(|e| e.kind == "checkpoint")
+            .expect("checkpoint entry");
+        assert!(
+            cp.summary.contains("[REDACTED]"),
+            "summary should mark redacted: {}",
+            cp.summary
+        );
+        let d = cp.detail.as_deref().unwrap_or("");
+        assert!(
+            !d.contains(secret),
+            "ordinary UI detail must not leak original claim: {d}"
+        );
+        assert!(d.contains("[REDACTED]"), "detail: {d}");
+        assert!(d.contains("Redaction (explicit)"), "detail: {d}");
+
+        // Append-only redaction entry also withholds prior content.
+        let red = detail
+            .timeline
+            .iter()
+            .find(|e| e.kind == "redaction")
+            .expect("redaction entry");
+        let rd = red.detail.as_deref().unwrap_or("");
+        assert!(!rd.contains(secret), "redaction entry leaked secret: {rd}");
+    }
+
+    #[test]
+    fn sequential_amend_and_supersession_on_timeline() {
+        let dir = tempdir().unwrap();
+        let (pid, root, md, cp_id) = setup_run(dir.path());
+        let run_id = load_run_meta_readonly(&md).unwrap().unwrap().run.id;
+        let original = "All concurrency tests pass.";
+        run_amend(
+            Some(&root),
+            run_id,
+            AmendRequest {
+                target_id: cp_id,
+                target_kind: "checkpoint".into(),
+                reason: "incomplete".into(),
+                new_content: "Claim after first amend.".into(),
+                actor_category: ActorCategory::Agent,
+            },
+        )
+        .unwrap();
+        run_amend(
+            Some(&root),
+            run_id,
+            AmendRequest {
+                target_id: cp_id,
+                target_kind: "checkpoint".into(),
+                reason: "still incomplete".into(),
+                new_content: "Claim after second amend.".into(),
+                actor_category: ActorCategory::Agent,
+            },
+        )
+        .unwrap();
+        entry_supersede(
+            Some(&root),
+            run_id,
+            SupersedeRequest {
+                target_id: cp_id,
+                target_kind: "checkpoint".into(),
+                reason: "replace claim".into(),
+                new_content: "Superseding claim text.".into(),
+                actor_category: ActorCategory::Agent,
+            },
+        )
+        .unwrap();
+
+        let detail = load_run_detail(&md, pid);
+        let cp = detail
+            .timeline
+            .iter()
+            .find(|e| e.kind == "checkpoint")
+            .unwrap();
+        let d = cp.detail.as_ref().unwrap();
+        assert!(d.contains("Original claim"), "{d}");
+        assert!(d.contains(original), "original must remain visible: {d}");
+        assert!(d.contains("Claim after first amend."), "{d}");
+        assert!(d.contains("Claim after second amend."), "{d}");
+        assert!(
+            d.contains("Superseding claim text.") || d.contains("Supersession"),
+            "{d}"
+        );
+        assert!(
+            detail
+                .timeline
+                .iter()
+                .filter(|e| e.kind == "amendment")
+                .count()
+                >= 2,
+            "expected two amendment entries"
+        );
+        assert!(detail.timeline.iter().any(|e| e.kind == "supersession"));
+        // Current claim after sequential amend+supersede.
+        assert!(
+            d.contains("Current statement:\nSuperseding claim text.")
+                || cp.summary.contains("Superseding"),
+            "current should be superseding text: summary={} detail={}",
+            cp.summary,
+            d
+        );
+    }
+
+    #[test]
+    fn unsupported_schema_represented() {
+        let dir = tempdir().unwrap();
+        let md = dir.path().join("future.md");
+        fs::write(&md, "# x\n").unwrap();
+        let side = moraine_sidecar_path(&md);
+        let raw = format!(
+            r#"{{"schemaVersion":{},"run":{{"id":"00000000-0000-0000-0000-000000000099","createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}},"comments":[],"decisions":[]}}"#,
+            SCHEMA_VERSION + 50
+        );
+        fs::write(&side, raw).unwrap();
+        let s = summarize_run_path(&md, Uuid::nil());
+        assert_eq!(s.integrity, "unsupported_schema");
+        assert!(s.error.as_ref().unwrap().contains("schema"));
+    }
+
+    #[test]
+    fn recovery_required_represented() {
+        let dir = tempdir().unwrap();
+        let (pid, _root, md, _) = setup_run(dir.path());
+        let side = moraine_sidecar_path(&md);
+        let mut raw = fs::read_to_string(&side).unwrap();
+        // Inject incompleteOp into agent object without full re-serialize dance.
+        assert!(raw.contains("\"agent\""), "expected agent state in sidecar");
+        // Insert incompleteOp field after first "agent":{ occurrence.
+        let marker = "\"incompleteOp\"";
+        if !raw.contains(marker) {
+            // After "agent": { insert a synthetic incompleteOp.
+            let insert_at = raw
+                .find("\"agent\"")
+                .and_then(|i| raw[i..].find('{').map(|j| i + j + 1))
+                .expect("agent object");
+            let inject = r#""incompleteOp":{"opId":"00000000-0000-4000-8000-000000000001","idempotencyKey":"x","kind":"checkpoint","payloadHash":"aa","baseContentHash":"bb","expectedContentHash":"cc","phase":"begun","createdAt":"2026-01-01T00:00:00Z","pendingAgent":{"lifecycle":"active","recordRevision":1,"objective":"x","recordPath":"r","startIdempotencyKey":"k","checkpoints":[],"lifecycleEvents":[],"idempotency":{},"risks":[],"openQuestions":[],"captureCoverage":"unknown","provisional":false,"findings":[],"findingEvents":[],"evidence":[],"appendOnlyOps":[]}},"#;
+            raw.insert_str(insert_at, inject);
+            fs::write(&side, &raw).unwrap();
+        }
+        let s = summarize_run_path(&md, pid);
+        assert_eq!(
+            s.integrity,
+            "recovery_required",
+            "error={:?} raw_snip={}",
+            s.error,
+            &raw[..raw.len().min(200)]
+        );
+        assert!(s.recovery_required);
+    }
+
+    #[test]
+    fn capture_coverage_filter() {
+        let dir = tempdir().unwrap();
+        let (pid, root, _, _) = setup_run(dir.path());
+        let runs = list_run_summaries(&root, pid);
+        let match_all = filter_runs_ext(&runs, None, false, false, false, None, None);
+        assert_eq!(match_all.len(), 1);
+        let none = filter_runs_ext(&runs, None, false, false, false, None, Some("full"));
+        // Default capture is typically semantic_only or unknown depending on start path.
+        assert!(
+            none.is_empty() || none[0].capture_coverage == "full",
+            "coverage filter should constrain: {:?}",
+            none.iter().map(|r| &r.capture_coverage).collect::<Vec<_>>()
+        );
     }
 }

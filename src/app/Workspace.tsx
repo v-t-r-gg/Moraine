@@ -7,6 +7,7 @@ import {
   discoveryRunDetail,
   discoveryRuns,
   discoveryStatus,
+  subscribeDiscoveryRevision,
   type ProjectSummaryDto,
   type RunDetailDto,
   type RunSummaryDto,
@@ -99,6 +100,32 @@ export function Workspace({ openPath, onOpenRunPath }: WorkspaceProps) {
   useEffect(() => {
     void refreshRuns();
   }, [refreshRuns]);
+
+  // Bounded index-revision polling (not per-run FS watchers). Cleanup on unmount / Strict Mode.
+  useEffect(() => {
+    let lastSeen = -1;
+    let wasOnline: boolean | null = null;
+    const unsub = subscribeDiscoveryRevision(
+      (st) => {
+        setOffline(!st.online);
+        setStatusMsg(st.message ?? null);
+        if (wasOnline === null) {
+          wasOnline = st.online;
+          lastSeen = st.revision;
+          return; // mount load already fetches projects/runs
+        }
+        const revChanged = st.revision !== lastSeen;
+        const cameOnline = wasOnline === false && st.online;
+        lastSeen = st.revision;
+        wasOnline = st.online;
+        if (revChanged || cameOnline) {
+          setRefreshToken((t) => t + 1);
+        }
+      },
+      { intervalMs: 3000 },
+    );
+    return unsub;
+  }, []);
 
   useEffect(() => {
     if (!selectedRun) {

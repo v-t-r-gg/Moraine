@@ -7,7 +7,8 @@ The central object is an **agent run**, represented by a durable **run bundle**:
 * Markdown narrative (human-readable projection)
 * Structured sidecar `*.md.moraine.json` (run id, agent protocol state, annotations; historical decisions retained for compatibility)
 * Optional evidence references or captured artifacts
-* Human notes and comments
+* Append-only human observations (protocol runs); Legacy free-form document mode for non-protocol Markdown only
+* Comments / suggestions / findings
 
 Moraine is a **ledger**, not an approval gate. Live collaboration is optional infrastructure around that record. See [VISION.md](./VISION.md) and [docs/DEVELOPMENT_BLUEPRINT.md](./docs/DEVELOPMENT_BLUEPRINT.md).
 
@@ -17,13 +18,15 @@ Moraine is a **ledger**, not an approval gate. Live collaboration is optional in
   Agents / scripts                      Humans
         |                                  |
    moraine CLI / MCP                  GUI (Tauri + React)
-   project/run protocol,              inspect, comment,
-   status, share                      notes, findings, Save
+   project/run protocol,              ledger workspace:
+   status, share                      projects → runs → timeline
         |                                  |
         +---------- moraine-core ----------+
-                    |            |
-                run record    ledger
-                 (.md)     (.md.moraine.json)
+                    |            |         |
+                run record    ledger    discovery
+                 (.md)   (.md.moraine.json) read models
+                    |
+             moraine-service (capture + rebuildable index cache)
                     |
              moraine-server (optional live relay)
 ```
@@ -34,16 +37,26 @@ Long-term surfaces over the same core:
 moraine-core
     ├── JSON CLI (`moraine run …`)
     ├── local STDIO MCP (`moraine mcp`, crate moraine-mcp)
-    └── desktop human-review surface
+    ├── local service discovery queries (via moraine-service)
+    └── desktop human ledger workspace
 ```
 
 | Surface | Audience | Role |
 |---------|----------|------|
 | CLI | Agents, scripts | Project/run protocol, share room URL, status, local history helpers; `decide` is legacy/compatibility-only (CLI only) |
 | MCP | Coding agents | Same core operations over local STDIO; no decision tools |
-| GUI | Humans | Open run records, comments/suggestions, human notes, host Save (no decision IPC) |
-| `moraine-core` | Shared | Domain library: documents, history, rooms, share URLs, run ledger, agent protocol |
+| `moraine-service` | Hooks / desktop | Capture spool + **noncanonical** rebuildable project/run index; loopback discovery HTTP; Unix socket for hooks |
+| GUI | Humans | Default **ledger workspace** (discover projects/runs, structured timeline, findings, append-only ops). Legacy free-form edit only for non-protocol documents. No decision IPC |
+| `moraine-core` | Shared | Domain library: documents, history, rooms, share URLs, run ledger, agent protocol, **discovery read models** |
 | `moraine-server` | Optional | In-memory Yjs WebSocket relay; no auth; no disk persistence |
+
+### Local discovery (M5)
+
+* Project identity = Moraine project UUID (paths canonicalized and deduplicated).
+* Run summaries and ledger timelines are built in `moraine-core` (single classification path).
+* Service `index.json` is a **cache**: safe to delete and rebuild; never the source of truth for run bytes.
+* Desktop discovery goes through Tauri commands + `src/shared/api` (no direct service URLs from React).
+* Browsing is nonmutating: no schema promotion, no Markdown rewrite, no sidecar mutation.
 
 Business logic belongs in `moraine-core`. CLI, MCP, and Tauri commands call the same core operations. Core has no Tauri or Axum dependency.
 

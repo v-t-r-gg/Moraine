@@ -2,15 +2,17 @@
 
 **Date:** 2026-07-21  
 **Evaluation branch:** `audit/project-evaluation-2026-07`  
-**Product baseline (evaluated):** `4f8d1e85011d8ea49d02ea537c45b29b579ce52b` = `origin/main` = merge of PR #11
+**Product baseline (evaluated):** `4f8d1e85011d8ea49d02ea537c45b29b579ce52b` = `origin/main` **at evaluation start** = merge of PR #11
 
-## Starting-gate results
+> **Historical snapshot:** This evaluation deliberately froze the product tree at `4f8d1e8`. At that time PR #12 (finding redaction projection) was **open and unmerged**. Later merges to `main` (including PR #12) do not rewrite what was evaluated.
+
+## Starting-gate results (as of evaluation freeze)
 
 | Item | Result |
 |------|--------|
 | PR #11 M5 discovery UX | **MERGED** into `main` at `4f8d1e8` |
 | PR #11 CI (final) | rust/msrv/frontend/tauri-check **SUCCESS** |
-| PR #12 finding redaction projection | **OPEN**, not merged (`d0efb03` on `fix/redacted-finding-projection`) |
+| PR #12 finding redaction projection | **OPEN** at evaluation time, not merged (`d0efb03` on `fix/redacted-finding-projection`) |
 | Open issues | #4 version-history during editing |
 | Tags | `durable-annotations-v0.3`, `review-ledger-v0.2.1` |
 | Working tree for evaluation | Branch from clean `main`; evaluation docs only |

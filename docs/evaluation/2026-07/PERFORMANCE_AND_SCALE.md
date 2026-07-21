@@ -4,7 +4,7 @@
 **When:** 2026-07-21  
 **Host:** Linux x86_64, local SSD  
 **Method:** Temporary tree of 20 projects; 960 total runs (19×40 + 1×200); live `moraine-service` loopback rebuild/list.  
-**Raw:** `/tmp/grok-goal-d11ad1b70dc0/implementer/scale-results.json` (scratch; summarized here)
+**Raw metrics:** [data/scale-results.json](./data/scale-results.json) (ephemeral fixture paths omitted).
 
 > Objective asked for 20 projects / 1000 runs / 200 in one project. This run used **960** total runs with **200** in the largest project (time budget). Treat as representative, not exact 1000.
 

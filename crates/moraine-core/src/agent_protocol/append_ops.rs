@@ -162,7 +162,9 @@ pub fn run_amend_at_path(md_path: &Path, req: AmendRequest) -> Result<AppendOpRe
         });
     }
     append_op(md_path, |run_id, agent, snapshot_hash| {
-        let prev = checkpoint_summary(agent, req.target_id)?;
+        // Freeze the claim immediately prior to this op (original or latest amend/supersede),
+        // never only the immutable original checkpoint summary.
+        let prev = resolve_target_content(agent, req.target_id, "checkpoint")?;
         // Never mutate the checkpoint record itself.
         let op = AppendOnlyOpRecord {
             op_id: Uuid::new_v4(),
@@ -338,7 +340,11 @@ fn ensure_target_exists(agent: &AgentRunState, target_id: Uuid, kind: &str) -> R
 
 fn resolve_target_content(agent: &AgentRunState, target_id: Uuid, kind: &str) -> Result<String> {
     match kind.trim() {
-        "checkpoint" => Ok(current_checkpoint_claim(agent, target_id)),
+        "checkpoint" => {
+            // Ensure the checkpoint exists on this run (do not silently use "").
+            let _ = checkpoint_summary(agent, target_id)?;
+            Ok(current_checkpoint_claim(agent, target_id))
+        }
         "observation" | "amendment" | "append_op" => agent
             .append_only_ops
             .iter()
@@ -626,6 +632,100 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, Error::InvalidFinding { .. }));
+    }
+
+    /// Sequential amend/supersede must freeze the immediately prior claim as previous_content.
+    #[test]
+    fn sequential_amend_previous_content_is_immediate_prior_claim() {
+        let dir = tempdir().unwrap();
+        let (run_id, root, cp_id, _) = start_with_cp(dir.path());
+
+        let a1 = run_amend(
+            Some(&root),
+            run_id,
+            AmendRequest {
+                target_id: cp_id,
+                target_kind: "checkpoint".into(),
+                reason: "first fix".into(),
+                new_content: "Claim after first amend.".into(),
+                actor_category: ActorCategory::Agent,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            a1.op.previous_content.as_deref(),
+            Some("All concurrency tests pass."),
+            "first amend freezes original summary"
+        );
+        assert_eq!(a1.op.new_content.as_deref(), Some("Claim after first amend."));
+
+        let a2 = run_amend(
+            Some(&root),
+            run_id,
+            AmendRequest {
+                target_id: cp_id,
+                target_kind: "checkpoint".into(),
+                reason: "second fix".into(),
+                new_content: "Claim after second amend.".into(),
+                actor_category: ActorCategory::Human,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            a2.op.previous_content.as_deref(),
+            Some("Claim after first amend."),
+            "second amend must freeze first amend new_content, not original"
+        );
+        assert_eq!(
+            a2.op.new_content.as_deref(),
+            Some("Claim after second amend.")
+        );
+
+        // After supersede, next amend freezes the superseding statement.
+        let sup = entry_supersede(
+            Some(&root),
+            run_id,
+            SupersedeRequest {
+                target_id: cp_id,
+                target_kind: "checkpoint".into(),
+                reason: "replace".into(),
+                new_content: "Claim after supersede.".into(),
+                actor_category: ActorCategory::Agent,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            sup.op.previous_content.as_deref(),
+            Some("Claim after second amend.")
+        );
+
+        let a3 = run_amend(
+            Some(&root),
+            run_id,
+            AmendRequest {
+                target_id: cp_id,
+                target_kind: "checkpoint".into(),
+                reason: "post-supersede tweak".into(),
+                new_content: "Claim after supersede then amend.".into(),
+                actor_category: ActorCategory::Agent,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            a3.op.previous_content.as_deref(),
+            Some("Claim after supersede."),
+            "amend after supersede freezes supersede new_content"
+        );
+
+        // Original checkpoint record still immutable.
+        let md = find_run_by_id(&root, run_id).unwrap().0;
+        let meta = load_run_meta_readonly(&md).unwrap().unwrap();
+        let agent = meta.agent.as_ref().unwrap();
+        assert_eq!(agent.checkpoints[0].summary, "All concurrency tests pass.");
+        assert_eq!(
+            current_checkpoint_claim(agent, cp_id),
+            "Claim after supersede then amend."
+        );
     }
 
     #[test]

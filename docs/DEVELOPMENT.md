@@ -78,6 +78,13 @@ Dogfood for several real runs before starting the next major milestone. Classify
 | New capability | Roadmap |
 | One-off preference | Do not build immediately |
 
-## Next milestones
+## Milestone status
 
-See [ROADMAP.md](../ROADMAP.md) and [DEVELOPMENT_BLUEPRINT.md](./DEVELOPMENT_BLUEPRINT.md): evidence capture → findings/amendments → run discovery UX → second agent + beta.
+| Milestone | Status |
+|-----------|--------|
+| M4.5 React migration | complete |
+| M4.6 append-only ledger semantics | complete |
+| M5 local run discovery and ledger-focused UX | current |
+| M6 second agent, packaging, external beta | next |
+
+See [ROADMAP.md](../ROADMAP.md) and [DEVELOPMENT_BLUEPRINT.md](./DEVELOPMENT_BLUEPRINT.md).

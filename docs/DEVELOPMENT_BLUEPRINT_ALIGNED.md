@@ -1084,23 +1084,25 @@ Status: **implemented** (React is the desktop framework).
 
 **Goal:** Protocol runs are append-only for human/agent review context; checkpoints and agent claims are immutable; free-form Human notes are not the durable write path.
 
-Status: **current**. Operations: `human_observation_add`, `run_amend`, `entry_supersede`, `entry_redact`. Desktop: structured read-only timeline + Add observation; Legacy document mode for free-form Markdown only.
+Status: **complete**. Operations: `human_observation_add`, `run_amend`, `entry_supersede`, `entry_redact`. Desktop: structured read-only timeline + Add observation; Legacy document mode for free-form Markdown only. Sequential amendments freeze the immediately prior claim.
 
 ### Milestone 5 — Local run discovery and ledger-focused desktop UX
 
 **Goal:** Make the desktop useful across multiple projects and runs without becoming the capture dependency.
 
+Status: **current** (implemented on `feat/local-run-discovery-ledger-ux`).
+
 Scope:
 
-- project list from the service index;
-- active, ready, and recent run lists;
-- filters for capture coverage, findings, risks, and unresolved questions;
-- run timeline;
-- evidence inspection;
-- clear read-only managed sections and editable Human notes;
-- native notifications and quick open;
-- reduced emphasis on generic Markdown editing;
-- index rebuild and project rescan controls.
+- project list from the rebuildable service index (noncanonical cache);
+- active, ready, and recent run lists via core read models;
+- filters for lifecycle category, capture coverage, findings, risks, and unresolved questions;
+- structured ledger timeline (checkpoints, evidence, findings, observations, amendments, supersessions, redactions);
+- evidence and findings inspection through existing panels;
+- append-only human observations / amend / supersede / redact (no free-form Human notes editor for protocol runs);
+- Legacy document mode retained for free-form Markdown only;
+- index rebuild and project rescan controls (index-only mutation);
+- offline/direct filesystem inspection when the local service is unavailable.
 
 Acceptance criteria:
 
@@ -1108,7 +1110,8 @@ Acceptance criteria:
 - runs remain discoverable after restart;
 - the desktop can be closed without affecting capture;
 - project scanning does not mutate run records;
-- the UI emphasizes ledger inspection rather than document authoring.
+- the UI emphasizes ledger inspection rather than document authoring;
+- the service index is rebuildable and never treated as canonical run storage.
 
 ### Milestone 6 — Second agent integration, packaging, and external beta
 

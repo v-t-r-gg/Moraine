@@ -6,7 +6,9 @@ import { HistoryPanel } from "@/features/shell/HistoryPanel";
 import { CommentsPanel } from "@/features/annotations/CommentsPanel";
 import { RunReviewPanel } from "@/features/runs/RunReviewPanel";
 import { CheckpointFindingsPanel } from "@/features/findings/CheckpointFindingsPanel";
+import { ProtocolLedgerPanel } from "@/features/ledger/ProtocolLedgerPanel";
 import { Editor, type EditorHandle } from "@/features/editor/Editor";
+import { isProtocolRunMarkdown } from "@/features/editor/managedRegion";
 import {
   appInfo,
   beginAcceptSuggestion,
@@ -186,6 +188,9 @@ export function App() {
   const charCount = markdown.length;
   const hasRemotePeers = peerCount > 0;
   const pending = useMemo(() => countPending(commentList), [commentList]);
+  /** Protocol runs use append-only ledger UX; free-form edit is Legacy mode only. */
+  const isProtocolRun = useMemo(() => isProtocolRunMarkdown(markdown), [markdown]);
+  const legacyDocumentMode = !isProtocolRun;
 
   const clearSaveTimer = useCallback(() => {
     if (saveTimerRef.current) {
@@ -504,6 +509,17 @@ export function App() {
       }
       if (fromAutosave && (peerCount > 0 || savingRef.current)) return;
 
+      // Protocol runs: no free-form dirty/save for canonical claims.
+      if (isProtocolRunMarkdown(markdownRef.current)) {
+        if (!fromAutosave) {
+          setStatus(
+            "Protocol run: claims are append-only. Use Add observation / Amend — not free-form Save.",
+          );
+        }
+        setDirty(false);
+        return;
+      }
+
       if (!isTauri) {
         setDirty(false);
         setStatus(fromAutosave ? "Autosaved (browser)" : "Saved (browser; comments session-only)");
@@ -612,6 +628,11 @@ export function App() {
     (md: string) => {
       if (ignoreProgrammaticRef.current) return;
       if (md === markdownRef.current) return;
+      // Protocol runs: claims are not free-form editable; ignore buffer drift for dirty/save.
+      if (isProtocolRunMarkdown(md) || isProtocolRunMarkdown(markdownRef.current)) {
+        setMarkdown(md);
+        return;
+      }
       setMarkdown(md);
       setDirty(true);
       setRunReview((rr) => {
@@ -1092,7 +1113,7 @@ export function App() {
       <Toolbar
         title={title}
         path={path}
-        dirty={dirty}
+        dirty={legacyDocumentMode ? dirty : false}
         saving={saving}
         viewMode={viewMode}
         historyOpen={historyOpen}
@@ -1114,6 +1135,30 @@ export function App() {
         onViewMode={setViewMode}
       />
 
+      {isProtocolRun ? (
+        <div
+          className="border-b px-3 py-1 text-[11px] font-medium"
+          style={{
+            background: "var(--accent-soft)",
+            borderColor: "var(--border)",
+            color: "var(--muted)",
+          }}
+        >
+          Protocol run · structured append-only ledger (claims not free-form editable)
+        </div>
+      ) : (
+        <div
+          className="border-b px-3 py-1 text-[11px] font-medium"
+          style={{
+            background: "var(--panel)",
+            borderColor: "var(--border)",
+            color: "#b45309",
+          }}
+        >
+          Legacy document mode · temporary free-form editing (not the protocol run UX)
+        </div>
+      )}
+
       {isTauri ? (
         <>
           <RunReviewPanel
@@ -1121,6 +1166,20 @@ export function App() {
             externalConflict={externalConflict}
             onReload={() => void reloadFromDiskKeepingLocalCopy()}
           />
+          {isProtocolRun ? (
+            <ProtocolLedgerPanel
+              path={path}
+              refreshToken={findingsRefreshToken}
+              onMutated={() => {
+                setFindingsRefreshToken((t) => t + 1);
+                if (docRef.current) {
+                  void reloadDocument(docRef.current.meta.id).then((snap) => {
+                    applyDocumentInPlace(snap);
+                  });
+                }
+              }}
+            />
+          ) : null}
           <CheckpointFindingsPanel path={path} refreshToken={findingsRefreshToken} />
         </>
       ) : null}
@@ -1137,6 +1196,7 @@ export function App() {
                   ref={editorRef}
                   session={session}
                   initialMarkdown={markdown}
+                  editable={legacyDocumentMode}
                   onUpdate={onEditorUpdate}
                   onReady={onEditorReady}
                 />

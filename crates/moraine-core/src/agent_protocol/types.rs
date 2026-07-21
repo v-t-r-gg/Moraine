@@ -421,6 +421,105 @@ pub struct AgentRunState {
     /// Append-only finding ledger events for history reconstruction.
     #[serde(default)]
     pub finding_events: Vec<FindingLedgerEvent>,
+    /// Append-only ledger ops: observations, amendments, supersessions, redactions (M4.6).
+    /// Never rewrites checkpoints, rationale, or evidence in place.
+    #[serde(default)]
+    pub append_only_ops: Vec<AppendOnlyOpRecord>,
+}
+
+/// Actor category for append-only ledger operations (not a verdict).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ActorCategory {
+    Human,
+    Agent,
+    System,
+}
+
+impl ActorCategory {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Human => "human",
+            Self::Agent => "agent",
+            Self::System => "system",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim() {
+            "human" => Some(Self::Human),
+            "agent" => Some(Self::Agent),
+            "system" => Some(Self::System),
+            _ => None,
+        }
+    }
+}
+
+/// Relationship recorded by an append-only op (descriptive history, not approval).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LedgerRelationship {
+    Observation,
+    Amended,
+    Superseded,
+    Redacted,
+}
+
+impl LedgerRelationship {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Observation => "observation",
+            Self::Amended => "amended",
+            Self::Superseded => "superseded",
+            Self::Redacted => "redacted",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim() {
+            "observation" => Some(Self::Observation),
+            "amended" => Some(Self::Amended),
+            "superseded" => Some(Self::Superseded),
+            "redacted" => Some(Self::Redacted),
+            _ => None,
+        }
+    }
+}
+
+pub const OP_HUMAN_OBSERVATION_ADD: &str = "human_observation_add";
+pub const OP_RUN_AMEND: &str = "run_amend";
+pub const OP_ENTRY_SUPERSEDE: &str = "entry_supersede";
+pub const OP_ENTRY_REDACT: &str = "entry_redact";
+
+/// Durable append-only ledger operation (observation / amend / supersede / redact).
+///
+/// Checkpoints and other agent claims remain immutable; this record links history.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppendOnlyOpRecord {
+    /// Stable operation id.
+    pub op_id: Uuid,
+    /// `human_observation_add` | `run_amend` | `entry_supersede` | `entry_redact`.
+    pub op_kind: String,
+    pub actor_category: ActorCategory,
+    pub created_at: DateTime<Utc>,
+    /// Human-readable reason for the operation.
+    pub reason: String,
+    /// Target entry id when applicable (e.g. checkpoint op_id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_id: Option<Uuid>,
+    /// Target kind: `checkpoint`, `observation`, `amendment`, etc.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_kind: Option<String>,
+    /// Run Markdown content hash (or equivalent snapshot id) observed at op time.
+    pub previous_snapshot_hash: String,
+    /// Frozen prior content when amending, superseding, or redacting (recoverable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_content: Option<String>,
+    /// New content for observation / amend / supersede; redaction may omit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_content: Option<String>,
+    pub relationship: LedgerRelationship,
 }
 
 impl AgentRunState {

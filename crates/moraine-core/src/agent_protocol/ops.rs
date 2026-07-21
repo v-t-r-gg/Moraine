@@ -371,6 +371,7 @@ pub fn run_start(req: RunStartRequest) -> Result<AgentOpResult> {
         evidence: vec![],
         findings: vec![],
         finding_events: vec![],
+        append_only_ops: vec![],
     };
 
     let mut meta = RunMeta::new_run_with_id(run_id);
@@ -739,6 +740,7 @@ pub fn provisional_run_ensure(req: ProvisionalRunRequest) -> Result<AgentOpResul
         evidence: vec![],
         findings: vec![],
         finding_events: vec![],
+        append_only_ops: vec![],
     };
 
     let mut meta = RunMeta::new_run_with_id(run_id);

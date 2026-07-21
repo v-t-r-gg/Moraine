@@ -4,6 +4,7 @@
 //! sidecar `agent` object. Mutations use the same per-record lock and revision hash
 //! discipline as annotation ops.
 
+mod append_ops;
 mod evidence;
 mod findings;
 mod git;
@@ -13,6 +14,12 @@ mod project;
 mod session;
 mod types;
 
+pub use append_ops::{
+    current_checkpoint_claim, entry_redact, entry_redact_at_path, entry_supersede,
+    entry_supersede_at_path, human_observation_add, human_observation_add_at_path, is_redacted,
+    list_append_ops, list_append_ops_at_path, run_amend, run_amend_at_path, AmendRequest,
+    AppendOpResult, HumanObservationRequest, RedactRequest, SupersedeRequest, MAX_OP_BODY_CHARS,
+};
 pub use evidence::{
     load_evidence_record, record_mechanical_evidence, redact_secrets, EvidenceRecord,
     MechanicalEvidenceRequest, OutputMetadata, EVIDENCE_DIR, EVIDENCE_SCHEMA_VERSION,
@@ -46,10 +53,11 @@ pub use session::{
     SESSION_SCHEMA_VERSION,
 };
 pub use types::{
-    AgentRunState, CaptureCoverage, CheckpointRecord, EvidenceItem, EvidenceKind,
-    EvidenceProvenance, EvidenceSummary, FindingKind, FindingLedgerEvent, FindingRecord,
-    FindingResponse, FindingState, FindingTarget, FindingTargetKind, IdempotencyRecord,
-    IncompleteOp, LifecycleEvent, RationalItem, RunLifecycle, FINDING_EVENT_CREATED,
-    FINDING_EVENT_RESPONDED, FINDING_EVENT_STATE_CHANGED, MAX_CHECKPOINT_ITEMS, MAX_FIELD_CHARS,
-    MAX_SUMMARY_CHARS,
+    ActorCategory, AgentRunState, AppendOnlyOpRecord, CaptureCoverage, CheckpointRecord,
+    EvidenceItem, EvidenceKind, EvidenceProvenance, EvidenceSummary, FindingKind,
+    FindingLedgerEvent, FindingRecord, FindingResponse, FindingState, FindingTarget,
+    FindingTargetKind, IdempotencyRecord, IncompleteOp, LedgerRelationship, LifecycleEvent,
+    RationalItem, RunLifecycle, FINDING_EVENT_CREATED, FINDING_EVENT_RESPONDED,
+    FINDING_EVENT_STATE_CHANGED, MAX_CHECKPOINT_ITEMS, MAX_FIELD_CHARS, MAX_SUMMARY_CHARS,
+    OP_ENTRY_REDACT, OP_ENTRY_SUPERSEDE, OP_HUMAN_OBSERVATION_ADD, OP_RUN_AMEND,
 };

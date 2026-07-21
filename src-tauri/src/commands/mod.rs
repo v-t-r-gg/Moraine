@@ -1,3 +1,4 @@
+mod append_ops;
 mod comments;
 mod document;
 mod findings;
@@ -5,6 +6,7 @@ mod history;
 mod review;
 mod system;
 
+pub use append_ops::*;
 pub use comments::*;
 pub use document::*;
 pub use findings::*;

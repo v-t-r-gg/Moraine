@@ -405,6 +405,104 @@ export async function changeFindingState(
   return invoke("change_finding_state_cmd", { path, findingId, state });
 }
 
+/** Append-only ledger op (observation / amend / supersede / redact). */
+export type ActorCategory = "human" | "agent" | "system";
+export type LedgerRelationship = "observation" | "amended" | "superseded" | "redacted";
+
+export interface AppendOnlyOpDto {
+  opId: string;
+  opKind: string;
+  actorCategory: ActorCategory | string;
+  createdAt: string;
+  reason: string;
+  targetId?: string | null;
+  targetKind?: string | null;
+  previousSnapshotHash: string;
+  previousContent?: string | null;
+  newContent?: string | null;
+  relationship: LedgerRelationship | string;
+}
+
+export interface AppendOpResultDto {
+  runId: string;
+  opId: string;
+  opKind: string;
+  relationship: string;
+  op: AppendOnlyOpDto;
+}
+
+export async function listAppendOps(path: string): Promise<AppendOnlyOpDto[]> {
+  return invoke("list_append_ops_cmd", { path });
+}
+
+export async function humanObservationAdd(
+  path: string,
+  body: string,
+  reason: string,
+  targetId?: string | null,
+  targetKind?: string | null,
+): Promise<AppendOpResultDto> {
+  return invoke("human_observation_add_cmd", {
+    path,
+    body,
+    reason,
+    targetId: targetId ?? null,
+    targetKind: targetKind ?? null,
+  });
+}
+
+export async function runAmend(
+  path: string,
+  targetId: string,
+  targetKind: string,
+  reason: string,
+  newContent: string,
+  actorCategory: ActorCategory | string = "human",
+): Promise<AppendOpResultDto> {
+  return invoke("run_amend_cmd", {
+    path,
+    targetId,
+    targetKind,
+    reason,
+    newContent,
+    actorCategory,
+  });
+}
+
+export async function entrySupersede(
+  path: string,
+  targetId: string,
+  targetKind: string,
+  reason: string,
+  newContent: string,
+  actorCategory: ActorCategory | string = "agent",
+): Promise<AppendOpResultDto> {
+  return invoke("entry_supersede_cmd", {
+    path,
+    targetId,
+    targetKind,
+    reason,
+    newContent,
+    actorCategory,
+  });
+}
+
+export async function entryRedact(
+  path: string,
+  targetId: string,
+  targetKind: string,
+  reason: string,
+  actorCategory: ActorCategory | string = "human",
+): Promise<AppendOpResultDto> {
+  return invoke("entry_redact_cmd", {
+    path,
+    targetId,
+    targetKind,
+    reason,
+    actorCategory,
+  });
+}
+
 export async function pickMarkdownFile(): Promise<string | null> {
   if (!isTauriRuntime()) {
     return null;
@@ -679,6 +777,13 @@ function browserStub<T>(cmd: string, args?: Record<string, unknown>): T {
     case "get_finding_cmd":
     case "change_finding_state_cmd":
       throw new Error("findings require the Tauri desktop host");
+    case "list_append_ops_cmd":
+      return [] as T;
+    case "human_observation_add_cmd":
+    case "run_amend_cmd":
+    case "entry_supersede_cmd":
+    case "entry_redact_cmd":
+      throw new Error("append-only ledger ops require the Tauri desktop host");
     default:
       console.warn("[moraine browser stub] unhandled command:", cmd, args);
       return undefined as T;

@@ -22,9 +22,9 @@ use crate::error::{Error, Result};
 /// v3: suggestion disposition + two-phase acceptance fields.
 /// v4: optional agent-run protocol state (`agent` object).
 /// v5: findings-capable sidecars (`agent.findings` / `agent.findingEvents`).
-///     v4 and earlier load; writes promote to v5. Findings were briefly additive
-///     under v4 during M4 and are now a v5 compatibility boundary.
-pub const SCHEMA_VERSION: u32 = 5;
+/// v6: append-only ledger ops (`agent.appendOnlyOps`) — observations, amendments,
+///     supersessions, redactions. Checkpoints remain immutable; history is append-only.
+pub const SCHEMA_VERSION: u32 = 6;
 
 pub fn moraine_sidecar_path(md_path: &Path) -> PathBuf {
     let mut s = md_path.as_os_str().to_os_string();
@@ -915,7 +915,7 @@ mod tests {
         write_run_meta(&md, &meta).unwrap();
         meta = load_run_meta_readonly(&md).unwrap().unwrap();
         assert_eq!(meta.schema_version, SCHEMA_VERSION);
-        assert_eq!(meta.schema_version, 5);
+        assert_eq!(meta.schema_version, 6);
         assert_eq!(meta.run.id.to_string(), run_id);
         assert_eq!(meta.decisions.len(), 1);
         assert_eq!(meta.comments.len(), 1);
@@ -940,7 +940,7 @@ mod tests {
         let md = dir.path().join("v5.md");
         fs::write(&md, "# run\n").unwrap();
         let mut meta = RunMeta::new_run();
-        assert_eq!(meta.schema_version, 5);
+        assert_eq!(meta.schema_version, 6);
         let cp_id = Uuid::new_v4();
         let finding_id = Uuid::new_v4();
         let created = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
@@ -991,6 +991,7 @@ mod tests {
                 updated_at: created,
                 responses: vec![],
             }],
+            append_only_ops: vec![],
             finding_events: vec![FindingLedgerEvent {
                 event_id: Uuid::new_v4(),
                 event: FINDING_EVENT_CREATED.into(),
@@ -1008,7 +1009,7 @@ mod tests {
         write_run_meta(&md, &meta).unwrap();
 
         let loaded = load_run_meta_readonly(&md).unwrap().unwrap();
-        assert_eq!(loaded.schema_version, 5);
+        assert_eq!(loaded.schema_version, 6);
         let a = loaded.agent.as_ref().unwrap();
         assert_eq!(a.findings.len(), 1);
         assert_eq!(a.findings[0].body, "why?");
@@ -1095,10 +1096,10 @@ mod tests {
         let meta = load_run_meta_readonly(&start.absolute_path)
             .unwrap()
             .unwrap();
-        assert_eq!(meta.schema_version, 5);
+        assert_eq!(meta.schema_version, 6);
         assert_eq!(meta.agent.as_ref().unwrap().findings.len(), 1);
 
-        // Another agent op after finding must keep findings and stay on v5.
+        // Another agent op after finding must keep findings and stay on current schema.
         let hash = content_hash(&fs::read_to_string(&start.absolute_path).unwrap());
         run_checkpoint(
             Some(dir.path()),
@@ -1118,7 +1119,7 @@ mod tests {
         let again = load_run_meta_readonly(&start.absolute_path)
             .unwrap()
             .unwrap();
-        assert_eq!(again.schema_version, 5);
+        assert_eq!(again.schema_version, 6);
         assert_eq!(again.agent.as_ref().unwrap().findings.len(), 1);
         assert_eq!(
             again.agent.as_ref().unwrap().findings[0].id,

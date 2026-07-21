@@ -488,8 +488,7 @@ pub fn load_run_checkpoints_detail(md_path: &Path) -> Result<RunCheckpointsDetai
                     // Ordinary UI must not re-expose redacted claim text; original
                     // summary remains available when not redacted (amend chains keep
                     // Original claim vs Current statement in the protocol ledger UI).
-                    let summary = if crate::agent_protocol::append_ops::is_redacted(a, cp.op_id)
-                    {
+                    let summary = if crate::agent_protocol::append_ops::is_redacted(a, cp.op_id) {
                         "[REDACTED]".into()
                     } else {
                         cp.summary.clone()

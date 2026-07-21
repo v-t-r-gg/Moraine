@@ -13,11 +13,12 @@ use super::project::{
     update_project_meta, StartOpIndex, StartOpStatus,
 };
 use super::session::{
-    load_session, session_observe, set_session_active_run, SessionObserveRequest,
+    derive_capture_coverage, load_session, namespace_session_key, register_session_run,
+    session_observe, set_session_provisional_run, SessionObserveRequest,
 };
 use super::types::{
-    AgentRunState, CaptureCoverage, CheckpointRecord, EvidenceItem, EvidenceProvenance,
-    IdempotencyRecord, IncompleteOp, IncompletePhase, LifecycleEvent, RationalItem, RunLifecycle,
+    AgentRunState, CheckpointRecord, EvidenceItem, EvidenceProvenance, IdempotencyRecord,
+    IncompleteOp, IncompletePhase, LifecycleEvent, RationalItem, RunLifecycle,
     MAX_CHECKPOINT_ITEMS, MAX_FIELD_CHARS, MAX_RECENT_CHECKPOINTS_IN_SHOW, MAX_RECENT_LIST_IN_SHOW,
     MAX_SUMMARY_CHARS,
 };
@@ -183,30 +184,56 @@ pub fn run_start(req: RunStartRequest) -> Result<AgentOpResult> {
         });
     }
 
-    // Prefer confirming a provisional run bound to this session.
-    if let Some(session_id) = req
+    // Prefer confirming an *active provisional* run for this session.
+    // A second explicit run_start after confirm creates a new run (does not
+    // reuse the first confirmed run unless the start idempotency key matches).
+    if let Some(external_sid) = req
         .session_id
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
         let project = resolve_or_init_project(req.project.as_deref())?;
-        if let Some(session) = load_session(&project.project_root, session_id)? {
-            if let Some(run_id) = session.active_run_id {
+        // Session keys are namespaced; try common integrations when looking up.
+        let session_key = namespace_session_key("codex", project.project_id, external_sid);
+        let session = match load_session(&project.project_root, &session_key)? {
+            Some(s) => Some(s),
+            None => {
+                // Fall back: observe without confine so MCP can bind a session.
+                let obs = session_observe(SessionObserveRequest {
+                    session_id: external_sid.to_string(),
+                    integration: "codex".into(),
+                    project: Some(project.project_root.clone()),
+                    source: "mcp_run_start".into(),
+                    initial_task: Some(objective.clone()),
+                    ended: false,
+                    confine_existing_project: false,
+                })?;
+                load_session(&project.project_root, &obs.session_key)?
+            }
+        };
+        if let Some(session) = session {
+            if let Some(run_id) = session.active_provisional_run_id {
                 if let Ok((md_path, meta)) = find_run_by_id(&project.project_root, run_id) {
                     if let Some(agent) = meta.agent.as_ref() {
                         if agent.provisional {
                             return confirm_provisional_run(
                                 &project.project_root,
                                 project.project_id,
-                                session_id,
+                                &session.session_key,
                                 md_path,
                                 meta,
                                 &objective,
                                 &req.idempotency_key,
                             );
                         }
-                        // Already confirmed for this session: idempotent if start key matches.
+                    }
+                }
+            }
+            // Idempotent replay against any prior run in this session with same start key.
+            for run_id in &session.run_ids {
+                if let Ok((md_path, meta)) = find_run_by_id(&project.project_root, *run_id) {
+                    if let Some(agent) = meta.agent.as_ref() {
                         if agent.start_idempotency_key == req.idempotency_key {
                             let markdown = Document::read_file(&md_path)?;
                             return Ok(AgentOpResult {
@@ -228,6 +255,8 @@ pub fn run_start(req: RunStartRequest) -> Result<AgentOpResult> {
                     }
                 }
             }
+            // No provisional to confirm and no matching start key → fall through
+            // to create a *new* run in this session.
         }
     }
 
@@ -307,17 +336,19 @@ pub fn run_start(req: RunStartRequest) -> Result<AgentOpResult> {
 
     // Pending or incomplete create: build files with reserved identity.
     let git = capture_git_context(&project_root);
-    let session_id = req
+    let external_sid = req
         .session_id
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
-    let coverage = if session_id.is_some() {
-        CaptureCoverage::SemanticOnly
-    } else {
-        CaptureCoverage::Unknown
-    };
+    let session_key = external_sid
+        .as_ref()
+        .map(|ext| namespace_session_key("codex", project.project_id, ext));
+    let session = session_key
+        .as_ref()
+        .and_then(|k| load_session(&project_root, k).ok().flatten());
+    let coverage = derive_capture_coverage(false, session.as_ref(), 0);
     let agent = AgentRunState {
         lifecycle: RunLifecycle::Active,
         record_revision: 1,
@@ -335,7 +366,7 @@ pub fn run_start(req: RunStartRequest) -> Result<AgentOpResult> {
         risks: vec![],
         open_questions: vec![],
         capture_coverage: coverage,
-        session_id: session_id.clone(),
+        session_id: session_key.clone(),
         provisional: false,
     };
 
@@ -379,8 +410,8 @@ pub fn run_start(req: RunStartRequest) -> Result<AgentOpResult> {
 
     finalize_start_index(&project_root, &req.idempotency_key, &reservation)?;
 
-    if let Some(sid) = session_id.as_deref() {
-        let _ = set_session_active_run(&project_root, sid, run_id);
+    if let Some(sk) = session_key.as_deref() {
+        let _ = register_session_run(&project_root, sk, run_id, false);
     }
 
     Ok(AgentOpResult {
@@ -403,7 +434,7 @@ pub fn run_start(req: RunStartRequest) -> Result<AgentOpResult> {
 fn confirm_provisional_run(
     project_root: &Path,
     project_id: Uuid,
-    session_id: &str,
+    session_key: &str,
     md_path: PathBuf,
     _meta: RunMeta,
     objective: &str,
@@ -411,7 +442,6 @@ fn confirm_provisional_run(
 ) -> Result<AgentOpResult> {
     let side = moraine_sidecar_path(&md_path);
     let _lock = SidecarLock::acquire(&side)?;
-    // Reload under lock.
     let mut meta = load_or_migrate_locked(&md_path)?;
     let mut agent = meta
         .agent
@@ -439,7 +469,6 @@ fn confirm_provisional_run(
         });
     }
 
-    // Idempotent confirm when semantic start key + objective already applied.
     if agent.start_idempotency_key == idempotency_key && agent.objective == objective {
         let markdown = Document::read_file(&md_path)?;
         return Ok(AgentOpResult {
@@ -463,24 +492,17 @@ fn confirm_provisional_run(
         "kind": "start",
         "objective": objective,
         "confirm": true,
-        "sessionId": session_id,
+        "sessionKey": session_key,
     }));
 
-    // Register semantic start key → this run (conflict if key reused differently).
     update_project_meta(project_root, |pm| {
         if let Some(existing) = pm.start_ops.get(idempotency_key) {
-            if existing.run_id != meta.run.id
-                || (existing.payload_hash != payload_hash && existing.objective != objective)
-            {
-                // Allow same run_id with matching objective even if payload hash differs slightly.
-                if existing.run_id != meta.run.id || existing.objective != objective {
-                    return Err(Error::IdempotencyConflict {
-                        key: idempotency_key.to_string(),
-                        message:
-                            "start idempotency key was reused with a different run or objective"
-                                .into(),
-                    });
-                }
+            if existing.run_id != meta.run.id || existing.objective != objective {
+                return Err(Error::IdempotencyConflict {
+                    key: idempotency_key.to_string(),
+                    message: "start idempotency key was reused with a different run or objective"
+                        .into(),
+                });
             }
             return Ok(());
         }
@@ -505,13 +527,10 @@ fn confirm_provisional_run(
     agent.objective = objective.to_string();
     agent.provisional = false;
     agent.start_idempotency_key = idempotency_key.to_string();
-    agent.session_id = Some(session_id.to_string());
-    agent.capture_coverage = match agent.capture_coverage {
-        CaptureCoverage::MechanicalOnly | CaptureCoverage::Full => CaptureCoverage::Full,
-        CaptureCoverage::SemanticOnly => CaptureCoverage::SemanticOnly,
-        CaptureCoverage::Partial => CaptureCoverage::Partial,
-        CaptureCoverage::Unknown => CaptureCoverage::Full,
-    };
+    agent.session_id = Some(session_key.to_string());
+    let session = load_session(project_root, session_key)?;
+    agent.capture_coverage =
+        derive_capture_coverage(false, session.as_ref(), agent.checkpoints.len());
     agent.bump_revision()?;
     let git = capture_git_context(project_root);
     agent.current_git = Some(git.clone());
@@ -524,7 +543,7 @@ fn confirm_provisional_run(
     write_run_meta_unlocked(&md_path, &meta)?;
     drop(_lock);
 
-    set_session_active_run(project_root, session_id, meta.run.id)?;
+    register_session_run(project_root, session_key, meta.run.id, true)?;
 
     Ok(AgentOpResult {
         run_id: meta.run.id,
@@ -543,26 +562,26 @@ fn confirm_provisional_run(
     })
 }
 
-/// Ensure a provisional run exists for a session after the first substantive event.
+/// Ensure a provisional run exists after the *first* substantive event only.
 pub fn provisional_run_ensure(req: ProvisionalRunRequest) -> Result<AgentOpResult> {
-    let session_id = req.session_id.trim();
-    if session_id.is_empty() {
+    let external = req.session_id.trim();
+    if external.is_empty() {
         return Err(Error::InvalidCheckpoint {
             message: "session_id is required".into(),
         });
     }
 
-    // Ensure session envelope exists.
     let observed = session_observe(SessionObserveRequest {
-        session_id: session_id.to_string(),
-        integration: "unknown".into(),
+        session_id: external.to_string(),
+        integration: "codex".into(),
         project: req.project.clone(),
         source: "provisional_ensure".into(),
         initial_task: req.objective.clone(),
         ended: false,
+        confine_existing_project: true,
     })?;
 
-    if let Some(run_id) = observed.active_run_id {
+    if let Some(run_id) = observed.active_provisional_run_id {
         if let Ok((md_path, meta)) = find_run_by_id(&observed.project_root, run_id) {
             if let Some(agent) = meta.agent.as_ref() {
                 let markdown = Document::read_file(&md_path)?;
@@ -585,6 +604,31 @@ pub fn provisional_run_ensure(req: ProvisionalRunRequest) -> Result<AgentOpResul
         }
     }
 
+    if !observed.run_ids.is_empty() {
+        if let Some(run_id) = observed.run_ids.last().copied() {
+            if let Ok((md_path, meta)) = find_run_by_id(&observed.project_root, run_id) {
+                if let Some(agent) = meta.agent.as_ref() {
+                    let markdown = Document::read_file(&md_path)?;
+                    return Ok(AgentOpResult {
+                        run_id: meta.run.id,
+                        state: agent.lifecycle,
+                        record_path: agent.record_path.clone(),
+                        absolute_path: md_path,
+                        content_hash: content_hash(&markdown),
+                        record_revision: agent.record_revision,
+                        project_id: Some(observed.project_id),
+                        project_root: Some(observed.project_root),
+                        op_id: None,
+                        git: agent.starting_git.clone(),
+                        review_state: None,
+                        decision_current: None,
+                        idempotent_replay: true,
+                    });
+                }
+            }
+        }
+    }
+
     let objective = require_safe_scalar(
         "objective",
         req.objective
@@ -594,13 +638,14 @@ pub fn provisional_run_ensure(req: ProvisionalRunRequest) -> Result<AgentOpResul
             .trim(),
         MAX_SUMMARY_CHARS,
     )?;
+    let session_key = observed.session_key.clone();
     let idempotency_key = req
         .idempotency_key
-        .unwrap_or_else(|| format!("provisional:{session_id}"));
+        .unwrap_or_else(|| format!("provisional:{session_key}"));
 
     let payload_hash = hash_payload(&json!({
         "kind": "provisional_start",
-        "sessionId": session_id,
+        "sessionKey": session_key,
         "objective": objective,
     }));
 
@@ -609,11 +654,6 @@ pub fn provisional_run_ensure(req: ProvisionalRunRequest) -> Result<AgentOpResul
 
     let reservation = update_project_meta(&project_root, |meta| {
         if let Some(existing) = meta.start_ops.get(&idempotency_key).cloned() {
-            if existing.payload_hash != payload_hash && existing.objective != objective {
-                // Same provisional key should map to same run; allow objective refinement only
-                // before confirm by returning existing.
-                return Ok(existing);
-            }
             return Ok(existing);
         }
         let run_id = Uuid::new_v4();
@@ -651,7 +691,7 @@ pub fn provisional_run_ensure(req: ProvisionalRunRequest) -> Result<AgentOpResul
         if let Some(meta) = crate::run_meta::load_run_meta_readonly(&md_path)? {
             if let Some(agent) = meta.agent.as_ref() {
                 let markdown = Document::read_file(&md_path)?;
-                set_session_active_run(&project_root, session_id, run_id)?;
+                set_session_provisional_run(&project_root, &session_key, run_id)?;
                 return Ok(AgentOpResult {
                     run_id: meta.run.id,
                     state: agent.lifecycle,
@@ -672,6 +712,8 @@ pub fn provisional_run_ensure(req: ProvisionalRunRequest) -> Result<AgentOpResul
     }
 
     let git = capture_git_context(&project_root);
+    let session = load_session(&project_root, &session_key)?;
+    let coverage = derive_capture_coverage(true, session.as_ref(), 0);
     let agent = AgentRunState {
         lifecycle: RunLifecycle::Active,
         record_revision: 1,
@@ -688,8 +730,8 @@ pub fn provisional_run_ensure(req: ProvisionalRunRequest) -> Result<AgentOpResul
         incomplete_op: None,
         risks: vec![],
         open_questions: vec![],
-        capture_coverage: CaptureCoverage::MechanicalOnly,
-        session_id: Some(session_id.to_string()),
+        capture_coverage: coverage,
+        session_id: Some(session_key.clone()),
         provisional: true,
     };
 
@@ -707,7 +749,7 @@ pub fn provisional_run_ensure(req: ProvisionalRunRequest) -> Result<AgentOpResul
             if existing.run.id == run_id {
                 let markdown = Document::read_file(&md_path)?;
                 finalize_start_index(&project_root, &idempotency_key, &reservation)?;
-                set_session_active_run(&project_root, session_id, run_id)?;
+                set_session_provisional_run(&project_root, &session_key, run_id)?;
                 return Ok(AgentOpResult {
                     run_id,
                     state: agent.lifecycle,
@@ -731,7 +773,7 @@ pub fn provisional_run_ensure(req: ProvisionalRunRequest) -> Result<AgentOpResul
     drop(_lock);
 
     finalize_start_index(&project_root, &idempotency_key, &reservation)?;
-    set_session_active_run(&project_root, session_id, run_id)?;
+    set_session_provisional_run(&project_root, &session_key, run_id)?;
 
     Ok(AgentOpResult {
         run_id,
@@ -1944,12 +1986,27 @@ mod tests {
     #[test]
     fn provisional_ensure_then_run_start_confirms_same_run() {
         let dir = tempdir().unwrap();
-        let _ = init_project(Some(dir.path())).unwrap();
-        let session_id = "sess-dogfood-1";
+        let project = init_project(Some(dir.path())).unwrap();
+        let external = "sess-dogfood-1";
+
+        // First substantive prompt path: observe then ensure.
+        let obs = crate::agent_protocol::session::session_observe(
+            crate::agent_protocol::session::SessionObserveRequest {
+                session_id: external.into(),
+                integration: "codex".into(),
+                project: Some(project.project_root.clone()),
+                source: "user_prompt".into(),
+                initial_task: Some("Fix the spool".into()),
+                ended: false,
+                confine_existing_project: true,
+            },
+        )
+        .unwrap();
+        assert!(obs.should_ensure_provisional);
 
         let first = provisional_run_ensure(ProvisionalRunRequest {
-            session_id: session_id.into(),
-            project: Some(dir.path().to_path_buf()),
+            session_id: external.into(),
+            project: Some(project.project_root.clone()),
             objective: Some("Fix the spool".into()),
             idempotency_key: None,
         })
@@ -1959,12 +2016,15 @@ mod tests {
         let meta = load_or_migrate_locked(&first.absolute_path).unwrap();
         let agent = meta.agent.as_ref().unwrap();
         assert!(agent.provisional);
-        assert_eq!(agent.capture_coverage, CaptureCoverage::MechanicalOnly);
-        assert_eq!(agent.session_id.as_deref(), Some(session_id));
+        assert_eq!(
+            agent.capture_coverage,
+            crate::agent_protocol::CaptureCoverage::MechanicalOnly
+        );
+        assert_eq!(agent.session_id.as_deref(), Some(obs.session_key.as_str()));
 
         let second = provisional_run_ensure(ProvisionalRunRequest {
-            session_id: session_id.into(),
-            project: Some(dir.path().to_path_buf()),
+            session_id: external.into(),
+            project: Some(project.project_root.clone()),
             objective: Some("Fix the spool".into()),
             idempotency_key: None,
         })
@@ -1975,8 +2035,8 @@ mod tests {
         let confirmed = run_start(RunStartRequest {
             objective: "Fix the spool and add tests".into(),
             idempotency_key: "mcp-start-1".into(),
-            project: Some(dir.path().to_path_buf()),
-            session_id: Some(session_id.into()),
+            project: Some(project.project_root.clone()),
+            session_id: Some(external.into()),
         })
         .unwrap();
         assert_eq!(confirmed.run_id, first.run_id);
@@ -1985,14 +2045,27 @@ mod tests {
         let meta2 = load_or_migrate_locked(&confirmed.absolute_path).unwrap();
         let agent2 = meta2.agent.as_ref().unwrap();
         assert!(!agent2.provisional);
-        assert_eq!(agent2.capture_coverage, CaptureCoverage::Full);
+        assert_eq!(
+            agent2.capture_coverage,
+            crate::agent_protocol::CaptureCoverage::Full
+        );
         assert_eq!(agent2.objective, "Fix the spool and add tests");
+
+        // Second explicit start in same session with a *new* key creates a new run.
+        let second_run = run_start(RunStartRequest {
+            objective: "Unrelated defect Y".into(),
+            idempotency_key: "mcp-start-2".into(),
+            project: Some(project.project_root.clone()),
+            session_id: Some(external.into()),
+        })
+        .unwrap();
+        assert_ne!(second_run.run_id, first.run_id);
 
         let replay = run_start(RunStartRequest {
             objective: "Fix the spool and add tests".into(),
             idempotency_key: "mcp-start-1".into(),
-            project: Some(dir.path().to_path_buf()),
-            session_id: Some(session_id.into()),
+            project: Some(project.project_root.clone()),
+            session_id: Some(external.into()),
         })
         .unwrap();
         assert!(replay.idempotent_replay);

@@ -169,6 +169,17 @@ fn deliver_unix(socket_path: &Path, body: &[u8]) -> Result<()> {
 }
 
 fn write_spooled(spool_dir: &Path, buf: &[u8]) -> Result<PathBuf> {
+    const MAX_EVENT_BYTES: usize = 1024 * 1024;
+    if buf.len() > MAX_EVENT_BYTES {
+        anyhow::bail!("hook event exceeds {MAX_EVENT_BYTES} bytes");
+    }
+    std::fs::create_dir_all(spool_dir)?;
+    set_private_dir(spool_dir);
+    for sub in ["processed", "failed", "seen", "quarantine"] {
+        let dir = spool_dir.join(sub);
+        std::fs::create_dir_all(&dir)?;
+        set_private_dir(&dir);
+    }
     let file_stem = match serde_json::from_slice::<Value>(buf) {
         Ok(v) => {
             if let Some(id) = v.get("eventId").and_then(|x| x.as_str()) {
@@ -199,15 +210,35 @@ fn write_spooled(spool_dir: &Path, buf: &[u8]) -> Result<PathBuf> {
     let path = spool_dir.join(&file_name);
     let processed = spool_dir.join("processed").join(&file_name);
     let failed = spool_dir.join("failed").join(&file_name);
-    if path.exists() || processed.exists() || failed.exists() {
+    let quarantine = spool_dir.join("quarantine").join(&file_name);
+    if path.exists() || processed.exists() || failed.exists() || quarantine.exists() {
         return Ok(path);
     }
-    // Atomic-ish: write temp then rename.
-    let tmp = spool_dir.join(format!(".{file_name}.tmp"));
+    // Unique temp + rename keeps concurrent hook invocations from sharing a temp file.
+    let tmp = spool_dir.join(format!(".{file_name}.{}.tmp", uuid::Uuid::new_v4()));
     std::fs::write(&tmp, buf)?;
+    set_private_file(&tmp);
     std::fs::rename(&tmp, &path)?;
     Ok(path)
 }
+
+#[cfg(unix)]
+fn set_private_dir(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700));
+}
+
+#[cfg(not(unix))]
+fn set_private_dir(_path: &Path) {}
+
+#[cfg(unix)]
+fn set_private_file(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+}
+
+#[cfg(not(unix))]
+fn set_private_file(_path: &Path) {}
 
 fn content_hash_name(buf: &[u8]) -> String {
     let mut hasher = Sha256::new();
@@ -253,5 +284,21 @@ mod tests {
             "session_id": "abc",
         });
         assert!(map_codex_hook(&payload).unwrap().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fallback_spool_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_spooled(dir.path(), br#"{"eventId":"private-1"}"#).unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            std::fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
     }
 }

@@ -13,7 +13,7 @@ use tokio::{
 use tracing::{error, info};
 
 const MORAINE_DIR: &str = ".moraine";
-const MAX_SPOOL_FILES: usize = 1000;
+const MAX_SPOOL_FILES: usize = moraine_service::MAX_PENDING_EVENTS;
 
 #[derive(Clone)]
 struct AppState {
@@ -26,11 +26,12 @@ struct Args {
     #[command(subcommand)]
     command: Option<ServiceCmd>,
 
-    /// HTTP listen address (e.g. 127.0.0.1:33111)
+    /// Loopback HTTP listen address for diagnostics only (e.g. 127.0.0.1:33111).
+    /// Must not bind to non-loopback interfaces. Hook delivery uses the Unix socket.
     #[arg(long, default_value = "127.0.0.1:33111")]
     http: String,
 
-    /// Unix socket path for hook delivery
+    /// Unix domain socket for hook / adapter event delivery (primary capture transport).
     #[arg(long)]
     unix_socket: Option<PathBuf>,
 
@@ -145,8 +146,14 @@ async fn main() -> Result<()> {
         spool_dir: spool_dir.clone(),
     };
 
-    // HTTP server for health and diagnostics
+    // Diagnostics HTTP on loopback only — not the hook transport.
     let http_addr: SocketAddr = args.http.parse()?;
+    if !http_addr.ip().is_loopback() {
+        anyhow::bail!(
+            "refusing non-loopback HTTP bind {http_addr}; diagnostics must use 127.0.0.1/::1. \
+             Hook delivery uses the Unix domain socket, not TCP."
+        );
+    }
     let app = Router::new()
         .route("/health", get(|| async { Json(Health { status: "ok" }) }))
         .route("/status", get(handle_status))
@@ -154,9 +161,13 @@ async fn main() -> Result<()> {
         .with_state(state);
     let listener = TcpListener::bind(http_addr).await?;
 
-    info!(%http_addr, spool_dir = %spool_dir.display(), "starting moraine-service");
+    info!(
+        %http_addr,
+        spool_dir = %spool_dir.display(),
+        "starting moraine-service (hooks=unix-socket, diagnostics=loopback-http)"
+    );
 
-    // Unix socket listener task
+    // Unix domain socket: primary hook/adapter intake (not TCP).
     if let Some(socket_path) = args.unix_socket {
         let spool = spool_dir.clone();
         let shutdown_clone = shutdown.clone();
@@ -166,13 +177,14 @@ async fn main() -> Result<()> {
             }
         });
     } else {
-        // Default to $XDG_RUNTIME_DIR/moraine-service.sock when unset (matches systemd unit).
+        // Default to $XDG_RUNTIME_DIR/moraine-service.sock (matches systemd unit).
         let default_sock = std::env::var_os("XDG_RUNTIME_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(std::env::temp_dir)
             .join("moraine-service.sock");
         let spool = spool_dir.clone();
         let shutdown_clone = shutdown.clone();
+        info!(socket=%default_sock.display(), "binding default unix hook socket");
         tokio::spawn(async move {
             if let Err(e) = unix_listener_loop(default_sock, spool, shutdown_clone).await {
                 error!(error = %e, "unix listener failed");
@@ -255,7 +267,6 @@ async fn handle_projects(State(state): State<AppState>) -> Json<Value> {
     if let Some(doc) = moraine_service::read_index_projects(&state.spool_dir) {
         return Json(doc);
     }
-    use std::fs;
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let mut projects = vec![];
     let mut dirs = vec![cwd];
@@ -263,11 +274,7 @@ async fn handle_projects(State(state): State<AppState>) -> Json<Value> {
         if d.join(MORAINE_DIR).is_dir() {
             let meta = moraine_core::resolve_existing_project(Some(&d)).ok();
             let runs = d.join(MORAINE_DIR).join("runs");
-            let run_count = if runs.is_dir() {
-                fs::read_dir(&runs).map(|r| r.count()).unwrap_or(0)
-            } else {
-                0
-            };
+            let run_count = moraine_service::count_run_records(&runs);
             projects.push(json!({
                 "root": d.display().to_string(),
                 "run_count": run_count,
@@ -309,7 +316,9 @@ async fn unix_listener_loop(
         tokio::select! {
             Ok((stream, _addr)) = listener.accept() => {
                 let mut buf = Vec::new();
-                let mut limited = stream.take(1024 * 1024);
+                // Read one byte past the accepted maximum so an oversized event is
+                // rejected instead of being silently truncated into a valid payload.
+                let mut limited = stream.take((moraine_service::MAX_EVENT_BYTES + 1) as u64);
                 match tokio::io::AsyncReadExt::read_to_end(&mut limited, &mut buf).await {
                     Ok(_) => {
                         match moraine_service::write_spooled_payload(&spool_dir, &buf).await {
@@ -364,23 +373,21 @@ async fn spool_processor_loop(spool_dir: PathBuf, shutdown: Arc<Notify>) -> Resu
                             }
                         }
                     }
+                    // Hook delivery is sequential, but read_dir order is not. Preserve
+                    // arrival order so the first prompt remains the session objective.
+                    files.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
                     if files.len() > MAX_SPOOL_FILES {
-                        files.sort_by_key(|(t, _)| *t);
                         let remove_count = files.len() - MAX_SPOOL_FILES;
-                        for (_t, p) in files.into_iter().take(remove_count) {
+                        for (_t, p) in files.drain(..remove_count) {
                             let dest = failed_dir.join(p.file_name().unwrap());
                             let _ = tokio::fs::rename(&p, &dest).await;
                             info!(file=%p.display(), "moved old spool file to failed due to size limits");
                         }
                     }
 
-                    let mut entries = tokio::fs::read_dir(&spool_dir).await?;
-                    while let Ok(Some(ent)) = entries.next_entry().await {
-                        let path = ent.path();
-                        if is_spool_event_file(&path) {
-                            if let Err(e) = moraine_service::process_spool_file(&path, &processed_dir, &failed_dir).await {
-                                error!(file=%path.display(), error=%e, "processing spool file failed");
-                            }
+                    for (_modified, path) in files {
+                        if let Err(e) = moraine_service::process_spool_file(&path, &processed_dir, &failed_dir).await {
+                            error!(file=%path.display(), error=%e, "processing spool file failed");
                         }
                     }
                 }

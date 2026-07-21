@@ -26,8 +26,8 @@ pub use project::{
     StartOpIndex, StartOpStatus, MORAINE_DIR, PROJECT_SCHEMA_VERSION,
 };
 pub use session::{
-    session_observe, SessionObserveRequest, SessionObserveResult, SessionRecord,
-    SESSION_SCHEMA_VERSION,
+    derive_capture_coverage, namespace_session_key, resolve_confined_project, session_observe,
+    SessionObserveRequest, SessionObserveResult, SessionRecord, SESSION_SCHEMA_VERSION,
 };
 pub use types::{
     AgentRunState, CaptureCoverage, CheckpointRecord, EvidenceItem, EvidenceKind,

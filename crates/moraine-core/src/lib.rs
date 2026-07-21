@@ -17,13 +17,14 @@ pub mod share;
 pub mod watcher;
 
 pub use agent_protocol::{
-    capture_git_context, ensure_project, find_run_by_id, init_project, provisional_run_ensure,
+    capture_git_context, derive_capture_coverage, ensure_project, find_run_by_id, init_project,
+    namespace_session_key, provisional_run_ensure, resolve_confined_project,
     resolve_existing_project, resolve_or_init_project, run_checkpoint, run_ready, run_resume,
     run_show, run_start, session_observe, AgentOpResult, AgentRunState, CaptureCoverage,
     CheckpointInput, CheckpointRecord, EvidenceItem, EvidenceKind, EvidenceProvenance,
     GitContextSummary, ProjectInitResult, ProjectMeta, ProvisionalRunRequest, RationalItem,
     RunLifecycle, RunShowOptions, RunShowPacket, RunStartRequest, SessionObserveRequest,
-    SessionObserveResult, MAX_JSON_RESPONSE_HINT,
+    SessionObserveResult, SessionRecord, MAX_JSON_RESPONSE_HINT,
 };
 pub use annotation_ops::{
     acceptance_recovery_status, apply_mutation, begin_accept_suggestion, cancel_accept_suggestion,

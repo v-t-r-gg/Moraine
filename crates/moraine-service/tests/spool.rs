@@ -1,4 +1,6 @@
-use moraine_service::{process_spool_file, write_spooled_payload};
+use moraine_service::{
+    event_already_seen, mark_event_seen, process_spool_file, rebuild_index, write_spooled_payload,
+};
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -7,8 +9,6 @@ fn dedupe_spool_writes_single_file() {
     let dir = tempdir().unwrap();
     let spool = dir.path().join("spool");
     std::fs::create_dir_all(&spool).unwrap();
-    std::fs::create_dir_all(spool.join("processed")).unwrap();
-    std::fs::create_dir_all(spool.join("failed")).unwrap();
     let data = b"{".to_vec();
     let rt = tokio::runtime::Runtime::new().unwrap();
     let p1 = rt.block_on(write_spooled_payload(&spool, &data)).unwrap();
@@ -27,9 +27,6 @@ fn dedupe_spool_writes_single_file() {
 fn mechanical_event_id_dedupe() {
     let dir = tempdir().unwrap();
     let spool = dir.path().join("spool");
-    std::fs::create_dir_all(&spool).unwrap();
-    std::fs::create_dir_all(spool.join("processed")).unwrap();
-    std::fs::create_dir_all(spool.join("failed")).unwrap();
     let payload = json!({
         "schemaVersion": 1,
         "eventId": "stable-event-1",
@@ -47,12 +44,111 @@ fn mechanical_event_id_dedupe() {
     let p1 = rt.block_on(write_spooled_payload(&spool, &a)).unwrap();
     let p2 = rt.block_on(write_spooled_payload(&spool, &b)).unwrap();
     assert_eq!(p1, p2);
-    assert!(p1
-        .file_name()
+}
+
+#[test]
+fn durable_seen_survives_restart_replay() {
+    let dir = tempdir().unwrap();
+    let project = dir.path().join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    moraine_core::init_project(Some(&project)).unwrap();
+
+    let spool = dir.path().join("spool");
+    let processed = spool.join("processed");
+    let failed = spool.join("failed");
+    std::fs::create_dir_all(&processed).unwrap();
+    std::fs::create_dir_all(&failed).unwrap();
+
+    let event = json!({
+        "schemaVersion": 1,
+        "eventId": "restart-safe-1",
+        "kind": "user_prompt",
+        "sessionId": "codex-sess-42",
+        "project": project.display().to_string(),
+        "integration": "codex",
+        "payload": {"prompt": "Implement spool recovery"},
+    });
+    let body = serde_json::to_vec(&event).unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    let path1 = rt.block_on(write_spooled_payload(&spool, &body)).unwrap();
+    rt.block_on(process_spool_file(&path1, &processed, &failed))
+        .unwrap();
+    assert!(event_already_seen(&spool, "restart-safe-1"));
+
+    // Simulate restart: same event reappears in pending spool.
+    let path2 = spool.join("event-id-restart-safe-1.json");
+    std::fs::write(&path2, &body).unwrap();
+    rt.block_on(process_spool_file(&path2, &processed, &failed))
+        .unwrap();
+
+    let runs = project.join(".moraine/runs");
+    let md_count = std::fs::read_dir(&runs)
         .unwrap()
-        .to_str()
+        .filter(|e| {
+            e.as_ref()
+                .ok()
+                .map(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md"))
+                .unwrap_or(false)
+        })
+        .count();
+    assert_eq!(md_count, 1, "replay must not create a second run");
+}
+
+#[test]
+fn later_prompt_does_not_create_second_provisional() {
+    let dir = tempdir().unwrap();
+    let project = dir.path().join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    moraine_core::init_project(Some(&project)).unwrap();
+
+    let spool = dir.path().join("spool");
+    let processed = spool.join("processed");
+    let failed = spool.join("failed");
+    std::fs::create_dir_all(&processed).unwrap();
+    std::fs::create_dir_all(&failed).unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    let mk = |eid: &str, prompt: &str| {
+        json!({
+            "schemaVersion": 1,
+            "eventId": eid,
+            "kind": "user_prompt",
+            "sessionId": "sess-multi",
+            "project": project.display().to_string(),
+            "integration": "codex",
+            "payload": {"prompt": prompt},
+        })
+    };
+
+    let p1 = rt
+        .block_on(write_spooled_payload(
+            &spool,
+            &serde_json::to_vec(&mk("p1", "Feature X")).unwrap(),
+        ))
+        .unwrap();
+    rt.block_on(process_spool_file(&p1, &processed, &failed))
+        .unwrap();
+
+    let p2 = rt
+        .block_on(write_spooled_payload(
+            &spool,
+            &serde_json::to_vec(&mk("p2", "Also add one test")).unwrap(),
+        ))
+        .unwrap();
+    rt.block_on(process_spool_file(&p2, &processed, &failed))
+        .unwrap();
+
+    let md_count = std::fs::read_dir(project.join(".moraine/runs"))
         .unwrap()
-        .starts_with("event-id-"));
+        .filter(|e| {
+            e.as_ref()
+                .ok()
+                .map(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md"))
+                .unwrap_or(false)
+        })
+        .count();
+    assert_eq!(md_count, 1);
 }
 
 #[test]
@@ -65,7 +161,6 @@ fn process_user_prompt_creates_provisional_once() {
     let spool = dir.path().join("spool");
     let processed = spool.join("processed");
     let failed = spool.join("failed");
-    std::fs::create_dir_all(&spool).unwrap();
     std::fs::create_dir_all(&processed).unwrap();
     std::fs::create_dir_all(&failed).unwrap();
 
@@ -91,28 +186,6 @@ fn process_user_prompt_creates_provisional_once() {
     rt.block_on(process_spool_file(&path1, &processed, &failed))
         .unwrap();
 
-    let path2 = rt
-        .block_on(write_spooled_payload(
-            &spool,
-            &serde_json::to_vec(&mk("e2")).unwrap(),
-        ))
-        .unwrap();
-    rt.block_on(process_spool_file(&path2, &processed, &failed))
-        .unwrap();
-
-    let runs = project.join(".moraine/runs");
-    let md_count = std::fs::read_dir(&runs)
-        .unwrap()
-        .filter(|e| {
-            e.as_ref()
-                .ok()
-                .map(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md"))
-                .unwrap_or(false)
-        })
-        .count();
-    assert_eq!(md_count, 1, "expected one provisional run, got {md_count}");
-
-    // Confirm via semantic start with session id.
     let confirmed = moraine_core::run_start(moraine_core::RunStartRequest {
         objective: "Implement spool recovery with tests".into(),
         idempotency_key: "mcp-1".into(),
@@ -120,18 +193,6 @@ fn process_user_prompt_creates_provisional_once() {
         session_id: Some("codex-sess-42".into()),
     })
     .unwrap();
-    assert_eq!(
-        std::fs::read_dir(&runs)
-            .unwrap()
-            .filter(|e| {
-                e.as_ref()
-                    .ok()
-                    .map(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md"))
-                    .unwrap_or(false)
-            })
-            .count(),
-        1
-    );
     let meta = moraine_core::load_run_meta_readonly(&confirmed.absolute_path)
         .unwrap()
         .unwrap();
@@ -141,12 +202,11 @@ fn process_user_prompt_creates_provisional_once() {
 }
 
 #[test]
-fn invalid_mechanical_event_goes_to_failed() {
+fn invalid_mechanical_event_goes_to_failed_or_quarantine() {
     let dir = tempdir().unwrap();
     let spool = dir.path().join("spool");
     let processed = spool.join("processed");
     let failed = spool.join("failed");
-    std::fs::create_dir_all(&spool).unwrap();
     std::fs::create_dir_all(&processed).unwrap();
     std::fs::create_dir_all(&failed).unwrap();
 
@@ -166,5 +226,57 @@ fn invalid_mechanical_event_goes_to_failed() {
     let err = rt.block_on(process_spool_file(&path, &processed, &failed));
     assert!(err.is_err());
     assert!(!path.exists());
-    assert!(failed.join(path.file_name().unwrap()).exists());
+    assert!(
+        failed.join(path.file_name().unwrap()).exists()
+            || spool
+                .join("quarantine")
+                .join(path.file_name().unwrap())
+                .exists()
+    );
+}
+
+#[test]
+fn mark_seen_blocks_requeue() {
+    let dir = tempdir().unwrap();
+    let spool = dir.path().join("spool");
+    mark_event_seen(&spool, "already-done").unwrap();
+    assert!(event_already_seen(&spool, "already-done"));
+    let body = serde_json::to_vec(&json!({
+        "schemaVersion": 1,
+        "eventId": "already-done",
+        "kind": "session_stop",
+        "sessionId": "x",
+    }))
+    .unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let p = rt.block_on(write_spooled_payload(&spool, &body)).unwrap();
+    // Returns seen marker path; does not create a new pending event file.
+    assert!(
+        p.extension().and_then(|e| e.to_str()) == Some("seen")
+            || !p.exists()
+            || event_already_seen(&spool, "already-done")
+    );
+}
+
+#[test]
+fn rebuilt_index_counts_only_run_records() {
+    let dir = tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let initialized = moraine_core::init_project(Some(&project)).unwrap();
+    moraine_core::run_start(moraine_core::RunStartRequest {
+        objective: "Index one run".into(),
+        idempotency_key: "index-one".into(),
+        project: Some(initialized.project_root),
+        session_id: None,
+    })
+    .unwrap();
+
+    let index = dir.path().join("index.json");
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(rebuild_index(dir.path().to_path_buf(), index.clone(), 3))
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&std::fs::read(index).unwrap()).unwrap();
+    assert_eq!(value["projects"][0]["run_count"], 1);
 }

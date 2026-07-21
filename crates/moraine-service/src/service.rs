@@ -9,33 +9,107 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 const MORAINE_DIR: &str = ".moraine";
+/// Maximum accepted event payload (bytes).
+pub const MAX_EVENT_BYTES: usize = 1024 * 1024;
+/// Soft cap on pending event files in the spool root.
+pub const MAX_PENDING_EVENTS: usize = 1000;
+
+/// Durable processed-event markers under `spool/seen/`. Survive service restart.
+fn seen_dir(spool_dir: &Path) -> PathBuf {
+    spool_dir.join("seen")
+}
+
+fn seen_marker_path(spool_dir: &Path, event_id: &str) -> PathBuf {
+    seen_dir(spool_dir).join(format!("{}.seen", sanitize_id(event_id)))
+}
+
+pub fn event_already_seen(spool_dir: &Path, event_id: &str) -> bool {
+    if event_id.trim().is_empty() {
+        return false;
+    }
+    seen_marker_path(spool_dir, event_id).exists()
+}
+
+pub fn mark_event_seen(spool_dir: &Path, event_id: &str) -> Result<()> {
+    let dir = seen_dir(spool_dir);
+    std::fs::create_dir_all(&dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
+    let path = seen_marker_path(spool_dir, event_id);
+    let tmp = dir.join(format!(".{}.tmp", sanitize_id(event_id)));
+    std::fs::write(&tmp, b"1")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+    }
+    std::fs::rename(&tmp, &path)?;
+    Ok(())
+}
 
 pub async fn write_spooled_payload(spool_dir: &Path, buf: &[u8]) -> Result<std::path::PathBuf> {
-    // Prefer stable eventId from mechanical envelope when present.
-    let file_stem = match serde_json::from_slice::<Value>(buf) {
-        Ok(v) => {
-            if let Some(id) = v.get("eventId").and_then(|x| x.as_str()) {
-                let id = id.trim();
-                if !id.is_empty() {
-                    format!("event-id-{}", sanitize_id(id))
-                } else {
-                    content_hash_name(buf)
-                }
-            } else {
-                content_hash_name(buf)
-            }
+    if buf.len() > MAX_EVENT_BYTES {
+        return Err(anyhow::anyhow!(
+            "event exceeds MAX_EVENT_BYTES ({MAX_EVENT_BYTES})"
+        ));
+    }
+    std::fs::create_dir_all(spool_dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(spool_dir, std::fs::Permissions::from_mode(0o700));
+    }
+    for sub in ["processed", "failed", "seen", "quarantine"] {
+        let p = spool_dir.join(sub);
+        std::fs::create_dir_all(&p)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o700));
         }
-        Err(_) => content_hash_name(buf),
+    }
+
+    let event_id = extract_event_id(buf);
+    if let Some(ref id) = event_id {
+        if event_already_seen(spool_dir, id) {
+            // Durable dedupe: already applied; do not re-queue.
+            return Ok(seen_marker_path(spool_dir, id));
+        }
+    }
+
+    let file_stem = match &event_id {
+        Some(id) if !id.is_empty() => format!("event-id-{}", sanitize_id(id)),
+        _ => content_hash_name(buf),
     };
     let file_name = format!("{file_stem}.json");
     let path = spool_dir.join(&file_name);
     let processed = spool_dir.join("processed").join(&file_name);
     let failed = spool_dir.join("failed").join(&file_name);
-    if path.exists() || processed.exists() || failed.exists() {
+    let quarantine = spool_dir.join("quarantine").join(&file_name);
+    if path.exists() || processed.exists() || failed.exists() || quarantine.exists() {
         return Ok(path);
     }
-    tokio::fs::write(&path, buf).await?;
+    // Atomic create: temp then rename.
+    let tmp = spool_dir.join(format!(".{file_name}.tmp"));
+    tokio::fs::write(&tmp, buf).await?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+    }
+    tokio::fs::rename(&tmp, &path).await?;
     Ok(path)
+}
+
+fn extract_event_id(buf: &[u8]) -> Option<String> {
+    let v: Value = serde_json::from_slice(buf).ok()?;
+    v.get("eventId")
+        .and_then(|x| x.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 fn content_hash_name(buf: &[u8]) -> String {
@@ -103,15 +177,36 @@ pub async fn process_spool_file(
     processed_dir: &Path,
     failed_dir: &Path,
 ) -> Result<()> {
+    let spool_dir = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("spool file has no parent"))?;
     let data = tokio::fs::read(path).await?;
+    if data.len() > MAX_EVENT_BYTES {
+        quarantine_file(path, spool_dir).await?;
+        return Err(anyhow::anyhow!("event too large; quarantined"));
+    }
+
     let value: Value = match serde_json::from_slice(&data) {
         Ok(v) => v,
         Err(e) => {
-            let dest = failed_dir.join(path.file_name().unwrap());
-            let _ = tokio::fs::rename(path, &dest).await;
-            return Err(anyhow::anyhow!("invalid json: {}", e));
+            quarantine_file(path, spool_dir).await?;
+            return Err(anyhow::anyhow!("invalid json: {e}; quarantined"));
         }
     };
+
+    let event_id = value
+        .get("eventId")
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string());
+
+    // Restart-safe dedupe: if already applied, acknowledge without re-running side effects.
+    if let Some(ref id) = event_id {
+        if event_already_seen(spool_dir, id) {
+            let dest = processed_dir.join(path.file_name().unwrap());
+            let _ = tokio::fs::rename(path, &dest).await;
+            return Ok(());
+        }
+    }
 
     let res = if value.get("schemaVersion").is_some() || value.get("eventId").is_some() {
         process_mechanical_value(&value)
@@ -121,16 +216,28 @@ pub async fn process_spool_file(
 
     match res {
         Ok(_) => {
+            if let Some(ref id) = event_id {
+                mark_event_seen(spool_dir, id)?;
+            }
             let dest = processed_dir.join(path.file_name().unwrap());
             tokio::fs::rename(path, &dest).await?;
             Ok(())
         }
         Err(e) => {
+            // Permanent failure → failed/ (not retried). Corrupt → quarantine.
             let dest = failed_dir.join(path.file_name().unwrap());
             let _ = tokio::fs::rename(path, &dest).await;
             Err(e)
         }
     }
+}
+
+async fn quarantine_file(path: &Path, spool_dir: &Path) -> Result<()> {
+    let q = spool_dir.join("quarantine");
+    tokio::fs::create_dir_all(&q).await.ok();
+    let dest = q.join(path.file_name().unwrap());
+    let _ = tokio::fs::rename(path, &dest).await;
+    Ok(())
 }
 
 fn process_mechanical_value(value: &Value) -> Result<()> {
@@ -139,10 +246,7 @@ fn process_mechanical_value(value: &Value) -> Result<()> {
     validate_mechanical(&event)?;
 
     let project = event.project.as_deref().map(PathBuf::from);
-    let integration = event
-        .integration
-        .clone()
-        .unwrap_or_else(|| "unknown".into());
+    let integration = event.integration.clone().unwrap_or_else(|| "codex".into());
     let kind = event.kind.as_str();
 
     match kind {
@@ -160,6 +264,7 @@ fn process_mechanical_value(value: &Value) -> Result<()> {
                 source: source.into(),
                 initial_task: None,
                 ended: false,
+                confine_existing_project: true,
             })
             .map(|_| ())
             .map_err(core_err)
@@ -175,34 +280,43 @@ fn process_mechanical_value(value: &Value) -> Result<()> {
                 })
                 .and_then(|s| s.as_str())
                 .map(|s| s.to_string());
-            session_observe(SessionObserveRequest {
+            let observed = session_observe(SessionObserveRequest {
                 session_id: event.session_id.clone(),
                 integration: integration.clone(),
                 project: project.clone(),
                 source: "user_prompt".into(),
                 initial_task: prompt.clone(),
                 ended: false,
+                confine_existing_project: true,
             })
             .map_err(core_err)?;
-            provisional_run_ensure(ProvisionalRunRequest {
+            // First substantive prompt only → provisional. Later prompts are context.
+            if observed.should_ensure_provisional {
+                provisional_run_ensure(ProvisionalRunRequest {
+                    session_id: event.session_id,
+                    project,
+                    objective: prompt,
+                    idempotency_key: None,
+                })
+                .map(|_| ())
+                .map_err(core_err)?;
+            }
+            Ok(())
+        }
+        "session_stop" => {
+            // Envelope close only — never mutates run lifecycle.
+            session_observe(SessionObserveRequest {
                 session_id: event.session_id,
+                integration,
                 project,
-                objective: prompt,
-                idempotency_key: None,
+                source: "stop".into(),
+                initial_task: None,
+                ended: true,
+                confine_existing_project: true,
             })
             .map(|_| ())
             .map_err(core_err)
         }
-        "session_stop" => session_observe(SessionObserveRequest {
-            session_id: event.session_id,
-            integration,
-            project,
-            source: "stop".into(),
-            initial_task: None,
-            ended: true,
-        })
-        .map(|_| ())
-        .map_err(core_err),
         other => Err(anyhow::anyhow!(
             "unsupported mechanical event kind: {other}"
         )),
@@ -365,7 +479,6 @@ fn validate_event(ev: &Event) -> Result<(), anyhow::Error> {
     }
 }
 
-/// Rebuild a simple project index by scanning `start` at `base` and writing JSON to `out_file`.
 pub async fn rebuild_index(
     base: std::path::PathBuf,
     out_file: std::path::PathBuf,
@@ -383,11 +496,7 @@ pub async fn rebuild_index(
         if cur.join(MORAINE_DIR).is_dir() {
             let proj = moraine_core::resolve_existing_project(Some(&cur)).ok();
             let runs = cur.join(MORAINE_DIR).join("runs");
-            let run_count = if runs.is_dir() {
-                fs::read_dir(&runs).map(|r| r.count()).unwrap_or(0)
-            } else {
-                0
-            };
+            let run_count = count_run_records(&runs);
             projects.push(json!({
                 "root": cur.display().to_string(),
                 "run_count": run_count,
@@ -407,8 +516,28 @@ pub async fn rebuild_index(
 
     let doc = json!({"projects": projects, "scanned_at": chrono::Utc::now()});
     let raw = serde_json::to_vec_pretty(&doc)?;
-    tokio::fs::write(&out_file, raw).await?;
+    let tmp = out_file.with_extension("json.tmp");
+    tokio::fs::write(&tmp, &raw).await?;
+    tokio::fs::rename(&tmp, &out_file).await?;
     Ok(())
+}
+
+/// Count canonical run Markdown records, excluding sidecars and lock files.
+pub fn count_run_records(runs_dir: &Path) -> usize {
+    if !runs_dir.is_dir() {
+        return 0;
+    }
+    std::fs::read_dir(runs_dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|entry| {
+                    let path = entry.path();
+                    path.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("md")
+                })
+                .count()
+        })
+        .unwrap_or(0)
 }
 
 pub async fn spool_counts(spool_dir: &Path) -> Result<(usize, usize, usize)> {

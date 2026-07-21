@@ -22,8 +22,12 @@ moraine-service install   # writes systemd --user unit
 moraine-service start
 ```
 
-Default Unix socket: `$XDG_RUNTIME_DIR/moraine-service.sock`  
-Override with `--unix-socket` / `MORAINE_SOCKET`.
+**Transport model:**
+
+- **Hooks** deliver over a **Unix domain socket** (`$XDG_RUNTIME_DIR/moraine-service.sock`, or `MORAINE_SOCKET`).
+- **Diagnostics** use loopback HTTP only (`127.0.0.1:33111`). This is not the hook path and must not bind to `0.0.0.0`.
+
+Override socket with `--unix-socket` / `MORAINE_SOCKET`.
 
 ## Recommended project config
 

@@ -22,15 +22,24 @@ High-level direction. Product model: [VISION.md](./VISION.md), [ARCHITECTURE.md]
 * GUI: comments, suggestions, host Save; run-level decision controls removed from desktop IPC
 * Optional in-memory live relay (secondary)
 
+## Done (recent consolidation)
+
+* **C1 — Seal redaction and trust projections: complete**
+  * Trust claim: target-scoped ordinary-view withholding across core, desktop, discovery, service, and MCP projections
+  * Explicit exclusions: secure erasure, global duplicate-text scrubbing, evidence-artifact deletion, Git-history removal, credential remediation
+  * Docs: [SECURITY.md](./SECURITY.md), [docs/REDACTION.md](./docs/REDACTION.md)
+
 ## Now
 
-* **M5:** local run discovery and ledger-focused desktop UX (projects → runs → structured ledger)
+* **C2 — Stranger-safe Linux installation and first reference-integration pack** (Codex is the current concrete adapter)
 * Keep CI green
-* Dogfood discovery workspace on multi-run projects
 
 ## Next (bounded milestones)
 
-1. **Second agent integration, packaging, external beta**
+1. **C3 — Beta hardening and product-surface freeze**
+2. Second agent / broader packaging only after C2–C3
+
+Evaluation artifacts: [docs/evaluation/2026-07/](./docs/evaluation/2026-07/) (historical baseline `4f8d1e8`; PR #12 was open at that freeze).
 
 ## Explicit non-goals for the near term
 

@@ -423,6 +423,165 @@ fn mcp_findings_list_get_respond_idempotency() {
     assert_eq!(missing["body"]["error"]["code"], "finding_not_found");
 }
 
+/// C1 boundary: MCP CallToolResult serialization must not reintroduce checkpoint
+/// claim content after redaction (handlers must use core projections only).
+#[test]
+fn mcp_redaction_complete_result_nonleak() {
+    use moraine_core::{
+        create_finding, entry_redact, entry_supersede, run_amend, ActorCategory, AmendRequest,
+        CreateFindingRequest, FindingKind, RedactRequest, SupersedeRequest,
+    };
+    use uuid::Uuid;
+
+    const S_SUM: &str = "MORAINE_REDACTION_SENTINEL_7f4d2a91_MCP_SUMMARY";
+    const S_ACT: &str = "MORAINE_REDACTION_SENTINEL_7f4d2a91_MCP_ACTION";
+    const S_AMEND: &str = "MORAINE_REDACTION_SENTINEL_7f4d2a91_MCP_AMEND";
+    const S_SUPER: &str = "MORAINE_REDACTION_SENTINEL_7f4d2a91_MCP_SUPER";
+    let needles = [S_SUM, S_ACT, S_AMEND, S_SUPER];
+
+    let dir = tempdir().unwrap();
+    let mut c = McpClient::spawn(dir.path());
+    c.request(
+        "initialize",
+        json!({
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": { "name": "redaction-nonleak", "version": "0" }
+        }),
+    );
+    c.notify("notifications/initialized", json!({}));
+
+    let start = text_payload(&c.call_tool(
+        "run_start",
+        json!({
+            "objective": "MCP redaction nonleak",
+            "idempotencyKey": "mcp-redact-start"
+        }),
+    ));
+    let run_id = start["runId"].as_str().unwrap().to_string();
+    let hash = start["contentHash"].as_str().unwrap().to_string();
+    let run_uuid = Uuid::parse_str(&run_id).unwrap();
+
+    let cp = text_payload(&c.call_tool(
+        "run_checkpoint",
+        json!({
+            "runId": run_id,
+            "expectedHash": hash,
+            "idempotencyKey": "mcp-redact-cp",
+            "summary": S_SUM,
+            "actions": [S_ACT],
+            "risks": ["MORAINE_REDACTION_SENTINEL_7f4d2a91_MCP_RISK"],
+            "openQuestions": ["MORAINE_REDACTION_SENTINEL_7f4d2a91_MCP_Q"]
+        }),
+    ));
+    let cp_op_id = Uuid::parse_str(cp["opId"].as_str().unwrap()).unwrap();
+
+    run_amend(
+        Some(dir.path()),
+        run_uuid,
+        AmendRequest {
+            target_id: cp_op_id,
+            target_kind: "checkpoint".into(),
+            reason: "incomplete".into(),
+            new_content: S_AMEND.into(),
+            actor_category: ActorCategory::Agent,
+        },
+    )
+    .unwrap();
+
+    entry_supersede(
+        Some(dir.path()),
+        run_uuid,
+        SupersedeRequest {
+            target_id: cp_op_id,
+            target_kind: "checkpoint".into(),
+            reason: "replace".into(),
+            new_content: S_SUPER.into(),
+            actor_category: ActorCategory::Agent,
+        },
+    )
+    .unwrap();
+
+    let created = create_finding(
+        Some(dir.path()),
+        run_uuid,
+        CreateFindingRequest {
+            kind: FindingKind::Clarification,
+            body: "Finding body is independent of checkpoint claim".into(),
+            checkpoint_op_id: cp_op_id,
+        },
+    )
+    .unwrap();
+    let finding_id = created.finding_id.to_string();
+
+    let resp = text_payload(&c.call_tool(
+        "respond_to_finding",
+        json!({
+            "runId": run_id,
+            "findingId": finding_id,
+            "body": "Response body is independent of checkpoint claim",
+            "idempotencyKey": "mcp-redact-resp-1"
+        }),
+    ));
+    assert_eq!(resp["idempotentReplay"], false, "{resp}");
+
+    entry_redact(
+        Some(dir.path()),
+        run_uuid,
+        RedactRequest {
+            target_id: cp_op_id,
+            target_kind: "checkpoint".into(),
+            reason: "sentinel content".into(),
+            actor_category: ActorCategory::Human,
+        },
+    )
+    .unwrap();
+
+    // Complete CallToolResult JSON (not only text payload) must omit checkpoint sentinels.
+    let tools: Vec<Value> = vec![
+        c.call_tool("run_show", json!({ "runId": run_id })),
+        c.call_tool("list_findings", json!({ "runId": run_id })),
+        c.call_tool(
+            "get_finding",
+            json!({ "runId": run_id, "findingId": finding_id }),
+        ),
+        c.call_tool(
+            "respond_to_finding",
+            json!({
+                "runId": run_id,
+                "findingId": finding_id,
+                "body": "Response body is independent of checkpoint claim",
+                "idempotencyKey": "mcp-redact-resp-1"
+            }),
+        ),
+    ];
+    for raw in &tools {
+        let ser = serde_json::to_string(raw).unwrap();
+        for n in needles {
+            assert!(
+                !ser.contains(n),
+                "MCP CallToolResult leaked {n}: {}",
+                &ser[..ser.len().min(600)]
+            );
+        }
+    }
+
+    // Finding thread bodies remain (independent records).
+    let got = text_payload(&c.call_tool(
+        "get_finding",
+        json!({ "runId": run_id, "findingId": finding_id }),
+    ));
+    assert!(
+        got["target"]["targetRedacted"].as_bool().unwrap_or(false)
+            || got["targetSnapshot"]["redacted"].as_bool().unwrap_or(false),
+        "{got}"
+    );
+    assert_eq!(
+        got["thread"][0]["body"],
+        "Finding body is independent of checkpoint claim"
+    );
+}
+
 #[test]
 fn mcp_idempotent_start_and_revision_conflict() {
     let dir = tempdir().unwrap();

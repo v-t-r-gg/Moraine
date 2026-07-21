@@ -146,20 +146,25 @@ pub fn render_run_markdown_with_id(
     }
 
     out.push_str("## Risks\n\n");
-    if agent.risks.is_empty() {
+    let risks = super::projection::project_string_list_without_redacted_claims(agent, &agent.risks);
+    if risks.is_empty() {
         out.push_str("_None recorded._\n\n");
     } else {
-        for r in &agent.risks {
+        for r in &risks {
             out.push_str(&format!("- {}\n", escape_list_item(r)));
         }
         out.push('\n');
     }
 
     out.push_str("## Open questions\n\n");
-    if agent.open_questions.is_empty() {
+    let questions = super::projection::project_string_list_without_redacted_claims(
+        agent,
+        &agent.open_questions,
+    );
+    if questions.is_empty() {
         out.push_str("_None recorded._\n\n");
     } else {
-        for q in &agent.open_questions {
+        for q in &questions {
             out.push_str(&format!("- {}\n", escape_list_item(q)));
         }
         out.push('\n');
@@ -259,6 +264,27 @@ fn format_checkpoint(n: usize, cp: &CheckpointRecord, agent: &AgentRunState) -> 
         format_ts(cp.created_at)
     ));
     s.push_str(&format!("- **Op ID:** `{}`\n", cp.op_id));
+
+    // Ordinary Markdown projection must withhold all claim content when redacted.
+    if super::append_ops::is_redacted(agent, cp.op_id) {
+        let reason = agent
+            .append_only_ops
+            .iter()
+            .rev()
+            .find(|o| {
+                o.target_id == Some(cp.op_id) && o.relationship == LedgerRelationship::Redacted
+            })
+            .map(|o| o.reason.as_str())
+            .unwrap_or("redacted");
+        s.push_str("\n**Original claim:**\n\n[REDACTED]\n\n");
+        s.push_str("#### Redaction\n\n");
+        s.push_str(&format!("Explicit redaction: {reason}\n\n"));
+        s.push_str(
+            "Prior claim text (including actions, rationales, evidence labels/commands, risks, and questions) is withheld from ordinary projections. Canonical sidecar may retain prior content for integrity.\n\n",
+        );
+        s.push_str("**Current statement:**\n\n[REDACTED]\n\n");
+        return s;
+    }
 
     let related: Vec<_> = agent
         .append_only_ops

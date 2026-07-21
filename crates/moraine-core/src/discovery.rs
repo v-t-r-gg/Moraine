@@ -459,8 +459,19 @@ pub fn load_run_detail(md_path: &Path, project_id: Uuid) -> RunDetail {
         timeline,
         is_protocol_run: is_protocol,
         objective: agent.map(|a| a.objective.clone()),
-        risks: agent.map(|a| a.risks.clone()).unwrap_or_default(),
-        open_questions: agent.map(|a| a.open_questions.clone()).unwrap_or_default(),
+        risks: agent
+            .map(|a| {
+                crate::agent_protocol::project_string_list_without_redacted_claims(a, &a.risks)
+            })
+            .unwrap_or_default(),
+        open_questions: agent
+            .map(|a| {
+                crate::agent_protocol::project_string_list_without_redacted_claims(
+                    a,
+                    &a.open_questions,
+                )
+            })
+            .unwrap_or_default(),
     }
 }
 

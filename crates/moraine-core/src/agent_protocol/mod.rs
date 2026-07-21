@@ -11,6 +11,7 @@ mod git;
 mod markdown;
 mod ops;
 mod project;
+mod projection;
 mod session;
 mod types;
 
@@ -48,6 +49,14 @@ pub use project::{
     resolve_existing_project, resolve_or_init_project, runs_dir, ProjectInitResult, ProjectMeta,
     StartOpIndex, StartOpStatus, MORAINE_DIR, PROJECT_SCHEMA_VERSION,
 };
+pub use projection::{
+    project_append_only_op, project_append_only_ops, project_checkpoint_summary,
+    project_string_list_without_redacted_claims, OrdinaryCheckpointSummary, REDACTED_MARKER,
+};
+
+#[cfg(test)]
+#[path = "redaction_nonleak_tests.rs"]
+mod redaction_nonleak_tests;
 pub use session::{
     derive_capture_coverage, load_session, namespace_session_key, resolve_confined_project,
     session_observe, SessionObserveRequest, SessionObserveResult, SessionRecord,

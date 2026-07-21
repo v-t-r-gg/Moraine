@@ -18,20 +18,21 @@ use uuid::Uuid;
 use super::append_ops::is_redacted;
 use super::ops::recover_incomplete_agent_op;
 use super::project::{find_run_by_id, resolve_existing_project};
+use super::projection::REDACTED_MARKER;
 use super::types::{
     AgentRunState, FindingKind, FindingLedgerEvent, FindingRecord, FindingResponse, FindingState,
     FindingTarget, FindingTargetKind, IdempotencyRecord, FINDING_EVENT_CREATED,
     FINDING_EVENT_RESPONDED, FINDING_EVENT_STATE_CHANGED, MAX_FIELD_CHARS,
 };
-
-/// Ordinary API/desktop/agent projection marker for redacted checkpoint targets.
-pub const REDACTED_CHECKPOINT_SUMMARY: &str = "[REDACTED]";
 use crate::atomic::SidecarLock;
 use crate::document::Document;
 use crate::error::{Error, Result};
 use crate::run_meta::{
     content_hash, load_or_migrate_locked, moraine_sidecar_path, write_run_meta_unlocked,
 };
+
+/// Ordinary API/desktop/agent projection marker for redacted checkpoint targets.
+pub const REDACTED_CHECKPOINT_SUMMARY: &str = REDACTED_MARKER;
 
 /// Maximum finding / response body length (plain text).
 pub const MAX_FINDING_BODY_CHARS: usize = MAX_FIELD_CHARS;

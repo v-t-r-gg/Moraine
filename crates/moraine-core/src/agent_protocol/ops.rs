@@ -994,10 +994,13 @@ pub fn run_show(
         .iter()
         .rev()
         .take(limit)
-        .map(|c| RecentCheckpoint {
-            op_id: c.op_id,
-            created_at: c.created_at.to_rfc3339(),
-            summary: truncate(&c.summary, 240),
+        .map(|c| {
+            let projected = super::projection::project_checkpoint_summary(agent, c);
+            RecentCheckpoint {
+                op_id: projected.op_id,
+                created_at: projected.created_at,
+                summary: projected.summary,
+            }
         })
         .collect::<Vec<_>>()
         .into_iter()
@@ -1033,8 +1036,17 @@ pub fn run_show(
         current_git: agent.current_git.clone(),
         checkpoint_count: agent.checkpoints.len(),
         recent_checkpoints: recent,
-        risks: bound_list(&agent.risks, MAX_RECENT_LIST_IN_SHOW),
-        open_questions: bound_list(&agent.open_questions, MAX_RECENT_LIST_IN_SHOW),
+        risks: bound_list(
+            &super::projection::project_string_list_without_redacted_claims(agent, &agent.risks),
+            MAX_RECENT_LIST_IN_SHOW,
+        ),
+        open_questions: bound_list(
+            &super::projection::project_string_list_without_redacted_claims(
+                agent,
+                &agent.open_questions,
+            ),
+            MAX_RECENT_LIST_IN_SHOW,
+        ),
         annotations: counts,
         review_state: review_state_str(snap.state).into(),
         decision_current: snap.decision_current,
@@ -1045,9 +1057,18 @@ pub fn run_show(
             base_content_hash: i.base_content_hash.clone(),
             expected_content_hash: i.expected_content_hash.clone(),
         }),
-        // note: full pending_agent is not exposed in show
+        // Ordinary include_markdown re-renders with redaction-aware projection so
+        // raw on-disk MD is not a silent forensic bypass of ordinary show.
         markdown: if opts.include_markdown {
-            Some(markdown)
+            let notes =
+                crate::agent_protocol::markdown::extract_human_notes(&markdown).unwrap_or_default();
+            Some(
+                crate::agent_protocol::markdown::render_run_markdown_with_id(
+                    meta.run.id,
+                    agent,
+                    &notes,
+                ),
+            )
         } else {
             None
         },

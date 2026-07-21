@@ -71,7 +71,7 @@ pub struct RedactRequest {
     pub actor_category: ActorCategory,
 }
 
-/// List all append-only ops for a run (project path).
+/// List append-only ops for ordinary readers (redacted claim content withheld).
 pub fn list_append_ops(project: Option<&Path>, run_id: Uuid) -> Result<Vec<AppendOnlyOpRecord>> {
     let project = resolve_existing_project(project)?;
     let (_md, meta) = find_run_by_id(&project.project_root, run_id)?;
@@ -79,7 +79,7 @@ pub fn list_append_ops(project: Option<&Path>, run_id: Uuid) -> Result<Vec<Appen
         .agent
         .as_ref()
         .ok_or_else(|| Error::other("run missing agent state"))?;
-    Ok(agent.append_only_ops.clone())
+    Ok(super::projection::project_append_only_ops(agent))
 }
 
 pub fn list_append_ops_at_path(md_path: &Path) -> Result<Vec<AppendOnlyOpRecord>> {
@@ -89,7 +89,7 @@ pub fn list_append_ops_at_path(md_path: &Path) -> Result<Vec<AppendOnlyOpRecord>
         .agent
         .as_ref()
         .ok_or_else(|| Error::other("run missing agent state"))?;
-    Ok(agent.append_only_ops.clone())
+    Ok(super::projection::project_append_only_ops(agent))
 }
 
 pub fn human_observation_add(
@@ -258,12 +258,14 @@ pub fn entry_redact_at_path(md_path: &Path, req: RedactRequest) -> Result<Append
             relationship: LedgerRelationship::Redacted,
         };
         agent.append_only_ops.push(op.clone());
+        // Ordinary mutation response: never echo prior claim text for redactions.
+        let projected = super::projection::project_append_only_op(agent, &op);
         Ok(AppendOpResult {
             run_id,
-            op_id: op.op_id,
-            op_kind: op.op_kind.clone(),
-            relationship: op.relationship.as_str().into(),
-            op,
+            op_id: projected.op_id,
+            op_kind: projected.op_kind.clone(),
+            relationship: projected.relationship.as_str().into(),
+            op: projected,
         })
     })
 }
@@ -532,7 +534,11 @@ mod tests {
         .unwrap();
         assert_eq!(red.relationship, "redacted");
         assert_eq!(red.op.new_content.as_deref(), Some("[REDACTED]"));
-        assert!(red.op.previous_content.is_some());
+        // Ordinary mutation result must not echo prior claim text.
+        assert!(
+            red.op.previous_content.is_none(),
+            "ordinary redaction response must withhold previous_content"
+        );
 
         // Reload
         let md = find_run_by_id(&root, run_id).unwrap().0;
@@ -546,7 +552,7 @@ mod tests {
         );
         assert!(is_redacted(agent, cp_id));
         assert_eq!(current_checkpoint_claim(agent, cp_id), "[REDACTED]");
-        // Prior content recoverable from redaction op
+        // Prior content recoverable from canonical sidecar (forensic), not ordinary list.
         let redact_op = agent
             .append_only_ops
             .iter()
@@ -560,6 +566,12 @@ mod tests {
                 .contains("ordering")
                 || redact_op.previous_content.as_ref().unwrap().contains("CI")
         );
+        let ordinary_list = list_append_ops(Some(&root), run_id).unwrap();
+        let ordinary_redact = ordinary_list
+            .iter()
+            .find(|o| o.op_kind == OP_ENTRY_REDACT)
+            .unwrap();
+        assert!(ordinary_redact.previous_content.is_none());
 
         // No approval vocabulary on ops
         let ser = serde_json::to_string(&agent.append_only_ops).unwrap();

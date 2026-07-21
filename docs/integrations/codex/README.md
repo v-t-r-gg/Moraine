@@ -51,4 +51,13 @@ Removes only Moraine-managed markers; unrelated MCP servers and hooks remain.
 4. Run an ordinary Codex task (desktop may stay closed)
 5. Open installed desktop later to inspect the run
 
-See also: [../CODEX.md](../CODEX.md), [../../TROUBLESHOOTING.md](../../TROUBLESHOOTING.md).
+## Pack contents
+
+| Doc | Topic |
+|-----|--------|
+| [INSTALL.md](./INSTALL.md) | Integrate / check / remove |
+| [EXPECTED_CAPTURE.md](./EXPECTED_CAPTURE.md) | Hooks vs MCP vs spool; coverage honesty |
+| [PRIVACY.md](./PRIVACY.md) | Local data, Git, secrets |
+| [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) | Stale paths, malformed config, offline service |
+
+See also: [../CODEX.md](../CODEX.md), [../../TROUBLESHOOTING.md](../../TROUBLESHOOTING.md), [../../INSTALL.md](../../INSTALL.md).

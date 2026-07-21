@@ -21,6 +21,9 @@ const MAX_SPOOL_FILES: usize = moraine_service::MAX_PENDING_EVENTS;
 #[derive(Clone)]
 struct AppState {
     spool_dir: PathBuf,
+    socket_path: PathBuf,
+    http_addr: String,
+    started_at_unix: u64,
 }
 
 #[derive(Parser)]
@@ -144,11 +147,6 @@ async fn main() -> Result<()> {
         .await
         .ok();
 
-    let shutdown = Arc::new(Notify::new());
-    let state = AppState {
-        spool_dir: spool_dir.clone(),
-    };
-
     // Diagnostics HTTP on loopback only — not the hook transport.
     let http_addr: SocketAddr = args.http.parse()?;
     if !http_addr.ip().is_loopback() {
@@ -157,6 +155,24 @@ async fn main() -> Result<()> {
              Hook delivery uses the Unix domain socket, not TCP."
         );
     }
+
+    let socket_path = args.unix_socket.clone().unwrap_or_else(|| {
+        std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("moraine-service.sock")
+    });
+    let started_at_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let shutdown = Arc::new(Notify::new());
+    let state = AppState {
+        spool_dir: spool_dir.clone(),
+        socket_path: socket_path.clone(),
+        http_addr: args.http.clone(),
+        started_at_unix,
+    };
     let app = Router::new()
         .route("/health", get(|| async { Json(Health { status: "ok" }) }))
         .route("/status", get(handle_status))
@@ -259,10 +275,23 @@ async fn handle_status(State(state): State<AppState>) -> Json<Value> {
                 .map(|d| d.as_secs())
         });
     let revision = moraine_service::index_revision(&state.spool_dir);
+    let build = moraine_core::BuildIdentity::current();
+    let executable = std::env::current_exe()
+        .ok()
+        .map(|p| p.display().to_string());
     Json(json!({
         "status": "ok",
         "online": true,
+        "version": build.version,
+        "productVersion": build.version,
+        "gitCommit": build.git_commit,
+        "serviceProtocolVersion": build.service_protocol_version,
+        "schema": build.schema,
+        "executablePath": executable,
+        "socketPath": state.socket_path.display().to_string(),
+        "httpAddr": state.http_addr,
         "spoolDir": state.spool_dir.display().to_string(),
+        "indexPath": index_path.display().to_string(),
         "spool": {
             "pending": pending,
             "processed": processed,
@@ -271,6 +300,7 @@ async fn handle_status(State(state): State<AppState>) -> Json<Value> {
         "indexMtimeUnix": index_mtime,
         "revision": revision,
         "indexRevision": revision,
+        "startedAtUnix": state.started_at_unix,
     }))
 }
 
@@ -510,6 +540,33 @@ async fn spool_processor_loop(spool_dir: PathBuf, shutdown: Arc<Notify>) -> Resu
     Ok(())
 }
 
-fn systemd_unit() -> &'static str {
-    include_str!("../systemd/moraine-service.service")
+/// Render a user unit with an absolute ExecStart for the running binary.
+/// Prefer `moraine service install` from the installed suite CLI.
+fn systemd_unit() -> String {
+    let exec = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "/usr/bin/moraine-service".into());
+    // Refuse to embed private build paths that would pin a checkout target/.
+    let exec = if exec.contains("/target/") {
+        // Fall back to suite layout; installers rewrite absolute paths.
+        "%h/.local/libexec/moraine/moraine-service".into()
+    } else {
+        exec
+    };
+    format!(
+        r#"[Unit]
+Description=Moraine local integration runtime (per-user)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart={exec} --http 127.0.0.1:33111 --unix-socket %t/moraine-service.sock
+Restart=on-failure
+RestartSec=2
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=default.target
+"#
+    )
 }

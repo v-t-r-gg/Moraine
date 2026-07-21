@@ -64,6 +64,8 @@ pub struct RationalItem {
 #[serde(rename_all = "snake_case")]
 pub enum EvidenceKind {
     CommandResult,
+    ToolResult,
+    Artifact,
     Path,
     Url,
     Note,
@@ -73,6 +75,8 @@ impl EvidenceKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::CommandResult => "command_result",
+            Self::ToolResult => "tool_result",
+            Self::Artifact => "artifact",
             Self::Path => "path",
             Self::Url => "url",
             Self::Note => "note",
@@ -86,17 +90,41 @@ pub enum EvidenceProvenance {
     /// Agent asserted this result; Moraine did not capture or verify it.
     #[default]
     AgentReported,
-    /// Captured mechanically by Moraine (e.g. Git context).
+    /// Moraine observed only that an invocation was requested/begun.
+    InvocationObserved,
+    /// Moraine observed a result payload directly.
+    ResultObserved,
+    /// Captured mechanically by Moraine (e.g. verified execution result or Git context).
     MoraineCaptured,
+    /// External system or URL reference.
+    ExternalReference,
 }
 
 impl EvidenceProvenance {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::AgentReported => "agent_reported",
+            Self::InvocationObserved => "invocation_observed",
+            Self::ResultObserved => "result_observed",
             Self::MoraineCaptured => "moraine_captured",
+            Self::ExternalReference => "external_reference",
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EvidenceSummary {
+    pub evidence_id: Uuid,
+    pub kind: EvidenceKind,
+    pub provenance: EvidenceProvenance,
+    pub tool: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    pub summary: String,
+    pub occurred_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -235,6 +263,9 @@ pub struct AgentRunState {
     /// True until a semantic `run_start` confirms this mechanically created run.
     #[serde(default)]
     pub provisional: bool,
+    /// Mechanically captured evidence summaries attached to this run.
+    #[serde(default)]
+    pub evidence: Vec<EvidenceSummary>,
 }
 
 impl AgentRunState {

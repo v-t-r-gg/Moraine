@@ -1004,44 +1004,20 @@ Key outcomes:
 
 ### Milestone 2 — Local integration runtime and deterministic session capture
 
-**Status:** In progress on `main` (service + provisional reconcile + Codex hook adapter landed; notifications and dogfood hardening remain).
+Milestone 2 — Local integration runtime and deterministic session capture
 
-**Goal:** Capture supported coding-agent activity without requiring the desktop or a second terminal window.
+Status: Complete
 
-Scope:
-
-- local per-user background service;
-- local IPC transport;
-- project registration and rebuildable index;
-- integration health and diagnostics;
-- Codex lifecycle hook adapter;
-- session envelope;
-- provisional-run creation;
-- MCP/provisional-run reconciliation;
-- bounded event spool;
-- stable event IDs and deduplication;
-- capture coverage metadata;
-- desktop notifications without desktop-dependent capture;
-- platform service installation for the primary supported platform.
-
-Non-goals:
-
-- full command-output capture;
-- remote service;
-- hosted synchronization;
-- agent orchestration;
-- full transcript ingestion.
-
-Acceptance criteria:
-
-- the desktop may remain closed throughout a Codex task;
-- an ordinary prompt creates a durable run envelope;
-- an MCP start call reconciles with the provisional run;
-- no duplicate run is created;
-- temporary service unavailability does not silently lose events;
-- service indexes can be rebuilt from project files;
-- capture coverage is reported honestly;
-- unsupported agents receive no false automatic-capture claim.
+Validated:
+- desktop-closed capture;
+- provisional-to-semantic reconciliation;
+- multiple runs per session;
+- durable replay deduplication;
+- service-down spooling;
+- project confinement;
+- descriptive session-stop semantics;
+- derived capture coverage;
+- index reconstruction.
 
 ### Milestone 3 — Minimal trustworthy evidence capture
 

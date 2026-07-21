@@ -18,13 +18,15 @@ pub mod watcher;
 
 pub use agent_protocol::{
     capture_git_context, derive_capture_coverage, ensure_project, find_run_by_id, init_project,
-    namespace_session_key, provisional_run_ensure, resolve_confined_project,
-    resolve_existing_project, resolve_or_init_project, run_checkpoint, run_ready, run_resume,
-    run_show, run_start, session_observe, AgentOpResult, AgentRunState, CaptureCoverage,
-    CheckpointInput, CheckpointRecord, EvidenceItem, EvidenceKind, EvidenceProvenance,
-    GitContextSummary, ProjectInitResult, ProjectMeta, ProvisionalRunRequest, RationalItem,
-    RunLifecycle, RunShowOptions, RunShowPacket, RunStartRequest, SessionObserveRequest,
-    SessionObserveResult, SessionRecord, MAX_JSON_RESPONSE_HINT,
+    load_evidence_record, load_session, namespace_session_key, provisional_run_ensure,
+    record_mechanical_evidence, redact_secrets, resolve_confined_project, resolve_existing_project,
+    resolve_or_init_project, run_checkpoint, run_ready, run_resume, run_show, run_start,
+    session_observe, AgentOpResult, AgentRunState, CaptureCoverage, CheckpointInput,
+    CheckpointRecord, EvidenceItem, EvidenceKind, EvidenceProvenance, EvidenceRecord,
+    EvidenceSummary, GitContextSummary, MechanicalEvidenceRequest, OutputMetadata,
+    ProjectInitResult, ProjectMeta, ProvisionalRunRequest, RationalItem, RunLifecycle,
+    RunShowOptions, RunShowPacket, RunStartRequest, SessionObserveRequest, SessionObserveResult,
+    SessionRecord, MAX_JSON_RESPONSE_HINT,
 };
 pub use annotation_ops::{
     acceptance_recovery_status, apply_mutation, begin_accept_suggestion, cancel_accept_suggestion,

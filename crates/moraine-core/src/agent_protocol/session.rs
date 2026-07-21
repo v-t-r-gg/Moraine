@@ -46,6 +46,9 @@ pub struct SessionRecord {
     /// At most one active provisional run for this session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_provisional_run_id: Option<Uuid>,
+    /// Currently capture-active run for this session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_active_run_id: Option<Uuid>,
     /// All runs associated with this session (provisional and confirmed).
     #[serde(default)]
     pub run_ids: Vec<Uuid>,
@@ -116,6 +119,7 @@ pub struct SessionObserveResult {
     pub project_root: PathBuf,
     pub project_id: Uuid,
     pub active_provisional_run_id: Option<Uuid>,
+    pub capture_active_run_id: Option<Uuid>,
     pub run_ids: Vec<Uuid>,
     pub initial_task: Option<String>,
     pub ended: bool,
@@ -345,6 +349,7 @@ pub fn session_observe(req: SessionObserveRequest) -> Result<SessionObserveResul
             started_at: Utc::now(),
             ended_at: None,
             active_provisional_run_id: None,
+            capture_active_run_id: None,
             run_ids: vec![],
             initial_task: None,
             prompt_context: vec![],
@@ -396,6 +401,7 @@ pub fn session_observe(req: SessionObserveRequest) -> Result<SessionObserveResul
         project_root,
         project_id: project.project_id,
         active_provisional_run_id: rec.active_provisional_run_id,
+        capture_active_run_id: rec.capture_active_run_id,
         run_ids: rec.run_ids,
         initial_task: rec.initial_task,
         ended: rec.ended_at.is_some(),
@@ -411,6 +417,7 @@ pub fn set_session_provisional_run(
 ) -> Result<()> {
     update_session(project_root, session_key, |rec| {
         rec.active_provisional_run_id = Some(run_id);
+        rec.capture_active_run_id = Some(run_id);
         if !rec.run_ids.contains(&run_id) {
             rec.run_ids.push(run_id);
         }
@@ -429,6 +436,7 @@ pub fn register_session_run(
         if clear_provisional && rec.active_provisional_run_id == Some(run_id) {
             rec.active_provisional_run_id = None;
         }
+        rec.capture_active_run_id = Some(run_id);
         if !rec.run_ids.contains(&run_id) {
             rec.run_ids.push(run_id);
         }

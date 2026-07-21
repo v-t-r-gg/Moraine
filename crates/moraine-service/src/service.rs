@@ -317,6 +317,73 @@ fn process_mechanical_value(value: &Value) -> Result<()> {
             .map(|_| ())
             .map_err(core_err)
         }
+        "command_started" | "command_finished" | "tool_started" | "tool_finished"
+        | "artifact_observed" => {
+            let payload_obj = event.payload.as_ref();
+            let tool = payload_obj
+                .and_then(|p| p.get("tool"))
+                .and_then(|s| s.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let command = payload_obj
+                .and_then(|p| p.get("command"))
+                .and_then(|s| s.as_str())
+                .map(|s| s.to_string());
+            let working_directory = payload_obj
+                .and_then(|p| p.get("workingDirectory"))
+                .and_then(|s| s.as_str())
+                .map(|s| s.to_string());
+            let call_id = payload_obj
+                .and_then(|p| p.get("callId"))
+                .and_then(|s| s.as_str())
+                .map(|s| s.to_string());
+            let exit_code = payload_obj
+                .and_then(|p| p.get("exitCode"))
+                .and_then(|v| v.as_i64())
+                .map(|n| n as i32);
+            let output_text = payload_obj
+                .and_then(|p| p.get("output"))
+                .and_then(|v| {
+                    if let Some(s) = v.as_str() {
+                        Some(s.to_string())
+                    } else if v.is_object() || v.is_array() {
+                        Some(v.to_string())
+                    } else {
+                        None
+                    }
+                });
+
+            let observed = session_observe(SessionObserveRequest {
+                session_id: event.session_id.clone(),
+                integration: integration.clone(),
+                project,
+                source: kind.to_string(),
+                initial_task: None,
+                ended: false,
+                confine_existing_project: true,
+            })
+            .map_err(core_err)?;
+
+            moraine_core::record_mechanical_evidence(
+                &observed.project_root,
+                moraine_core::MechanicalEvidenceRequest {
+                    session_key: observed.session_key,
+                    integration: Some(integration),
+                    event_kind: kind.to_string(),
+                    tool,
+                    command,
+                    working_directory,
+                    call_id,
+                    started_at: None,
+                    finished_at: None,
+                    exit_code,
+                    output_text,
+                    event_id: event.event_id,
+                },
+            )
+            .map(|_| ())
+            .map_err(core_err)
+        }
         other => Err(anyhow::anyhow!(
             "unsupported mechanical event kind: {other}"
         )),
@@ -405,7 +472,14 @@ fn validate_mechanical(ev: &MechanicalEvent) -> Result<()> {
         return Err(anyhow::anyhow!("mechanical event requires sessionId"));
     }
     match ev.kind.as_str() {
-        "session_start" | "user_prompt" | "session_stop" => Ok(()),
+        "session_start"
+        | "user_prompt"
+        | "session_stop"
+        | "command_started"
+        | "command_finished"
+        | "tool_started"
+        | "tool_finished"
+        | "artifact_observed" => Ok(()),
         other => Err(anyhow::anyhow!(
             "unsupported mechanical event kind: {other}"
         )),

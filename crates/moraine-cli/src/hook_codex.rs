@@ -84,14 +84,63 @@ fn map_codex_hook(payload: &Value) -> Result<Option<Value>> {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
+    let mut inner = json!({});
+
     let kind = match hook_event {
         "SessionStart" => "session_start",
         "UserPromptSubmit" => "user_prompt",
         "Stop" => "session_stop",
+        "PreToolUse" => {
+            let raw_tool = extract_tool_name(payload);
+            let call_id = extract_call_id(payload);
+            let command = extract_command(payload);
+            let is_shell = is_shell_tool(&raw_tool, command.is_some());
+            let tool = if is_shell { "shell" } else { &raw_tool };
+            inner["tool"] = json!(tool);
+            inner["callId"] = json!(call_id);
+            if let Some(cmd) = command {
+                inner["command"] = json!(cmd);
+            }
+            if let Some(dir) = &cwd {
+                inner["workingDirectory"] = json!(dir);
+            }
+            if is_shell {
+                "command_started"
+            } else {
+                "tool_started"
+            }
+        }
+        "PostToolUse" => {
+            let raw_tool = extract_tool_name(payload);
+            let call_id = extract_call_id(payload);
+            let command = extract_command(payload);
+            let output = extract_output(payload);
+            let exit_code = extract_exit_code(payload);
+            let is_shell = is_shell_tool(&raw_tool, command.is_some());
+            let tool = if is_shell { "shell" } else { &raw_tool };
+            inner["tool"] = json!(tool);
+            inner["callId"] = json!(call_id);
+            if let Some(cmd) = command {
+                inner["command"] = json!(cmd);
+            }
+            if let Some(dir) = &cwd {
+                inner["workingDirectory"] = json!(dir);
+            }
+            if let Some(code) = exit_code {
+                inner["exitCode"] = json!(code);
+            }
+            if let Some(out) = output {
+                inner["output"] = json!(out);
+            }
+            if is_shell {
+                "command_finished"
+            } else {
+                "tool_finished"
+            }
+        }
         _ => return Ok(None),
     };
 
-    let mut inner = json!({});
     if hook_event == "SessionStart" {
         if let Some(source) = payload.get("source").and_then(|v| v.as_str()) {
             inner["source"] = json!(source);
@@ -129,6 +178,67 @@ fn map_codex_hook(payload: &Value) -> Result<Option<Value>> {
     })))
 }
 
+fn extract_tool_name(payload: &Value) -> String {
+    payload
+        .get("tool_name")
+        .or_else(|| payload.get("toolName"))
+        .or_else(|| payload.get("tool"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+fn extract_call_id(payload: &Value) -> String {
+    payload
+        .get("tool_use_id")
+        .or_else(|| payload.get("call_id"))
+        .or_else(|| payload.get("callId"))
+        .or_else(|| payload.get("id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn extract_command(payload: &Value) -> Option<String> {
+    payload
+        .get("command")
+        .or_else(|| payload.pointer("/tool_input/command"))
+        .or_else(|| payload.pointer("/input/command"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+fn extract_output(payload: &Value) -> Option<String> {
+    payload
+        .get("tool_output")
+        .or_else(|| payload.get("output"))
+        .or_else(|| payload.get("result"))
+        .or_else(|| payload.pointer("/hookSpecificOutput/output"))
+        .and_then(|v| {
+            if let Some(s) = v.as_str() {
+                Some(s.to_string())
+            } else if v.is_object() || v.is_array() {
+                Some(v.to_string())
+            } else {
+                None
+            }
+        })
+}
+
+fn extract_exit_code(payload: &Value) -> Option<i32> {
+    payload
+        .get("exit_code")
+        .or_else(|| payload.get("exitCode"))
+        .or_else(|| payload.get("status"))
+        .and_then(|v| v.as_i64())
+        .map(|n| n as i32)
+}
+
+fn is_shell_tool(tool_name: &str, has_command: bool) -> bool {
+    let t = tool_name.to_lowercase();
+    t == "bash" || t == "shell" || t == "exec" || t == "terminal" || has_command
+}
+
 fn stable_event_id(hook_event: &str, session_id: &str, payload: &Value) -> String {
     if let Some(id) = payload
         .get("event_id")
@@ -144,6 +254,11 @@ fn stable_event_id(hook_event: &str, session_id: &str, payload: &Value) -> Strin
     hasher.update(b"|");
     hasher.update(session_id.as_bytes());
     hasher.update(b"|");
+    let call_id = extract_call_id(payload);
+    if !call_id.is_empty() {
+        hasher.update(call_id.as_bytes());
+        hasher.update(b"|");
+    }
     if let Some(s) = payload.get("source").and_then(|v| v.as_str()) {
         hasher.update(s.as_bytes());
     }
@@ -278,9 +393,41 @@ mod tests {
     }
 
     #[test]
+    fn maps_pre_tool_use_and_post_tool_use() {
+        let pre = json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": "abc",
+            "cwd": "/tmp/proj",
+            "tool_name": "bash",
+            "tool_use_id": "call-1",
+            "command": "cargo test",
+        });
+        let ev1 = map_codex_hook(&pre).unwrap().unwrap();
+        assert_eq!(ev1["kind"], "command_started");
+        assert_eq!(ev1["payload"]["tool"], "shell");
+        assert_eq!(ev1["payload"]["callId"], "call-1");
+        assert_eq!(ev1["payload"]["command"], "cargo test");
+
+        let post = json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": "abc",
+            "cwd": "/tmp/proj",
+            "tool_name": "bash",
+            "tool_use_id": "call-1",
+            "command": "cargo test",
+            "exit_code": 0,
+            "tool_output": "test result: ok",
+        });
+        let ev2 = map_codex_hook(&post).unwrap().unwrap();
+        assert_eq!(ev2["kind"], "command_finished");
+        assert_eq!(ev2["payload"]["exitCode"], 0);
+        assert_eq!(ev2["payload"]["output"], "test result: ok");
+    }
+
+    #[test]
     fn ignores_unknown() {
         let payload = json!({
-            "hook_event_name": "PreToolUse",
+            "hook_event_name": "SomeUnknownEvent",
             "session_id": "abc",
         });
         assert!(map_codex_hook(&payload).unwrap().is_none());

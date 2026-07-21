@@ -149,6 +149,28 @@ pub fn render_run_markdown_with_id(
         out.push('\n');
     }
 
+    out.push_str("## Evidence\n\n");
+    if agent.evidence.is_empty() {
+        out.push_str("_None recorded._\n\n");
+    } else {
+        for ev in &agent.evidence {
+            let prov = ev.provenance.as_str();
+            let tool = &ev.tool;
+            let cmd = ev.command.as_deref().unwrap_or("").trim();
+            if !cmd.is_empty() {
+                out.push_str(&format!(
+                    "- `[{prov}]` **{tool}**: `{cmd}`{}\n",
+                    ev.exit_code
+                        .map(|code| format!(" (exit {code})"))
+                        .unwrap_or_default()
+                ));
+            } else {
+                out.push_str(&format!("- `[{prov}]` **{tool}**: {}\n", ev.summary.trim()));
+            }
+        }
+        out.push('\n');
+    }
+
     if agent.lifecycle == RunLifecycle::ReadyForReview {
         out.push_str("## Ready for review\n\n");
         out.push_str("This run is **ready for human review**. Human decisions use `moraine decide` and are separate from agent lifecycle.\n\n");
@@ -311,6 +333,7 @@ mod tests {
             capture_coverage: Default::default(),
             session_id: None,
             provisional: false,
+            evidence: vec![],
         }
     }
 

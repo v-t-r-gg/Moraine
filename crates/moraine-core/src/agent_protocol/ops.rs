@@ -368,6 +368,7 @@ pub fn run_start(req: RunStartRequest) -> Result<AgentOpResult> {
         capture_coverage: coverage,
         session_id: session_key.clone(),
         provisional: false,
+        evidence: vec![],
     };
 
     let mut meta = RunMeta::new_run_with_id(run_id);
@@ -733,6 +734,7 @@ pub fn provisional_run_ensure(req: ProvisionalRunRequest) -> Result<AgentOpResul
         capture_coverage: coverage,
         session_id: Some(session_key.clone()),
         provisional: true,
+        evidence: vec![],
     };
 
     let mut meta = RunMeta::new_run_with_id(run_id);

@@ -65,6 +65,31 @@ remain readable; changing Markdown after a legacy decision marks that decision
   without creating `.moraine`.
 - No central database. Git is optional.
 
+## Local ledger workspace discovery (M5)
+
+Human desktop discovery uses framework-neutral read models in `moraine-core`
+(`summarize_project`, `list_run_summaries`, `load_run_detail`, timeline build).
+
+- Project identity is the Moraine project UUID (paths are canonicalized and
+  deduplicated; temporarily missing roots are **unavailable**, not deleted).
+- Run summaries expose lifecycle, capture coverage, counts, integrity, and
+  recovery flags without rewriting bundles.
+- Categories: `active`, `ready`, `recent` (`recent` is ordering, not a lifecycle).
+- Broken/incompatible records are represented (malformed sidecar, unsupported
+  schema, missing Markdown/sidecar, recovery required)—never silently omitted.
+- Discovery **must not** promote schemas, rewrite Markdown, create `.moraine`,
+  clear incomplete ops, or alter lifecycle/findings merely by browsing.
+- The local service index (`index.json` under the spool) is a **rebuildable
+  nonauthoritative cache**. Canonical run data remains in project-local bundles.
+- Service routes (loopback HTTP diagnostics + Unix socket): `GET /status`,
+  `GET /projects`, `GET /projects/{id}/runs`, `GET /runs/{id}`,
+  `POST /index/rebuild`, `POST /projects/{id}/rescan`.
+- Desktop Tauri commands: `discovery_status`, `discovery_projects`,
+  `discovery_runs`, `discovery_run_detail`, `discovery_rebuild_index`,
+  `discovery_rescan_project`, `discovery_add_existing_project`.
+- When the service is offline, the desktop shows offline state and may use
+  direct filesystem inspection; it must not claim capture is active.
+
 ## Checkpoint schema
 
 ```json

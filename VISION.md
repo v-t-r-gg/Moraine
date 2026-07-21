@@ -43,14 +43,13 @@ An agent's narrative is a **claim about its work**, not independent proof. Prefe
 
 Humans primarily use the **GUI** (desktop Tauri app or web UI in development):
 
-* open a run record
-* read the narrative
-* comment on selections
-* suggest replacements (accept applies text; reject drops the mark)
-* edit **Human notes**
-* save Markdown and sidecar when acting as host
+* launch a **ledger workspace** and discover projects/runs without knowing paths
+* open a run and inspect the structured chronological timeline
+* comment on selections; suggest replacements (accept applies text; reject drops the mark)
+* add **append-only human observations** (and other core-backed append-only ops) on protocol runs
+* use **Legacy document mode** only for temporary free-form Markdown editing on non-protocol documents
 
-Review means inspection, comment, challenge, context, and response. It does **not** need to end in an approval state.
+Review means inspection, comment, challenge, context, and response. It does **not** need to end in an approval state. Protocol run claims are not free-form-edited in place.
 
 Review may happen:
 

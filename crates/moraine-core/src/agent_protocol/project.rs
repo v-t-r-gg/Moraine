@@ -298,9 +298,10 @@ pub fn find_run_by_id(project_root: &Path, run_id: Uuid) -> Result<(PathBuf, Run
         if !md_path.is_file() {
             continue;
         }
-        match load_run_meta_readonly(&md_path)? {
-            Some(meta) if meta.run.id == run_id => return Ok((md_path, meta)),
-            _ => continue,
+        // Skip unreadable/malformed sidecars so one broken run does not hide others.
+        match load_run_meta_readonly(&md_path) {
+            Ok(Some(meta)) if meta.run.id == run_id => return Ok((md_path, meta)),
+            Ok(_) | Err(_) => continue,
         }
     }
     // Also accept direct sidecar named incorrectly? skip.

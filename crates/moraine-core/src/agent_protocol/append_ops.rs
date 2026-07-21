@@ -657,7 +657,10 @@ mod tests {
             Some("All concurrency tests pass."),
             "first amend freezes original summary"
         );
-        assert_eq!(a1.op.new_content.as_deref(), Some("Claim after first amend."));
+        assert_eq!(
+            a1.op.new_content.as_deref(),
+            Some("Claim after first amend.")
+        );
 
         let a2 = run_amend(
             Some(&root),

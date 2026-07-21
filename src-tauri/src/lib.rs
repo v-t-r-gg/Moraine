@@ -59,6 +59,13 @@ pub fn run() {
             commands::run_amend_cmd,
             commands::entry_supersede_cmd,
             commands::entry_redact_cmd,
+            commands::discovery_status,
+            commands::discovery_projects,
+            commands::discovery_runs,
+            commands::discovery_run_detail,
+            commands::discovery_rebuild_index,
+            commands::discovery_rescan_project,
+            commands::discovery_add_existing_project,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Moraine");

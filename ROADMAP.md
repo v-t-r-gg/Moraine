@@ -6,7 +6,7 @@ High-level direction. Product model: [VISION.md](./VISION.md), [ARCHITECTURE.md]
 
 ## Done (foundation)
 
-* Run records as Markdown + `*.md.moraine.json` ledger (schema through v4)
+* Run records as Markdown + `*.md.moraine.json` ledger (schema through v6 append-only ops)
 * Stable run ID + SHA-256 content hash; historical decisions preserved for compatibility
 * Operation-based annotation mutations; durable suggestion dispositions
 * Agent run protocol: `project init`, `run start|checkpoint|show|ready|resume|open`
@@ -14,20 +14,23 @@ High-level direction. Product model: [VISION.md](./VISION.md), [ARCHITECTURE.md]
 * CLI: protocol + `share`, `status --json`, `init`, file helpers
 * **Milestone 0:** vision realignment and decision de-centering (docs, legacy `decide`, primary UI)
 * **Milestone 1:** local STDIO MCP (`moraine mcp`) + Codex docs; CI covers `moraine-mcp`; no decision tools
+* **M2:** local integration service + rebuildable project index foundation
+* **M3:** minimal trustworthy evidence capture
+* **M4:** checkpoint findings with MCP list/get/respond and desktop thread
+* **M4.5:** React + TypeScript + Vite desktop migration (Svelte removed)
+* **M4.6:** append-only ledger semantics (observations, amendments, supersessions, redactions)
 * GUI: comments, suggestions, host Save; run-level decision controls removed from desktop IPC
 * Optional in-memory live relay (secondary)
 
 ## Now
 
+* **M5:** local run discovery and ledger-focused desktop UX (projects → runs → structured ledger)
 * Keep CI green
-* Dogfood MCP on additional real tasks
+* Dogfood discovery workspace on multi-run projects
 
 ## Next (bounded milestones)
 
-1. **Minimal evidence capture** — trusted command/test capture with clear provenance
-2. **Findings and amendment loop** — human findings ↔ agent responses without verdicts
-3. **Local run discovery and ledger UX** — project/run list from sidecars; no approval inbox
-4. **Second agent integration, packaging, external beta**
+1. **Second agent integration, packaging, external beta**
 
 ## Explicit non-goals for the near term
 

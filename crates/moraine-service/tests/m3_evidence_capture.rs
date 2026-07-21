@@ -172,7 +172,14 @@ fn m3_evidence_capture_full_flow() {
 
     let ev_count = fs::read_dir(&ev_dir)
         .unwrap()
-        .filter(|e| e.as_ref().unwrap().path().extension().and_then(|x| x.to_str()) == Some("json"))
+        .filter(|e| {
+            e.as_ref()
+                .unwrap()
+                .path()
+                .extension()
+                .and_then(|x| x.to_str())
+                == Some("json")
+        })
         .count();
     assert_eq!(ev_count, 3, "Run 1 must have 3 evidence records");
 
@@ -180,7 +187,10 @@ fn m3_evidence_capture_full_flow() {
     let redacted_ev_path = fs::read_dir(&ev_dir)
         .unwrap()
         .map(|e| e.unwrap().path())
-        .find(|p| p.extension().and_then(|x| x.to_str()) == Some("json") && fs::read_to_string(p).unwrap().contains("failing-crate"))
+        .find(|p| {
+            p.extension().and_then(|x| x.to_str()) == Some("json")
+                && fs::read_to_string(p).unwrap().contains("failing-crate")
+        })
         .unwrap();
     let redacted_json = fs::read_to_string(&redacted_ev_path).unwrap();
     assert!(!redacted_json.contains("sk-1234567890123456789012345"));
@@ -199,7 +209,10 @@ fn m3_evidence_capture_full_flow() {
     })
     .unwrap();
     // Confirming the provisional must return the same run1_id.
-    assert_eq!(confirm_res.run_id, run1_id, "Confirming provisional must yield run1_id");
+    assert_eq!(
+        confirm_res.run_id, run1_id,
+        "Confirming provisional must yield run1_id"
+    );
 
     let run2_res = run_start(RunStartRequest {
         objective: "Second semantic run".to_string(),
@@ -209,7 +222,10 @@ fn m3_evidence_capture_full_flow() {
     })
     .unwrap();
     let run2_id = run2_res.run_id;
-    assert_ne!(run1_id, run2_id, "Second run_start after provisional confirmed must be a new run");
+    assert_ne!(
+        run1_id, run2_id,
+        "Second run_start after provisional confirmed must be a new run"
+    );
 
     let session_rec2 = moraine_core::load_session(&project, &session_key)
         .unwrap()
@@ -245,7 +261,14 @@ fn m3_evidence_capture_full_flow() {
     assert!(ev2_dir.exists());
     let ev2_count = fs::read_dir(&ev2_dir)
         .unwrap()
-        .filter(|e| e.as_ref().unwrap().path().extension().and_then(|x| x.to_str()) == Some("json"))
+        .filter(|e| {
+            e.as_ref()
+                .unwrap()
+                .path()
+                .extension()
+                .and_then(|x| x.to_str())
+                == Some("json")
+        })
         .count();
     assert_eq!(ev2_count, 1, "Run 2 must have 1 evidence record attached");
 
@@ -258,9 +281,19 @@ fn m3_evidence_capture_full_flow() {
 
     let ev2_count_after = fs::read_dir(&ev2_dir)
         .unwrap()
-        .filter(|e| e.as_ref().unwrap().path().extension().and_then(|x| x.to_str()) == Some("json"))
+        .filter(|e| {
+            e.as_ref()
+                .unwrap()
+                .path()
+                .extension()
+                .and_then(|x| x.to_str())
+                == Some("json")
+        })
         .count();
-    assert_eq!(ev2_count_after, 1, "Replaying same event must not duplicate evidence");
+    assert_eq!(
+        ev2_count_after, 1,
+        "Replaying same event must not duplicate evidence"
+    );
 
     // 9. Oversized output truncation check
     let huge_output = "X".repeat(30_000);
@@ -288,32 +321,43 @@ fn m3_evidence_capture_full_flow() {
     rt.block_on(process_spool_file(&p_huge, &processed, &failed))
         .unwrap();
 
-    let huge_ev = load_evidence_record(&project, Some(run2_id), uuid::Uuid::parse_str("ev-huge-finish").unwrap_or_else(|_| uuid::Uuid::nil()))
-        .unwrap()
-        .or_else(|| {
-            // Find in ev2_dir
-            fs::read_dir(&ev2_dir).unwrap().flatten().find_map(|entry| {
-                let path = entry.path();
-                if path.extension().and_then(|x| x.to_str()) == Some("json") {
-                    let raw = fs::read_to_string(&path).unwrap();
-                    let rec: moraine_core::EvidenceRecord = serde_json::from_str(&raw).unwrap();
-                    if rec.call_id.as_deref() == Some("call-cmd-huge") {
-                        return Some(rec);
-                    }
+    let huge_ev = load_evidence_record(
+        &project,
+        Some(run2_id),
+        uuid::Uuid::parse_str("ev-huge-finish").unwrap_or_else(|_| uuid::Uuid::nil()),
+    )
+    .unwrap()
+    .or_else(|| {
+        // Find in ev2_dir
+        fs::read_dir(&ev2_dir).unwrap().flatten().find_map(|entry| {
+            let path = entry.path();
+            if path.extension().and_then(|x| x.to_str()) == Some("json") {
+                let raw = fs::read_to_string(&path).unwrap();
+                let rec: moraine_core::EvidenceRecord = serde_json::from_str(&raw).unwrap();
+                if rec.call_id.as_deref() == Some("call-cmd-huge") {
+                    return Some(rec);
                 }
-                None
-            })
+            }
+            None
         })
-        .unwrap();
+    })
+    .unwrap();
 
     let out_meta = huge_ev.output.unwrap();
-    assert!(out_meta.truncated, "Oversized output must be marked truncated");
+    assert!(
+        out_meta.truncated,
+        "Oversized output must be marked truncated"
+    );
     assert_eq!(out_meta.byte_count, 30_000);
 
     let excerpt_path = project.join(out_meta.excerpt_path.unwrap());
     assert!(excerpt_path.exists());
     let excerpt_bytes = fs::read(&excerpt_path).unwrap();
-    assert_eq!(excerpt_bytes.len(), 16_384, "Excerpt must be bounded to 16KB");
+    assert_eq!(
+        excerpt_bytes.len(),
+        16_384,
+        "Excerpt must be bounded to 16KB"
+    );
 
     // 10. Markdown record check — find run1's .md by run_id (has the 3 evidence records)
     let runs_dir = project.join(".moraine/runs");
@@ -339,9 +383,13 @@ fn m3_evidence_capture_full_flow() {
     let md_content = fs::read_to_string(&run1_md_path).unwrap();
     // Debug: print markdown for diagnosis
     eprintln!("--- run1.md ---\n{md_content}\n---");
-    assert!(md_content.contains("## Evidence"), "run.md must contain ## Evidence section");
     assert!(
-        md_content.contains("`[moraine_captured]` **shell**: `cargo test -p moraine-core` (exit 0)"),
+        md_content.contains("## Evidence"),
+        "run.md must contain ## Evidence section"
+    );
+    assert!(
+        md_content
+            .contains("`[moraine_captured]` **shell**: `cargo test -p moraine-core` (exit 0)"),
         "run.md must show the captured command evidence line"
     );
 }

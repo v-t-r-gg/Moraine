@@ -267,12 +267,27 @@ pub fn record_mechanical_evidence(
     );
 
     let (provenance, kind) = match req.event_kind.as_str() {
-        "command_started" => (EvidenceProvenance::InvocationObserved, EvidenceKind::CommandResult),
-        "tool_started" => (EvidenceProvenance::InvocationObserved, EvidenceKind::ToolResult),
-        "command_finished" => (EvidenceProvenance::MoraineCaptured, EvidenceKind::CommandResult),
-        "tool_finished" => (EvidenceProvenance::MoraineCaptured, EvidenceKind::ToolResult),
+        "command_started" => (
+            EvidenceProvenance::InvocationObserved,
+            EvidenceKind::CommandResult,
+        ),
+        "tool_started" => (
+            EvidenceProvenance::InvocationObserved,
+            EvidenceKind::ToolResult,
+        ),
+        "command_finished" => (
+            EvidenceProvenance::MoraineCaptured,
+            EvidenceKind::CommandResult,
+        ),
+        "tool_finished" => (
+            EvidenceProvenance::MoraineCaptured,
+            EvidenceKind::ToolResult,
+        ),
         "artifact_observed" => (EvidenceProvenance::MoraineCaptured, EvidenceKind::Artifact),
-        _ => (EvidenceProvenance::MoraineCaptured, EvidenceKind::CommandResult),
+        _ => (
+            EvidenceProvenance::MoraineCaptured,
+            EvidenceKind::CommandResult,
+        ),
     };
 
     // Command redaction and length bounding
@@ -319,9 +334,7 @@ pub fn record_mechanical_evidence(
     let evidence_id = existing_evidence
         .as_ref()
         .map(|e| e.evidence_id)
-        .unwrap_or_else(|| {
-            Uuid::parse_str(&req.event_id).unwrap_or_else(|_| Uuid::new_v4())
-        });
+        .unwrap_or_else(|| Uuid::parse_str(&req.event_id).unwrap_or_else(|_| Uuid::new_v4()));
 
     // Output processing
     let output_meta = if let Some(raw_output) = &req.output_text {
@@ -480,10 +493,16 @@ fn attach_evidence_to_run(
     // Re-render Markdown
     let raw_md = fs::read_to_string(&md_path)?;
     let human_notes = super::markdown::extract_human_notes(&raw_md)?;
-    let updated_md =
-        super::markdown::render_run_markdown_with_id(run_id, meta.agent.as_ref().unwrap(), &human_notes);
+    let updated_md = super::markdown::render_run_markdown_with_id(
+        run_id,
+        meta.agent.as_ref().unwrap(),
+        &human_notes,
+    );
 
-    write_atomic(&sidecar_path, format!("{}\n", serde_json::to_string_pretty(&meta)?).as_bytes())?;
+    write_atomic(
+        &sidecar_path,
+        format!("{}\n", serde_json::to_string_pretty(&meta)?).as_bytes(),
+    )?;
     write_atomic(&md_path, updated_md.as_bytes())?;
 
     Ok(())

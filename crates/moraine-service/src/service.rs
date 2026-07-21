@@ -341,17 +341,15 @@ fn process_mechanical_value(value: &Value) -> Result<()> {
                 .and_then(|p| p.get("exitCode"))
                 .and_then(|v| v.as_i64())
                 .map(|n| n as i32);
-            let output_text = payload_obj
-                .and_then(|p| p.get("output"))
-                .and_then(|v| {
-                    if let Some(s) = v.as_str() {
-                        Some(s.to_string())
-                    } else if v.is_object() || v.is_array() {
-                        Some(v.to_string())
-                    } else {
-                        None
-                    }
-                });
+            let output_text = payload_obj.and_then(|p| p.get("output")).and_then(|v| {
+                if let Some(s) = v.as_str() {
+                    Some(s.to_string())
+                } else if v.is_object() || v.is_array() {
+                    Some(v.to_string())
+                } else {
+                    None
+                }
+            });
 
             let observed = session_observe(SessionObserveRequest {
                 session_id: event.session_id.clone(),
@@ -472,14 +470,8 @@ fn validate_mechanical(ev: &MechanicalEvent) -> Result<()> {
         return Err(anyhow::anyhow!("mechanical event requires sessionId"));
     }
     match ev.kind.as_str() {
-        "session_start"
-        | "user_prompt"
-        | "session_stop"
-        | "command_started"
-        | "command_finished"
-        | "tool_started"
-        | "tool_finished"
-        | "artifact_observed" => Ok(()),
+        "session_start" | "user_prompt" | "session_stop" | "command_started"
+        | "command_finished" | "tool_started" | "tool_finished" | "artifact_observed" => Ok(()),
         other => Err(anyhow::anyhow!(
             "unsupported mechanical event kind: {other}"
         )),

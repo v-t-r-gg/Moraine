@@ -83,7 +83,9 @@ async fn main() -> Result<()> {
                     let home_unit = dirs::config_dir()
                         .unwrap_or_else(|| std::path::PathBuf::from("~/.config"))
                         .join("systemd/user/moraine-service.service");
-                    std::fs::create_dir_all(home_unit.parent().unwrap()).ok();
+                    if let Some(parent) = home_unit.parent() {
+                        std::fs::create_dir_all(parent).ok();
+                    }
                     std::fs::write(&home_unit, systemd_unit())?;
                     let _ = std::process::Command::new("systemctl")
                         .args(["--user", "daemon-reload"])

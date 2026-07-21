@@ -9,41 +9,46 @@ vi.mock("@/shared/api", async () => {
     appInfo: vi.fn().mockResolvedValue({
       name: "Moraine",
       version: "test",
+      gitCommit: "abc1234",
       dataDir: "",
       historyDir: "",
       configDir: "",
+      serviceOnline: false,
+      doctorHint: "moraine doctor --json",
     }),
     takeStartupPath: vi.fn().mockResolvedValue(null),
-    openDocument: vi.fn().mockResolvedValue({
-      meta: {
-        id: "1",
-        path: "welcome.md",
-        title: "welcome.md",
-        dirty: false,
-        lastSavedAt: null,
-        lastModifiedOnDisk: null,
-        byteLen: 10,
-      },
-      content: "# hi\n\n## Human notes\n\nnotes\n",
-      contentHash: "0".repeat(64),
-    }),
+    pickMarkdownFile: vi.fn().mockResolvedValue(null),
     onFileChanged: () => () => {},
   };
 });
 
-// Editor is heavy; stub to avoid Yjs/Tiptap complexity in smoke test
-vi.mock("@/features/editor/Editor", () => ({
-  Editor: () => <div data-testid="editor-stub">editor</div>,
-}));
+vi.mock("@/shared/api/discovery", async () => {
+  const actual = await vi.importActual<typeof import("@/shared/api/discovery")>(
+    "@/shared/api/discovery",
+  );
+  return {
+    ...actual,
+    discoveryStatus: vi.fn().mockResolvedValue({
+      online: false,
+      revision: 0,
+      mode: "direct",
+      message: "service unavailable",
+    }),
+    discoveryProjects: vi.fn().mockResolvedValue([]),
+    subscribeDiscoveryRevision: () => () => {},
+  };
+});
 
 import { App } from "./App";
 
-describe("App shell", () => {
-  it("starts and shows toolbar", async () => {
+describe("App product shell (C3)", () => {
+  it("starts on ledger workspace with service health banner", async () => {
     render(<App />);
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Open/i })).toBeInTheDocument();
+      expect(screen.getByTestId("product-shell")).toBeInTheDocument();
     });
-    expect(screen.getByRole("button", { name: /Save/i })).toBeInTheDocument();
+    expect(screen.getByTestId("service-health-banner")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Open legacy document/i })).toBeInTheDocument();
+    expect(screen.getByTestId("service-health-banner")).toHaveTextContent(/Discovery/i);
   });
 });

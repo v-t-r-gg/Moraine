@@ -256,11 +256,13 @@ describe("ProtocolLedgerPanel", () => {
     expect(src.toLowerCase()).not.toContain("approve");
   });
 
-  it("App labels Legacy document mode for free-form editing", () => {
+  it("legacy document route labels free-form editing; ledger shell stays primary", () => {
     const app = readFileSync(join(root, "src/app/App.tsx"), "utf8");
-    expect(app).toContain("Legacy document");
-    expect(app).toContain("ProtocolLedgerPanel");
-    expect(app).toContain("isProtocolRunMarkdown");
-    expect(app).toContain("append-only");
+    const legacy = readFileSync(join(root, "src/app/LegacyDocumentApp.tsx"), "utf8");
+    expect(app).toContain("Open legacy document");
+    expect(app).toContain("LegacyDocumentApp");
+    expect(legacy).toContain("Legacy document route");
+    expect(legacy).toContain("ProtocolLedgerPanel");
+    expect(legacy).toContain("isProtocolRunMarkdown");
   });
 });

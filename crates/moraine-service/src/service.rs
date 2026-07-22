@@ -198,10 +198,14 @@ pub async fn process_spool_file(
         .and_then(|x| x.as_str())
         .map(|s| s.to_string());
 
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("spool event path has no file name: {}", path.display()))?;
+
     // Restart-safe dedupe: if already applied, acknowledge without re-running side effects.
     if let Some(ref id) = event_id {
         if event_already_seen(spool_dir, id) {
-            let dest = processed_dir.join(path.file_name().unwrap());
+            let dest = processed_dir.join(file_name);
             let _ = tokio::fs::rename(path, &dest).await;
             return Ok(());
         }
@@ -218,13 +222,13 @@ pub async fn process_spool_file(
             if let Some(ref id) = event_id {
                 mark_event_seen(spool_dir, id)?;
             }
-            let dest = processed_dir.join(path.file_name().unwrap());
+            let dest = processed_dir.join(file_name);
             tokio::fs::rename(path, &dest).await?;
             Ok(())
         }
         Err(e) => {
             // Permanent failure → failed/ (not retried). Corrupt → quarantine.
-            let dest = failed_dir.join(path.file_name().unwrap());
+            let dest = failed_dir.join(file_name);
             let _ = tokio::fs::rename(path, &dest).await;
             Err(e)
         }
@@ -234,7 +238,13 @@ pub async fn process_spool_file(
 async fn quarantine_file(path: &Path, spool_dir: &Path) -> Result<()> {
     let q = spool_dir.join("quarantine");
     tokio::fs::create_dir_all(&q).await.ok();
-    let dest = q.join(path.file_name().unwrap());
+    let Some(name) = path.file_name() else {
+        return Err(anyhow::anyhow!(
+            "cannot quarantine path without file name: {}",
+            path.display()
+        ));
+    };
+    let dest = q.join(name);
     let _ = tokio::fs::rename(path, &dest).await;
     Ok(())
 }

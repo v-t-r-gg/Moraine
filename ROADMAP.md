@@ -6,45 +6,47 @@ High-level direction. Product model: [VISION.md](./VISION.md), [ARCHITECTURE.md]
 
 ## Done (foundation)
 
-* Run records as Markdown + `*.md.moraine.json` ledger (schema through v6 append-only ops)
-* Stable run ID + SHA-256 content hash; historical decisions preserved for compatibility
-* Operation-based annotation mutations; durable suggestion dispositions
-* Agent run protocol: `project init`, `run start|checkpoint|show|ready|resume|open`
-* Per-document ledger lock + safe atomic replace; deterministic legacy migration
-* CLI: protocol + `share`, `status --json`, `init`, file helpers
-* **Milestone 0:** vision realignment and decision de-centering (docs, legacy `decide`, primary UI)
-* **Milestone 1:** local STDIO MCP (`moraine mcp`) + Codex docs; CI covers `moraine-mcp`; no decision tools
-* **M2:** local integration service + rebuildable project index foundation
-* **M3:** minimal trustworthy evidence capture
-* **M4:** checkpoint findings with MCP list/get/respond and desktop thread
-* **M4.5:** React + TypeScript + Vite desktop migration (Svelte removed)
-* **M4.6:** append-only ledger semantics (observations, amendments, supersessions, redactions)
-* GUI: comments, suggestions, host Save; run-level decision controls removed from desktop IPC
-* Optional in-memory live relay (secondary)
-
-## Done (recent consolidation)
-
-* **C1 — Seal redaction and trust projections: complete**
-  * Trust claim: target-scoped ordinary-view withholding across core, desktop, discovery, service, and MCP projections
-  * Explicit exclusions: secure erasure, global duplicate-text scrubbing, evidence-artifact deletion, Git-history removal, credential remediation
-  * Docs: [SECURITY.md](./SECURITY.md), [docs/REDACTION.md](./docs/REDACTION.md)
+* Run records as Markdown + `*.md.moraine.json` (schema through v6)  
+* Agent run protocol + local STDIO MCP (run + findings tools)  
+* Local service + rebuildable discovery index  
+* Minimal trustworthy evidence on checkpoints  
+* Checkpoint findings (MCP + desktop)  
+* React desktop migration (Svelte removed from app)  
+* Append-only ledger semantics; target-scoped redaction (C1)  
+* **C2 — Stranger-safe Linux installation and Codex reference pack** (merged)  
 
 ## Now
 
-* **C2 — Stranger-safe Linux installation and first reference-integration pack** (Codex is the current concrete adapter) — *in progress on `feat/stranger-safe-install-reference-pack`*
-* Keep CI green
+* **C3 — Beta hardening and product-surface freeze** (this branch)  
+  * Complete residual C2 acceptance evidence where environment allows  
+  * Align VISION / ARCHITECTURE / ROADMAP  
+  * Remove leftover Svelte assets; explicit CSP + test  
+  * Eliminate reachable service panics  
+  * Freeze/hide non-ledger surfaces; ledger-first App shell  
+  * Lifecycle smoke (restart, spool, reinstall, uninstall)  
+  * Demo/screenshot path; outside-user install report template  
+  * Decompose App; legacy document route separate from coordinator  
 
-## Next (bounded milestones)
+## Next (ordered)
 
-1. **C3 — Beta hardening and product-surface freeze**
-2. Second agent / broader packaging only after C2–C3
+1. **W1 — Platform abstraction** (IPC/paths beyond Linux assumptions)  
+2. **W2 — Native Windows 11 port**  
+3. **W3 — Signed installer and WinGet**  
+4. Second agent adapter (subordinate to Windows portfolio reach)  
 
-Evaluation artifacts: [docs/evaluation/2026-07/](./docs/evaluation/2026-07/) (historical baseline `4f8d1e8`; PR #12 was open at that freeze).
+## Deferred (do not expand in C3)
 
-## Explicit non-goals for the near term
+* `moraine-core::prelude` public API reorg  
+* Broad evidence expansion  
+* Semantic/vector search  
+* Relay authentication  
+* Richer Git/PR integration  
+* Hosted collaboration  
 
-Approval/rejection as product center, merge gates, remote MCP, hosted multi-user service, full observability, agent orchestration, live-collaboration hardening, compliance features, enterprise policy enforcement, general knowledge-management workspace, Git/PR replacement.
+## Explicit non-goals (near term)
 
-## Compatibility note
+Approval/rejection as product center, merge gates, remote MCP, full observability, agent orchestration, live-collaboration hardening for untrusted networks, compliance features, enterprise policy, general KM workspace, Git/PR replacement.
 
-`moraine decide` remains readable/writable via **CLI only** (legacy warning). Historical sidecar `decisions[]` remain loadable. Do not extend decision functionality. Prefer comments, findings, and human notes. Do not expose decisions through MCP or desktop IPC.
+## Compatibility
+
+`moraine decide` remains CLI-only legacy. Prefer findings and append-only observations. Live collab/Yjs is frozen for beta defaults.

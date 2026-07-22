@@ -166,9 +166,15 @@ Moraine is **not** currently:
 
 Also: limited automatic evidence capture; no automatic Git commits; relay has no durable state; reviewer names are not authenticated identities.
 
-## Future direction (not implemented)
+## Product surface (C3)
 
-See the development blueprint: evidence capture, findings and amendments, local run discovery, second agent integration. Present as direction only. Freeze broad live-collaboration investment unless real use demands it.
+Default desktop shell is **ledger workspace** (projects → runs → timeline / findings / append-only ops). Live collab and free-form document editing are **secondary/frozen** for beta defaults. Installed suite layout and service discovery: [docs/INSTALL.md](./docs/INSTALL.md), [docs/C3_SURFACE_FREEZE.md](./docs/C3_SURFACE_FREEZE.md).
+
+Desktop CSP is explicit in `src-tauri/tauri.conf.json` (loopback service access only; no open `https:` default-src).
+
+## Future direction
+
+Sequence: **C3** surface freeze → **W1** platform abstraction → **W2/W3** Windows portfolio. Second agent adapter is subordinate to that sequence. Blueprint: [docs/DEVELOPMENT_BLUEPRINT_ALIGNED.md](./docs/DEVELOPMENT_BLUEPRINT_ALIGNED.md).
 
 ## Quality preference
 

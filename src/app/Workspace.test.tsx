@@ -145,7 +145,10 @@ describe("Workspace discovery shell", () => {
 
   it("App defaults to workspace not welcome-md", () => {
     const app = readFileSync(join(root, "src/app/App.tsx"), "utf8");
-    expect(app).toContain("showWorkspace");
+    // C3: ledger workspace is the default product shell (not welcome-md / showWorkspace toggle).
+    expect(app).toContain("product-shell");
+    expect(app).toContain("<Workspace");
+    expect(app).not.toContain("WELCOME_MD");
     expect(app).toContain("Ledger workspace");
     expect(app).not.toMatch(/moraine-welcome\.md/);
   });

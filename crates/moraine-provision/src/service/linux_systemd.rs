@@ -55,15 +55,7 @@ impl super::ServiceManager for LinuxSystemdUserService {
         let binary_present = binary.as_ref().map(|p| p.is_file()).unwrap_or(false);
         let registration_present = self.suite.unit.is_file();
         let registration_valid = registration_present
-            && (binary_present
-                || self
-                    .suite
-                    .unit
-                    .is_file()
-                    .then(|| std::fs::read_to_string(&self.suite.unit).ok())
-                    .flatten()
-                    .map(|u| u.contains("ExecStart="))
-                    .unwrap_or(false));
+            && unit_exec_matches_suite(&self.suite.unit, binary.as_deref());
         let active = Self::unit_active();
         let running_unit = active.as_deref() == Some("active");
         let (http_online, version) = match http_get_loopback(33111, "/status") {
@@ -180,6 +172,17 @@ impl super::ServiceManager for LinuxSystemdUserService {
         Ok(())
     }
 
+    fn disable_autostart(&self) -> Result<()> {
+        let st = Self::systemctl(&["disable", "moraine-service.service"])
+            .map_err(ProvisionError::Service)?;
+        if !st.success() {
+            return Err(ProvisionError::Service(
+                "failed to disable background capture at login".into(),
+            ));
+        }
+        Ok(())
+    }
+
     fn logs(&self, limit: usize) -> Result<Vec<ServiceLog>> {
         let n = limit.to_string();
         let output = Command::new("journalctl")
@@ -203,6 +206,33 @@ impl super::ServiceManager for LinuxSystemdUserService {
                 timestamp: None,
             })
             .collect())
+    }
+}
+
+/// True when unit ExecStart canonicalizes to the suite service binary.
+fn unit_exec_matches_suite(unit_path: &Path, suite_service: Option<&Path>) -> bool {
+    let Some(suite) = suite_service else {
+        return false;
+    };
+    let Ok(unit) = fs::read_to_string(unit_path) else {
+        return false;
+    };
+    let exec = unit.lines().find_map(|l| {
+        let t = l.trim();
+        t.strip_prefix("ExecStart=")
+            .map(|s| s.trim().trim_matches('"').to_string())
+    });
+    let Some(exec_line) = exec else {
+        return false;
+    };
+    let bin = exec_line.split_whitespace().next().unwrap_or("");
+    if bin.is_empty() {
+        return false;
+    }
+    let exec_path = Path::new(bin);
+    match (fs::canonicalize(exec_path), fs::canonicalize(suite)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => exec_path == suite,
     }
 }
 

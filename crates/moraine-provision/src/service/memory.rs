@@ -117,6 +117,12 @@ impl super::ServiceManager for MemoryServiceManager {
         Ok(())
     }
 
+    fn disable_autostart(&self) -> Result<()> {
+        let mut g = self.inner.lock().unwrap();
+        g.autostart = false;
+        Ok(())
+    }
+
     fn logs(&self, _limit: usize) -> Result<Vec<ServiceLog>> {
         Ok(vec![ServiceLog {
             line: "memory service manager (no real logs)".into(),

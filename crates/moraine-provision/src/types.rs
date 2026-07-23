@@ -187,8 +187,25 @@ pub struct ProvisionWarning {
 pub struct SetupStateWitness {
     pub project: String,
     pub absolute_cli: String,
+    /// Suite product version (when known).
+    #[serde(default)]
+    pub suite_version: String,
+    /// SHA-256 of suite CLI bytes when available.
+    #[serde(default)]
+    pub suite_cli_hash: String,
+    /// Hash of project `.codex/config.toml` if present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_config_hash: Option<String>,
+    /// Hash of project `.codex/hooks.json` if present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_hooks_hash: Option<String>,
+    /// Hash of service unit file if present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_unit_hash: Option<String>,
     pub project_initialized: bool,
     pub service_installed: bool,
+    #[serde(default)]
+    pub service_registration_valid: bool,
     pub service_running: bool,
     pub enable_autostart: bool,
     pub skip_service: bool,
@@ -241,13 +258,34 @@ impl ApplyOutcome {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BackupRecord {
-    pub original_path: String,
-    pub backup_path: String,
-    pub created_at: String,
+/// Pre-mutation file snapshot for write-ahead recovery.
+///
+/// `Absent` means the path did not exist before the transaction — rollback deletes it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum FileSnapshot {
+    Existing {
+        path: String,
+        backup_path: String,
+        original_hash: String,
+        created_at: String,
+    },
+    Absent {
+        path: String,
+        created_at: String,
+    },
 }
+
+impl FileSnapshot {
+    pub fn path(&self) -> &str {
+        match self {
+            Self::Existing { path, .. } | Self::Absent { path, .. } => path,
+        }
+    }
+}
+
+/// Backward-compatible alias used by older call sites / receipts.
+pub type BackupRecord = FileSnapshot;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -268,13 +306,25 @@ pub struct SetupReceipt {
     pub transaction_id: Uuid,
     pub intent: SetupIntent,
     pub completed: Vec<CompletedOperation>,
-    pub backups: Vec<BackupRecord>,
+    /// File mutations recorded before apply (existing backups + previously-absent paths).
+    #[serde(alias = "backups")]
+    pub snapshots: Vec<FileSnapshot>,
     pub readiness: Readiness,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failed_operation: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// True when rollback left known non-reversible changes (e.g. autostart enabled).
+    #[serde(default)]
+    pub retained_changes: Vec<String>,
     pub journal_path: String,
+}
+
+impl SetupReceipt {
+    /// Compatibility accessor.
+    pub fn backups(&self) -> &[FileSnapshot] {
+        &self.snapshots
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

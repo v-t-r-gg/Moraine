@@ -69,8 +69,11 @@ pub fn plan(intent: SetupIntent, service: &dyn ServiceManager) -> Result<SetupPl
 
     let svc_state = service.inspect()?;
     if !intent.skip_service {
-        // Install when registration is missing (binary alone is not enough).
-        if !svc_state.registration_present || !svc_state.installed {
+        // Install/repair when registration missing or invalid (wrong ExecStart).
+        if !svc_state.registration_present
+            || !svc_state.registration_valid
+            || !svc_state.installed
+        {
             operations.push(op(
                 ProvisionOpKind::InstallService,
                 "Enable background capture".into(),
@@ -79,11 +82,11 @@ pub fn plan(intent: SetupIntent, service: &dyn ServiceManager) -> Result<SetupPl
             product_summary.push("Enable background capture".into());
         }
         if intent.enable_autostart {
-            // No disable_autostart on ServiceManager — not reversible via rollback.
+            // Reversible via ServiceManager::disable_autostart.
             operations.push(op(
                 ProvisionOpKind::EnableAutostart,
                 "Keep capture available after restart".into(),
-                false,
+                true,
             ));
             product_summary.push("Keep capture available after restart".into());
         }

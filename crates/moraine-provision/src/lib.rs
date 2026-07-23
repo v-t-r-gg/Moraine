@@ -11,6 +11,7 @@ pub mod journal;
 pub mod plan;
 pub mod service;
 pub mod service_ready;
+pub mod snapshot;
 pub mod suite;
 pub mod types;
 pub mod verify;
@@ -22,8 +23,9 @@ pub use agent::{
 };
 pub use apply::{
     apply, apply_default, apply_receipt, apply_with_options, compute_witness, rollback,
-    rollback_default, JournaledBackupRecorder,
+    rollback_completed_operations, rollback_default, JournaledBackupRecorder,
 };
+pub use snapshot::{durable_backup, file_sha256, restore_snapshot, snapshot_absent};
 pub use error::{ProvisionError, Result};
 pub use health::{health, health_default, repair, repair_default};
 pub use inspect::{detect_agent, inspect, inspect_default, inspect_suite};
@@ -40,6 +42,7 @@ pub use suite::{
     setup_transactions_dir, SuitePaths, SuiteState,
 };
 pub use types::*;
+pub use types::FileSnapshot;
 pub use verify::{
     verify, verify_with, verify_with_options, ControlledCapture, EventCapture, HookCodexCapture,
     VerifyOptions,

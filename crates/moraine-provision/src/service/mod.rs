@@ -21,6 +21,7 @@ pub trait ServiceManager: Send + Sync {
     fn stop(&self) -> Result<()>;
     fn restart(&self) -> Result<()>;
     fn enable_autostart(&self) -> Result<()>;
+    fn disable_autostart(&self) -> Result<()>;
     fn logs(&self, limit: usize) -> Result<Vec<ServiceLog>>;
 }
 

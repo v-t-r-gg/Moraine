@@ -1,7 +1,6 @@
-//! Codex agent adapter — structured config mutation with backups.
+//! Codex agent adapter — structured config mutation with write-ahead snapshots.
 
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -13,7 +12,8 @@ use super::{
     IntegrationVerification,
 };
 use crate::error::{ProvisionError, Result};
-use crate::types::{AgentKind, BackupRecord};
+use crate::snapshot::{atomic_write_durable, durable_backup, snapshot_absent};
+use crate::types::{AgentKind, FileSnapshot};
 
 const MANAGED_TOML_START: &str = "# --- Moraine (managed) ---";
 const MANAGED_TOML_END: &str = "# --- end Moraine ---";
@@ -199,7 +199,7 @@ args = ["mcp", "--project", "{project}"]
         );
 
         fs::create_dir_all(&codex_dir)?;
-        let mut local_backups = Vec::new();
+        let mut local_snaps = Vec::new();
         let mut actions = Vec::new();
 
         // Validate hooks *before* mutating config so we fail without partial MCP write when possible.
@@ -229,31 +229,32 @@ args = ["mcp", "--project", "{project}"]
         };
         let new_cfg = merge_mcp_block(&existing_cfg, &mcp_block);
 
-        // Write-ahead: record+persist backup BEFORE each mutation.
-        if cfg_path.is_file() && new_cfg != existing_cfg {
-            let bak = backup_file(&cfg_path)?;
-            recorder.record_backup(bak.clone())?;
-            local_backups.push(bak);
-            atomic_write(&cfg_path, new_cfg.as_bytes())?;
-            actions.push(format!("wrote {}", cfg_path.display()));
-        } else if new_cfg != existing_cfg {
-            atomic_write(&cfg_path, new_cfg.as_bytes())?;
+        // Write-ahead: snapshot BEFORE each mutation (Existing backup or Absent marker).
+        if new_cfg != existing_cfg {
+            let snap = if cfg_path.is_file() {
+                durable_backup(&cfg_path)?
+            } else {
+                snapshot_absent(&cfg_path)
+            };
+            recorder.record_snapshot(snap.clone())?;
+            local_snaps.push(snap);
+            atomic_write_durable(&cfg_path, new_cfg.as_bytes())?;
             actions.push(format!("wrote {}", cfg_path.display()));
         } else {
             actions.push(format!("config unchanged {}", cfg_path.display()));
         }
 
-        if hooks_path.is_file() {
-            let bak = backup_file(&hooks_path)?;
-            recorder.record_backup(bak.clone())?;
-            local_backups.push(bak);
-        }
         let hook_cmd = format!("{cli_s} hook-codex");
         ensure_managed_hooks(&mut hooks_doc, &hook_cmd);
-        atomic_write(
-            &hooks_path,
-            serde_json::to_string_pretty(&hooks_doc)?.as_bytes(),
-        )?;
+        let hooks_bytes = serde_json::to_string_pretty(&hooks_doc)?;
+        let snap = if hooks_path.is_file() {
+            durable_backup(&hooks_path)?
+        } else {
+            snapshot_absent(&hooks_path)
+        };
+        recorder.record_snapshot(snap.clone())?;
+        local_snaps.push(snap);
+        atomic_write_durable(&hooks_path, hooks_bytes.as_bytes())?;
         actions.push(format!("wrote {}", hooks_path.display()));
 
         Ok(IntegrationReceipt {
@@ -261,7 +262,7 @@ args = ["mcp", "--project", "{project}"]
             project: project_s,
             absolute_cli: cli_s.clone(),
             actions,
-            backups: local_backups,
+            snapshots: local_snaps,
             config_path: Some(cfg_path.display().to_string()),
             hooks_path: Some(hooks_path.display().to_string()),
         })
@@ -292,17 +293,17 @@ args = ["mcp", "--project", "{project}"]
         })
     }
 
-    fn remove(&self, project: &Path) -> Result<Vec<BackupRecord>> {
+    fn remove(&self, project: &Path) -> Result<Vec<FileSnapshot>> {
         let cfg_path = project.join(".codex/config.toml");
         let hooks_path = project.join(".codex/hooks.json");
-        let mut backups = Vec::new();
+        let mut snaps = Vec::new();
 
         if cfg_path.is_file() {
             let cfg = fs::read_to_string(&cfg_path)?;
             if cfg.contains(MANAGED_TOML_START) {
-                backups.push(backup_file(&cfg_path)?);
+                snaps.push(durable_backup(&cfg_path)?);
                 let stripped = strip_managed_block(&cfg);
-                atomic_write(&cfg_path, stripped.as_bytes())?;
+                atomic_write_durable(&cfg_path, stripped.as_bytes())?;
             }
         }
         if hooks_path.is_file() {
@@ -310,24 +311,44 @@ args = ["mcp", "--project", "{project}"]
             if let Ok(mut doc) = serde_json::from_str::<Value>(&raw) {
                 let removed = strip_managed_hooks(&mut doc);
                 if removed > 0 {
-                    backups.push(backup_file(&hooks_path)?);
-                    atomic_write(
+                    snaps.push(durable_backup(&hooks_path)?);
+                    atomic_write_durable(
                         &hooks_path,
                         serde_json::to_string_pretty(&doc)?.as_bytes(),
                     )?;
                 }
             }
         }
-        Ok(backups)
+        Ok(snaps)
     }
 }
 
 fn which_codex() -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path) {
-        let cand = dir.join("codex");
+    // Desktop apps often have a leaner PATH than interactive shells.
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            candidates.push(dir.join("codex"));
+        }
+    }
+    if let Some(home) = dirs::home_dir() {
+        for rel in [
+            ".local/bin/codex",
+            ".npm-global/bin/codex",
+            "bin/codex",
+            ".nvm/current/bin/codex",
+            ".asdf/shims/codex",
+        ] {
+            candidates.push(home.join(rel));
+        }
+    }
+    // Optional override for advanced installs / onboarding picker.
+    if let Ok(over) = std::env::var("MORAINE_CODEX") {
+        candidates.insert(0, PathBuf::from(over));
+    }
+    for cand in candidates {
         if cand.is_file() {
-            return Some(cand);
+            return Some(fs::canonicalize(&cand).unwrap_or(cand));
         }
     }
     None
@@ -483,35 +504,6 @@ fn strip_managed_block(cfg: &str) -> String {
         return out.trim_start_matches('\n').to_string();
     }
     cfg.to_string()
-}
-
-fn backup_file(path: &Path) -> Result<BackupRecord> {
-    let ts = chrono::Utc::now().format("%Y%m%d%H%M%S%.3f");
-    let bak = path.with_extension(format!("bak.{ts}"));
-    fs::copy(path, &bak)?;
-    Ok(BackupRecord {
-        original_path: path.display().to_string(),
-        backup_path: bak.display().to_string(),
-        created_at: chrono::Utc::now().to_rfc3339(),
-    })
-}
-
-fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent)?;
-    let tmp = parent.join(format!(
-        ".{}.tmp",
-        path.file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("moraine")
-    ));
-    {
-        let mut f = fs::File::create(&tmp)?;
-        f.write_all(data)?;
-        f.sync_all().ok();
-    }
-    fs::rename(&tmp, path)?;
-    Ok(())
 }
 
 fn toml_escape(s: &str) -> String {

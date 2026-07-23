@@ -10,7 +10,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
-use crate::types::{AgentKind, BackupRecord};
+use crate::types::{AgentKind, FileSnapshot};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,7 +56,7 @@ pub struct IntegrationReceipt {
     pub project: String,
     pub absolute_cli: String,
     pub actions: Vec<String>,
-    pub backups: Vec<BackupRecord>,
+    pub snapshots: Vec<FileSnapshot>,
     pub config_path: Option<String>,
     pub hooks_path: Option<String>,
 }
@@ -72,22 +72,26 @@ pub struct IntegrationVerification {
     pub messages: Vec<String>,
 }
 
-/// Records a backup **before** the corresponding mutation; implementations must
-/// persist (journal + fsync) before returning Ok.
+/// Records a file snapshot **before** the corresponding mutation; implementations
+/// must persist (journal + fsync) before returning Ok.
 pub trait BackupRecorder: Send {
-    fn record_backup(&mut self, backup: BackupRecord) -> Result<()>;
+    fn record_snapshot(&mut self, snapshot: FileSnapshot) -> Result<()>;
 }
 
 /// In-memory sink (tests only). Production apply uses journaled recorder.
 pub struct VecBackupRecorder {
-    pub backups: Vec<BackupRecord>,
+    pub snapshots: Vec<FileSnapshot>,
 }
 
 impl VecBackupRecorder {
     pub fn new() -> Self {
         Self {
-            backups: Vec::new(),
+            snapshots: Vec::new(),
         }
+    }
+
+    pub fn backups(&self) -> &[FileSnapshot] {
+        &self.snapshots
     }
 }
 
@@ -98,8 +102,8 @@ impl Default for VecBackupRecorder {
 }
 
 impl BackupRecorder for VecBackupRecorder {
-    fn record_backup(&mut self, backup: BackupRecord) -> Result<()> {
-        self.backups.push(backup);
+    fn record_snapshot(&mut self, snapshot: FileSnapshot) -> Result<()> {
+        self.snapshots.push(snapshot);
         Ok(())
     }
 }
@@ -119,7 +123,7 @@ pub trait AgentAdapter: Send + Sync {
         recorder: &mut dyn BackupRecorder,
     ) -> Result<IntegrationReceipt>;
     fn verify(&self, project: &Path, expected_cli: &Path) -> Result<IntegrationVerification>;
-    fn remove(&self, project: &Path) -> Result<Vec<BackupRecord>>;
+    fn remove(&self, project: &Path) -> Result<Vec<FileSnapshot>>;
 }
 
 pub fn adapter_for(kind: AgentKind) -> Arc<dyn AgentAdapter> {

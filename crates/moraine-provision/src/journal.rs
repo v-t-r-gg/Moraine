@@ -49,14 +49,20 @@ pub fn write_journal_at(path: &Path, receipt: &SetupReceipt) -> Result<()> {
     }
     fs::rename(&tmp, path)
         .map_err(|e| ProvisionError::msg(format!("journal rename {}: {e}", path.display())))?;
-    // Fsync the final file as well.
-    if let Ok(f) = File::open(path) {
-        let _ = f.sync_all();
-    }
+    // Required: fsync final file.
+    File::open(path)
+        .and_then(|f| f.sync_all())
+        .map_err(|e| ProvisionError::msg(format!("journal final fsync {}: {e}", path.display())))?;
+    // Required on Unix when supported: fsync parent directory after rename.
     if let Some(parent) = path.parent() {
-        if let Ok(dir) = File::open(parent) {
-            let _ = dir.sync_all();
-        }
+        File::open(parent)
+            .and_then(|dir| dir.sync_all())
+            .map_err(|e| {
+                ProvisionError::msg(format!(
+                    "journal parent fsync {}: {e} (required for durable recovery)",
+                    parent.display()
+                ))
+            })?;
     }
     Ok(())
 }

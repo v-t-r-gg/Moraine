@@ -10,15 +10,16 @@ use crate::error::{ProvisionError, Result};
 use crate::journal;
 use crate::service::ServiceManager;
 use crate::service_ready::{default_service_probe, ServiceProbe};
+use crate::snapshot::{optional_file_sha256, restore_snapshot};
 use crate::suite::SuitePaths;
 use crate::types::{
-    ApplyOutcome, BackupRecord, CompletedOperation, ProvisionOpKind, Readiness, SetupPlan,
+    ApplyOutcome, CompletedOperation, FileSnapshot, ProvisionOpKind, Readiness, SetupPlan,
     SetupReceipt, SetupStateWitness, VerificationMode,
 };
 use crate::verify::{self, VerifyOptions};
 
-/// Journaled backup recorder: each backup is fsynced into the transaction journal
-/// **before** the caller mutates the original file.
+/// Journaled snapshot recorder: each snapshot is fsynced into the transaction
+/// journal **before** the caller mutates the original path.
 pub struct JournaledBackupRecorder<'a> {
     receipt: &'a mut SetupReceipt,
 }
@@ -30,9 +31,8 @@ impl<'a> JournaledBackupRecorder<'a> {
 }
 
 impl BackupRecorder for JournaledBackupRecorder<'_> {
-    fn record_backup(&mut self, backup: BackupRecord) -> Result<()> {
-        self.receipt.backups.push(backup);
-        // Required write boundary — fail the transaction if journal cannot be persisted.
+    fn record_snapshot(&mut self, snapshot: FileSnapshot) -> Result<()> {
+        self.receipt.snapshots.push(snapshot);
         journal::write_journal(self.receipt)?;
         Ok(())
     }
@@ -50,7 +50,6 @@ pub fn apply_with_options(
     verify_opts: Option<VerifyOptions>,
     service_probe: Option<std::sync::Arc<dyn ServiceProbe>>,
 ) -> Result<ApplyOutcome> {
-    // Reject stale plan (state changed since user approved).
     let current = compute_witness(&plan.intent, service, &plan.absolute_cli)?;
     if current != plan.state_witness {
         return Err(ProvisionError::msg(
@@ -64,13 +63,13 @@ pub fn apply_with_options(
         transaction_id,
         intent: plan.intent.clone(),
         completed: Vec::new(),
-        backups: Vec::new(),
+        snapshots: Vec::new(),
         readiness: Readiness::NotConfigured,
         failed_operation: None,
         error: None,
+        retained_changes: Vec::new(),
         journal_path: journal_path.display().to_string(),
     };
-    // Required write-ahead: fail transaction if journal cannot be persisted.
     journal::write_journal(&receipt)?;
 
     let suite = SuitePaths::discover();
@@ -123,9 +122,8 @@ pub fn apply_with_options(
             },
             ProvisionOpKind::StartService => match service.start() {
                 Ok(()) => {
-                    let ready = probe.wait_ready(
-                        crate::service_ready::default_service_ready_timeout_ms(),
-                    );
+                    let ready = probe
+                        .wait_ready(crate::service_ready::default_service_ready_timeout_ms());
                     if ready.ready {
                         Ok(format!("service started ({})", ready.message))
                     } else {
@@ -194,23 +192,21 @@ pub fn apply_with_options(
                 receipt.failed_operation = Some(op.id.clone());
                 receipt.error = Some(err.clone());
                 receipt.readiness = Readiness::RollbackRequired;
-                // Required journal of failure state (backups already journaled if any).
                 if let Err(je) = journal::write_journal(&receipt) {
-                    // Still attempt rollback; surface journal error if rollback also fails.
                     let rb = auto_rollback(receipt, service, err);
                     return match rb {
-                        ApplyOutcome::RolledBack { receipt, original_error } => {
-                            Ok(ApplyOutcome::RolledBack {
-                                receipt,
-                                original_error: format!(
-                                    "{original_error}; journal_error_on_failure={je}"
-                                ),
-                            })
-                        }
+                        ApplyOutcome::RolledBack {
+                            receipt,
+                            original_error,
+                        } => Ok(ApplyOutcome::RolledBack {
+                            receipt,
+                            original_error: format!(
+                                "{original_error}; journal_error_on_failure={je}"
+                            ),
+                        }),
                         other => Ok(other),
                     };
                 }
-
                 return Ok(auto_rollback(receipt, service, err));
             }
         }
@@ -235,18 +231,23 @@ fn auto_rollback(
     service: &dyn ServiceManager,
     original_error: String,
 ) -> ApplyOutcome {
-    match rollback_snapshots_only(&receipt, service) {
-        Ok(()) => {
-            receipt.readiness = Readiness::Failed;
+    match rollback_completed_operations(&receipt, service) {
+        Ok(retained) => {
+            receipt.retained_changes = retained;
+            receipt.readiness = if receipt.retained_changes.is_empty() {
+                Readiness::Failed
+            } else {
+                Readiness::Degraded
+            };
             receipt.error = Some(format!("rolled back after: {original_error}"));
-            // Required: persist rolled-back state.
             if let Err(e) = journal::write_journal(&receipt) {
                 return ApplyOutcome::RollbackRequired {
                     receipt,
                     original_error,
-                    rollback_error: format!("snapshot restore ok but journal failed: {e}"),
+                    rollback_error: format!("ops reversed but journal failed: {e}"),
                 };
             }
+            // Still RolledBack even with retained non-reversible notes (autostart).
             ApplyOutcome::RolledBack {
                 receipt,
                 original_error,
@@ -268,44 +269,61 @@ fn auto_rollback(
     }
 }
 
-/// Restore exact file snapshots only. Does **not** run semantic agent.remove.
-pub fn rollback(receipt: SetupReceipt, service: &dyn ServiceManager) -> Result<()> {
-    rollback_snapshots_only(&receipt, service)?;
+/// Shared rollback for automatic and manual recovery.
+///
+/// Reverses successful completed operations (newest first), then restores file
+/// snapshots (existing → copy; absent → delete).
+pub fn rollback_completed_operations(
+    receipt: &SetupReceipt,
+    service: &dyn ServiceManager,
+) -> Result<Vec<String>> {
+    let mut retained = Vec::new();
     for op in receipt.completed.iter().rev() {
         if !op.success {
             continue;
         }
         match op.kind {
             ProvisionOpKind::StartService => {
-                let _ = service.stop();
+                service.stop()?;
             }
             ProvisionOpKind::InstallService => {
-                let _ = service.uninstall();
+                service.uninstall()?;
             }
-            ProvisionOpKind::EnableAutostart
+            ProvisionOpKind::EnableAutostart => {
+                // Reversible when ServiceManager implements disable.
+                match service.disable_autostart() {
+                    Ok(()) => {}
+                    Err(e) => retained.push(format!("autostart may remain enabled: {e}")),
+                }
+            }
+            ProvisionOpKind::ConfigureAgent
             | ProvisionOpKind::InitializeProject
-            | ProvisionOpKind::ConfigureAgent
             | ProvisionOpKind::SelfTest => {}
         }
     }
-    let mut updated = receipt;
-    updated.readiness = Readiness::Failed;
-    updated.error = Some("rolled back".into());
-    journal::write_journal(&updated)?;
+    restore_snapshots(receipt)?;
+    Ok(retained)
+}
+
+fn restore_snapshots(receipt: &SetupReceipt) -> Result<()> {
+    for snap in receipt.snapshots.iter().rev() {
+        restore_snapshot(snap)?;
+    }
     Ok(())
 }
 
-fn rollback_snapshots_only(receipt: &SetupReceipt, _service: &dyn ServiceManager) -> Result<()> {
-    for bak in receipt.backups.iter().rev() {
-        let original = PathBuf::from(&bak.original_path);
-        let backup = PathBuf::from(&bak.backup_path);
-        if backup.is_file() {
-            if let Some(parent) = original.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::copy(&backup, &original)?;
-        }
-    }
+/// Manual / public rollback API.
+pub fn rollback(receipt: SetupReceipt, service: &dyn ServiceManager) -> Result<()> {
+    let retained = rollback_completed_operations(&receipt, service)?;
+    let mut updated = receipt;
+    updated.readiness = if retained.is_empty() {
+        Readiness::Failed
+    } else {
+        Readiness::Degraded
+    };
+    updated.retained_changes = retained;
+    updated.error = Some("rolled back".into());
+    journal::write_journal(&updated)?;
     Ok(())
 }
 
@@ -331,11 +349,30 @@ pub fn compute_witness(
 ) -> Result<SetupStateWitness> {
     let initialized = moraine_core::resolve_existing_project(Some(&intent.project)).is_ok();
     let st = service.inspect()?;
+    let suite = SuitePaths::discover();
+    let suite_version = suite
+        .read_manifest()
+        .map(|m| m.version)
+        .unwrap_or_default();
+    let suite_cli_hash = optional_file_sha256(std::path::Path::new(absolute_cli)).unwrap_or_default();
+    let cfg = intent.project.join(".codex/config.toml");
+    let hooks = intent.project.join(".codex/hooks.json");
+    let unit = st
+        .unit_path
+        .as_ref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| suite.unit.clone());
     Ok(SetupStateWitness {
         project: intent.project.display().to_string(),
         absolute_cli: absolute_cli.to_string(),
+        suite_version,
+        suite_cli_hash,
+        codex_config_hash: optional_file_sha256(&cfg),
+        codex_hooks_hash: optional_file_sha256(&hooks),
+        service_unit_hash: optional_file_sha256(&unit),
         project_initialized: initialized,
         service_installed: st.installed,
+        service_registration_valid: st.registration_valid,
         service_running: st.running,
         enable_autostart: intent.enable_autostart,
         skip_service: intent.skip_service,

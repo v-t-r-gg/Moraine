@@ -76,13 +76,14 @@ impl EventCapture for HookCodexCapture {
                 cli.display()
             ));
         }
-        // Unique marker so we never accept a stale self-test run.
+        // Structural event_id + prompt marker (never accept stale runs).
         let prompt = format!("Moraine self-test event_id={event_id}");
-        invoke_hook_codex(cli, project, session_id, "SessionStart", None)?;
+        invoke_hook_codex(cli, project, session_id, event_id, "SessionStart", None)?;
         invoke_hook_codex(
             cli,
             project,
             session_id,
+            event_id,
             "UserPromptSubmit",
             Some(&prompt),
         )?;
@@ -92,23 +93,14 @@ impl EventCapture for HookCodexCapture {
         let deadline = Instant::now() + self.poll_timeout;
         let mut delay = Duration::from_millis(100);
         while Instant::now() < deadline {
-            // ONLY accept runs bound to this unique session_id.
+            // ONLY accept runs bound to this unique session_id AND event_id marker.
             if let Ok(Some(run_id)) = find_session_run(&resolved.project_root, session_id) {
                 let runs = list_run_summaries(&resolved.project_root, resolved.project_id);
                 if let Some(r) = runs.iter().find(|r| r.run_id == run_id) {
-                    // Prefer event_id in objective (we put it in the synthetic prompt).
-                    // Do not accept arbitrary provisional/self-test runs from other sessions.
                     if r.objective.contains(event_id) {
                         return Ok(run_id);
                     }
-                    // Session file is namespaced to this session_id; provisional from our
-                    // just-delivered UserPromptSubmit is acceptable if objective lags.
-                    if r.provisional {
-                        return Ok(run_id);
-                    }
-                } else {
-                    // Session points at run_id even if summary list lags — session-bound.
-                    return Ok(run_id);
+                    // Keep polling until objective reflects the unique event_id.
                 }
             }
             std::thread::sleep(delay);
@@ -621,12 +613,14 @@ fn invoke_hook_codex(
     cli: &Path,
     project: &Path,
     session_id: &str,
+    event_id: &str,
     hook_event: &str,
     prompt: Option<&str>,
 ) -> std::result::Result<(), String> {
     let mut payload = json!({
         "hook_event_name": hook_event,
         "session_id": session_id,
+        "event_id": event_id,
         "cwd": project.display().to_string(),
     });
     if let Some(p) = prompt {

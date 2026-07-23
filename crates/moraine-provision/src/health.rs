@@ -45,15 +45,19 @@ pub fn health(
             technical_detail: svc.status_message.clone(),
             repair: None,
         });
-    } else if !svc.registration_present {
-        // Binary alone is not enough — need registration (install unit).
+    } else if !svc.registration_present || !svc.registration_valid {
+        // Missing or invalid registration → Install/repair (not Start).
         checks.push(HealthCheck {
             id: "service.installed".into(),
             status: HealthStatus::Fail,
-            user_message: if svc.binary_present {
-                "Background capture is not registered".into()
+            user_message: if !svc.registration_present {
+                if svc.binary_present {
+                    "Background capture is not registered".into()
+                } else {
+                    "Background capture is not set up".into()
+                }
             } else {
-                "Background capture is not set up".into()
+                "Background capture registration needs repair".into()
             },
             technical_detail: svc.status_message.clone(),
             repair: Some(RepairAction {
@@ -65,7 +69,7 @@ pub fn health(
             }),
         });
     } else {
-        // Registered but not running → Start repair (not Install).
+        // Valid registration but not running → Start.
         checks.push(HealthCheck {
             id: "service.running".into(),
             status: HealthStatus::Fail,

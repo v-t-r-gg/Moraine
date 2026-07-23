@@ -2271,6 +2271,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "moraine-core",
+ "moraine-provision",
  "parking_lot",
  "serde",
  "serde_json",
@@ -2278,6 +2279,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
+ "tempfile",
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
@@ -2295,6 +2297,7 @@ dependencies = [
  "hex",
  "moraine-core",
  "moraine-mcp",
+ "moraine-provision",
  "serde",
  "serde_json",
  "sha2",
@@ -2344,6 +2347,24 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "moraine-provision"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dirs",
+ "hex",
+ "moraine-core",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
  "uuid",
 ]
 

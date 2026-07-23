@@ -39,6 +39,38 @@ vi.mock("@/shared/api/discovery", async () => {
   };
 });
 
+vi.mock("@/shared/api/provision", () => ({
+  provisionInspect: vi.fn().mockResolvedValue({
+    suite: {
+      prefix: "",
+      cliPath: "",
+      cliPresent: true,
+      servicePath: "",
+      servicePresent: false,
+      desktopPath: "",
+      desktopPresent: true,
+      manifestPath: "",
+      manifestPresent: false,
+      componentsCoherent: true,
+    },
+    service: {
+      installed: true,
+      running: true,
+      binaryPresent: true,
+      statusMessage: "running",
+      platform: "test",
+    },
+    agents: [],
+    projects: [{ path: "/tmp/p", name: "p", initialized: true, isGit: true }],
+    readiness: "ready",
+  }),
+  provisionHealth: vi.fn().mockResolvedValue({ ok: true, checks: [], readiness: "ready" }),
+  provisionRepair: vi.fn(),
+  provisionPlan: vi.fn(),
+  provisionApply: vi.fn(),
+  provisionRollback: vi.fn(),
+}));
+
 import { App } from "./App";
 
 describe("App product shell (C3)", () => {

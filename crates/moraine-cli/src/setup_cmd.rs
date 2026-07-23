@@ -1,4 +1,7 @@
 //! Post-install `moraine setup` entry point (C2 §15).
+//!
+//! CLI automation path; normal users should use the desktop Enable Moraine wizard.
+//! Prefer `moraine enable --project <path>` for a strict transactional setup.
 
 use anyhow::Result;
 use serde_json::json;
@@ -35,6 +38,9 @@ pub fn setup_post_install(json: bool) -> Result<i32> {
     let service_online =
         ver.service.online || crate::suite::http_get_loopback(33111, "/status").is_ok();
 
+    // Structured inspect via shared control plane (same data desktop uses).
+    let system = moraine_provision::inspect_default().ok();
+
     if json {
         println!(
             "{}",
@@ -59,14 +65,14 @@ pub fn setup_post_install(json: bool) -> Result<i32> {
                     "manifest": suite.manifest.display().to_string(),
                     "share": suite.share.display().to_string(),
                 },
+                "system": system,
                 "actions": actions,
                 "warnings": warnings,
                 "doctorOk": doctor_report.ok,
                 "next": [
-                    "cd /path/to/project",
-                    "moraine project init .",
-                    "moraine setup codex --project .",
-                    "moraine doctor --project . --integration codex",
+                    "Open Moraine desktop → Enable Moraine",
+                    "or: moraine enable --project /path/to/repo --json",
+                    "or: moraine self-test --project /path/to/repo --json",
                 ],
             }))?
         );
@@ -103,7 +109,8 @@ pub fn setup_post_install(json: bool) -> Result<i32> {
             eprintln!("warning: {w}");
         }
         println!(
-            "\nNext:\n  cd /path/to/project\n  moraine project init .\n  moraine setup codex --project .\n  moraine doctor --project . --integration codex"
+            "\nNext (normal path):\n  Open Moraine desktop → Enable Moraine\n\
+Automation:\n  moraine enable --project /path/to/repo\n  moraine self-test --project /path/to/repo"
         );
     }
 

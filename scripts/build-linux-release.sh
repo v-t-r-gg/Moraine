@@ -37,24 +37,42 @@ cp -f "$ROOT/target/release/moraine" "$STAGE/bin/moraine"
 cp -f "$ROOT/target/release/moraine-service" "$STAGE/bin/moraine-service"
 chmod 755 "$STAGE/bin/moraine" "$STAGE/bin/moraine-service"
 
-echo "==> desktop (best-effort; may skip without webkit)"
-if command -v npm >/dev/null && [ -f "$ROOT/package.json" ]; then
+# Primary product artifact REQUIRES the desktop (P0 no-terminal onboarding).
+# Headless suites must use MORAINE_HEADLESS=1 and are named distinctly.
+MORAINE_HEADLESS="${MORAINE_HEADLESS:-0}"
+if [ "$MORAINE_HEADLESS" != "1" ]; then
+  echo "==> desktop (required for primary product package)"
+  if ! command -v npm >/dev/null; then
+    echo "error: npm required to build moraine-app for the primary product package" >&2
+    echo "  (set MORAINE_HEADLESS=1 for an explicitly named headless CLI+service package)" >&2
+    exit 1
+  fi
   npm ci --ignore-scripts 2>/dev/null || npm install --ignore-scripts
   npm run build
-  if cargo build --release -p moraine-app 2>/tmp/moraine-app-build.log; then
-    if [ -f "$ROOT/target/release/moraine-app" ]; then
-      cp -f "$ROOT/target/release/moraine-app" "$STAGE/bin/moraine-app"
-      chmod 755 "$STAGE/bin/moraine-app"
-    fi
-  else
-    echo "warning: moraine-app release build failed; suite will ship CLI+service only"
-    echo "  (see /tmp/moraine-app-build.log if present)"
+  if ! cargo build --release -p moraine-app; then
+    echo "error: moraine-app release build failed — primary package will not ship headless" >&2
+    exit 1
   fi
+  if [ ! -f "$ROOT/target/release/moraine-app" ]; then
+    echo "error: moraine-app binary missing after successful cargo build" >&2
+    exit 1
+  fi
+  cp -f "$ROOT/target/release/moraine-app" "$STAGE/bin/moraine-app"
+  chmod 755 "$STAGE/bin/moraine-app"
+else
+  echo "==> headless package (MORAINE_HEADLESS=1): skipping desktop"
+  STAGE="$OUT_DIR/moraine-${VERSION}-linux-x86_64-headless"
+  ARCHIVE="$OUT_DIR/moraine-${VERSION}-linux-x86_64-headless.tar.gz"
+  mkdir -p "$STAGE"/{bin,share/applications,share/icons/hicolor/128x128/apps,share/documentation,systemd,notices}
+  cp -f "$ROOT/target/release/moraine" "$STAGE/bin/moraine"
+  cp -f "$ROOT/target/release/moraine-service" "$STAGE/bin/moraine-service"
+  chmod 755 "$STAGE/bin/moraine" "$STAGE/bin/moraine-service"
 fi
 
-# If app missing, still allow CLI/service install
-if [ ! -f "$STAGE/bin/moraine-app" ]; then
-  echo "note: moraine-app not in bundle (desktop optional for headless install)"
+# Fail closed: primary package must contain desktop
+if [ "$MORAINE_HEADLESS" != "1" ] && [ ! -f "$STAGE/bin/moraine-app" ]; then
+  echo "error: primary product package missing bin/moraine-app" >&2
+  exit 1
 fi
 
 # Desktop entry

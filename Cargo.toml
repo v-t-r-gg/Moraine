@@ -6,6 +6,7 @@ members = [
     "crates/moraine-server",
     "crates/moraine-mcp",
     "crates/moraine-service",
+    "crates/moraine-provision",
     "src-tauri",
 ]
 default-members = ["crates/moraine-cli", "crates/moraine-core", "crates/moraine-server", "crates/moraine-mcp"]
@@ -22,6 +23,7 @@ description = "Local-first ledger for autonomous agent work"
 
 [workspace.dependencies]
 moraine-core = { path = "crates/moraine-core" }
+moraine-provision = { path = "crates/moraine-provision" }
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }

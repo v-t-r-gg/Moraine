@@ -307,8 +307,9 @@ pub fn discovery_rescan_project(project_id: String) -> Result<serde_json::Value,
 #[tauri::command]
 pub fn discovery_add_existing_project(path: String) -> Result<ProjectSummary, String> {
     let p = PathBuf::from(path);
+    // Allow onboarding: initialize when needed (desktop is the control plane).
     if !p.join(".moraine").is_dir() {
-        return Err("not an initialized Moraine project (missing .moraine/)".into());
+        moraine_core::init_project(Some(&p)).map_err(map_err)?;
     }
     summarize_project(&p).map_err(map_err)
 }

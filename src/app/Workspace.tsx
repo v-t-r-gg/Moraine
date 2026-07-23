@@ -23,12 +23,14 @@ export interface WorkspaceProps {
   /** When set, select this run path in the detail pane. */
   openPath?: string | null;
   onOpenRunPath?: (path: string) => void;
+  /** After onboarding, prefer this project path. */
+  focusProjectPath?: string | null;
 }
 
 /**
  * Projects → Runs → Ledger workspace (default desktop without welcome-md).
  */
-export function Workspace({ openPath, onOpenRunPath }: WorkspaceProps) {
+export function Workspace({ openPath, onOpenRunPath, focusProjectPath }: WorkspaceProps) {
   const [offline, setOffline] = useState(true);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [projects, setProjects] = useState<ProjectSummaryDto[]>([]);
@@ -50,9 +52,25 @@ export function Workspace({ openPath, onOpenRunPath }: WorkspaceProps) {
       const st = await discoveryStatus();
       setOffline(!st.online);
       setStatusMsg(st.message ?? null);
-      const list = await discoveryProjects(null);
+      let list = await discoveryProjects(null);
+      // After Enable Moraine, ensure the project is registered even if scan missed it.
+      if (
+        focusProjectPath &&
+        !list.some((p) => p.rootPath === focusProjectPath)
+      ) {
+        try {
+          const added = await discoveryAddExistingProject(focusProjectPath);
+          list = [...list, added];
+        } catch {
+          /* project may need full enable flow */
+        }
+      }
       setProjects(list);
       setSelectedProject((prev) => {
+        if (focusProjectPath) {
+          const focus = list.find((p) => p.rootPath === focusProjectPath);
+          if (focus) return focus;
+        }
         if (prev && list.some((p) => p.projectId === prev.projectId)) return prev;
         return list[0] ?? null;
       });
@@ -60,7 +78,7 @@ export function Workspace({ openPath, onOpenRunPath }: WorkspaceProps) {
       setError(e instanceof Error ? e.message : String(e));
       setOffline(true);
     }
-  }, []);
+  }, [focusProjectPath]);
 
   const refreshRuns = useCallback(async () => {
     if (!selectedProject) {

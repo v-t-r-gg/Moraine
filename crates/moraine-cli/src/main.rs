@@ -9,6 +9,8 @@ mod service_cmd;
 mod setup_cmd;
 mod suite;
 
+// Shared provisioning control plane (also used by the desktop).
+
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -297,6 +299,39 @@ On delivery failure, events are written to the local spool (exit 0)."
         #[arg(long)]
         json: bool,
     },
+
+    /// Strict end-to-end capture self-test (Ready only when a run is discoverable)
+    #[command(
+        name = "self-test",
+        after_help = "Creates a synthetic capture event under --project and verifies discovery.\n\
+Exit 0 only when verification reports Ready."
+    )]
+    SelfTest {
+        #[arg(long)]
+        project: PathBuf,
+        /// Integration adapter (currently only: codex)
+        #[arg(long, default_value = "codex")]
+        integration: String,
+        /// Skip background-service checks (still verifies direct capture + discovery)
+        #[arg(long)]
+        skip_service: bool,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Transactional project enable (init + agent + service + self-test)
+    Enable {
+        #[arg(long)]
+        project: PathBuf,
+        #[arg(long, default_value = "codex")]
+        integration: String,
+        #[arg(long, default_value_t = true)]
+        autostart: bool,
+        #[arg(long)]
+        skip_service: bool,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -467,8 +502,109 @@ fn run() -> Result<i32> {
             project,
             json,
         } => cmd_open(path, run_id, project, json),
+        Commands::SelfTest {
+            project,
+            integration,
+            skip_service,
+            json,
+        } => cmd_self_test(project, integration, skip_service, json),
+        Commands::Enable {
+            project,
+            integration,
+            autostart,
+            skip_service,
+            json,
+        } => cmd_enable(project, integration, autostart, skip_service, json),
     }?;
     Ok(code)
+}
+
+fn cmd_self_test(
+    project: PathBuf,
+    integration: String,
+    skip_service: bool,
+    json: bool,
+) -> Result<i32> {
+    let agent = moraine_provision::AgentKind::parse(&integration).ok_or_else(|| {
+        anyhow::anyhow!("unsupported integration '{integration}' (supported: codex)")
+    })?;
+    let intent = moraine_provision::SetupIntent {
+        project,
+        agent,
+        enable_autostart: false,
+        skip_service,
+    };
+    let report = moraine_provision::verify(&intent).map_err(|e| anyhow::anyhow!("{e}"))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("{}", report.user_message);
+        for s in &report.steps {
+            println!(
+                "  {} {} — {}",
+                if s.passed { "✓" } else { "✗" },
+                s.product_label,
+                s.message
+            );
+        }
+    }
+    Ok(if report.ok { EXIT_OK } else { EXIT_ERR })
+}
+
+fn cmd_enable(
+    project: PathBuf,
+    integration: String,
+    autostart: bool,
+    skip_service: bool,
+    json: bool,
+) -> Result<i32> {
+    let agent = moraine_provision::AgentKind::parse(&integration).ok_or_else(|| {
+        anyhow::anyhow!("unsupported integration '{integration}' (supported: codex)")
+    })?;
+    let intent = moraine_provision::SetupIntent {
+        project,
+        agent,
+        enable_autostart: autostart,
+        skip_service,
+    };
+    let receipt =
+        moraine_provision::enable_project_default(intent).map_err(|e| anyhow::anyhow!("{e}"))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&receipt)?);
+    } else {
+        println!(
+            "Enable {} — {}",
+            receipt.transaction_id,
+            match receipt.readiness {
+                moraine_provision::Readiness::Ready => "ready",
+                moraine_provision::Readiness::Degraded => "degraded",
+                moraine_provision::Readiness::Failed => "failed",
+                moraine_provision::Readiness::RollbackRequired => "rollback required",
+                moraine_provision::Readiness::NotConfigured => "not configured",
+            }
+        );
+        for c in &receipt.completed {
+            println!(
+                "  {} {}{}",
+                if c.success { "✓" } else { "✗" },
+                c.product_label,
+                c.message
+                    .as_ref()
+                    .map(|m| format!(" — {m}"))
+                    .unwrap_or_default()
+            );
+        }
+        if let Some(err) = &receipt.error {
+            eprintln!("error: {err}");
+        }
+    }
+    Ok(
+        if receipt.readiness == moraine_provision::Readiness::Ready {
+            EXIT_OK
+        } else {
+            EXIT_ERR
+        },
+    )
 }
 
 fn init_tracing(verbose: u8) {

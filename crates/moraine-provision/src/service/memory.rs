@@ -35,18 +35,26 @@ impl MemoryServiceManager {
 impl super::ServiceManager for MemoryServiceManager {
     fn inspect(&self) -> Result<ServiceState> {
         let g = self.inner.lock().unwrap();
+        let binary_present =
+            g.binary.as_ref().map(|p| p.is_file()).unwrap_or(false) || g.binary.is_some();
+        // Memory manager: install() both stages binary and "registers".
+        let registration_present = g.installed;
         Ok(ServiceState {
-            installed: g.installed,
+            installed: registration_present,
             running: g.running,
-            binary_present: g.binary.as_ref().map(|p| p.is_file()).unwrap_or(false)
-                || g.binary.is_some(),
+            binary_present,
+            registration_present,
+            registration_valid: registration_present && binary_present,
+            endpoint_ready: g.running,
             binary_path: g.binary.as_ref().map(|p| p.display().to_string()),
             unit_path: None,
             version: None,
             status_message: if g.running {
                 "Background capture is running".into()
-            } else if g.installed {
+            } else if registration_present {
                 "Background capture is installed but not running".into()
+            } else if binary_present {
+                "Background capture program is present but not registered".into()
             } else {
                 "Background capture is not set up".into()
             },

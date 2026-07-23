@@ -71,6 +71,7 @@ pub fn run() {
             commands::provision_plan,
             commands::provision_apply,
             commands::provision_apply_plan,
+            commands::provision_apply_plan_outcome,
             commands::provision_rollback,
             commands::provision_verify,
             commands::provision_health,

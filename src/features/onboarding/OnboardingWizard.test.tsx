@@ -41,6 +41,7 @@ vi.mock("@/shared/api/provision", () => ({
     readiness: "notConfigured",
   }),
   provisionPlan: vi.fn().mockResolvedValue({
+    planId: "00000000-0000-0000-0000-000000000001",
     intent: {
       project: "/tmp/proj",
       agent: "codex",
@@ -52,7 +53,7 @@ vi.mock("@/shared/api/provision", () => ({
         kind: "initializeProject",
         productLabel: "Preparing project records",
         detail: "x",
-        reversible: true,
+        reversible: false,
       },
     ],
     warnings: [],
@@ -63,8 +64,18 @@ vi.mock("@/shared/api/provision", () => ({
       "Connect Codex for this project",
       "Keep records inside /tmp/proj",
     ],
+    stateWitness: {
+      project: "/tmp/proj",
+      absoluteCli: "/tmp/moraine",
+      projectInitialized: false,
+      serviceInstalled: false,
+      serviceRunning: false,
+      enableAutostart: true,
+      skipService: false,
+    },
   }),
   provisionApply: vi.fn(),
+  provisionApplyPlan: vi.fn(),
   provisionRollback: vi.fn(),
 }));
 

@@ -78,3 +78,30 @@ fn primary_stage_layout_requires_app_binary_assertion() {
         "install.sh must handle moraine-app for desktop suite"
     );
 }
+
+#[test]
+fn ci_uses_authoritative_release_script_and_tests_provision() {
+    let root = repo_root();
+    let ci = fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("ci.yml");
+    assert!(
+        ci.contains("build-linux-release.sh"),
+        "CI primary artifact must invoke scripts/build-linux-release.sh"
+    );
+    assert!(
+        ci.contains("moraine-provision"),
+        "CI must include moraine-provision in gates"
+    );
+    assert!(
+        ci.contains("cargo test -p moraine-provision"),
+        "CI must run moraine-provision tests"
+    );
+    assert!(
+        ci.contains("bin/moraine-app") || ci.contains("moraine-app"),
+        "CI smoke must require desktop in primary archive"
+    );
+    // Headless must not be the default CI package path
+    assert!(
+        !ci.contains("MORAINE_HEADLESS=1") || ci.contains("build-linux-release.sh"),
+        "primary CI package must not force headless"
+    );
+}

@@ -53,7 +53,17 @@ impl super::ServiceManager for LinuxSystemdUserService {
     fn inspect(&self) -> Result<ServiceState> {
         let binary = self.suite.absolute_service();
         let binary_present = binary.as_ref().map(|p| p.is_file()).unwrap_or(false);
-        let unit_present = self.suite.unit.is_file();
+        let registration_present = self.suite.unit.is_file();
+        let registration_valid = registration_present
+            && (binary_present
+                || self
+                    .suite
+                    .unit
+                    .is_file()
+                    .then(|| std::fs::read_to_string(&self.suite.unit).ok())
+                    .flatten()
+                    .map(|u| u.contains("ExecStart="))
+                    .unwrap_or(false));
         let active = Self::unit_active();
         let running_unit = active.as_deref() == Some("active");
         let (http_online, version) = match http_get_loopback(33111, "/status") {
@@ -71,15 +81,23 @@ impl super::ServiceManager for LinuxSystemdUserService {
         let running = running_unit || http_online;
         let status_message = if running {
             "Background capture is running".into()
-        } else if unit_present || binary_present {
+        } else if registration_present && !binary_present {
+            "Background capture is registered but its program is missing".into()
+        } else if binary_present && !registration_present {
+            "Background capture program is present but not registered".into()
+        } else if registration_present {
             "Background capture is installed but not running".into()
         } else {
             "Background capture is not set up".into()
         };
         Ok(ServiceState {
-            installed: unit_present || binary_present,
-            running,
+            // "Installed" means registered for start — not binary-only.
+            installed: registration_present,
             binary_present,
+            registration_present,
+            registration_valid,
+            running,
+            endpoint_ready: http_online,
             binary_path: binary.map(|p| p.display().to_string()),
             unit_path: Some(self.suite.unit.display().to_string()),
             version,

@@ -45,7 +45,27 @@ pub fn health(
             technical_detail: svc.status_message.clone(),
             repair: None,
         });
-    } else if svc.installed || svc.binary_present {
+    } else if !svc.registration_present {
+        // Binary alone is not enough — need registration (install unit).
+        checks.push(HealthCheck {
+            id: "service.installed".into(),
+            status: HealthStatus::Fail,
+            user_message: if svc.binary_present {
+                "Background capture is not registered".into()
+            } else {
+                "Background capture is not set up".into()
+            },
+            technical_detail: svc.status_message.clone(),
+            repair: Some(RepairAction {
+                id: "repair.install_service".into(),
+                label: "Fix".into(),
+                kind: RepairKind::InstallService,
+                project: None,
+                agent: None,
+            }),
+        });
+    } else {
+        // Registered but not running → Start repair (not Install).
         checks.push(HealthCheck {
             id: "service.running".into(),
             status: HealthStatus::Fail,
@@ -55,20 +75,6 @@ pub fn health(
                 id: "repair.start_service".into(),
                 label: "Fix".into(),
                 kind: RepairKind::StartService,
-                project: None,
-                agent: None,
-            }),
-        });
-    } else {
-        checks.push(HealthCheck {
-            id: "service.installed".into(),
-            status: HealthStatus::Fail,
-            user_message: "Background capture is not set up".into(),
-            technical_detail: svc.status_message.clone(),
-            repair: Some(RepairAction {
-                id: "repair.install_service".into(),
-                label: "Fix".into(),
-                kind: RepairKind::InstallService,
                 project: None,
                 agent: None,
             }),
@@ -242,6 +248,7 @@ pub fn repair(action: &RepairAction, service: &dyn ServiceManager) -> Result<Rep
                 Ok(p) => {
                     // Only run configure_agent (+ init if needed).
                     let filtered = crate::types::SetupPlan {
+                        plan_id: p.plan_id,
                         intent: p.intent,
                         operations: p
                             .operations
@@ -257,21 +264,20 @@ pub fn repair(action: &RepairAction, service: &dyn ServiceManager) -> Result<Rep
                         warnings: p.warnings,
                         absolute_cli: p.absolute_cli,
                         product_summary: p.product_summary,
+                        state_witness: p.state_witness,
                     };
                     match crate::apply::apply(filtered, service) {
-                        Ok(r) if r.readiness == Readiness::Ready || r.failed_operation.is_none() => {
-                            Ok(RepairResult {
-                                ok: true,
-                                action_id: action.id.clone(),
-                                user_message: "Agent connection repaired".into(),
-                                technical_detail: None,
-                            })
-                        }
-                        Ok(r) => Ok(RepairResult {
+                        Ok(outcome) if outcome.is_success() => Ok(RepairResult {
+                            ok: true,
+                            action_id: action.id.clone(),
+                            user_message: "Agent connection repaired".into(),
+                            technical_detail: None,
+                        }),
+                        Ok(outcome) => Ok(RepairResult {
                             ok: false,
                             action_id: action.id.clone(),
                             user_message: "Agent repair incomplete".into(),
-                            technical_detail: r.error,
+                            technical_detail: outcome.receipt().error.clone(),
                         }),
                         Err(e) => Ok(RepairResult {
                             ok: false,

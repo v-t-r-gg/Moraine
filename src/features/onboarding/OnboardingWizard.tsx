@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import {
-  provisionApply,
+  provisionApplyPlan,
   provisionInspect,
   provisionPlan,
   provisionRollback,
@@ -111,28 +111,23 @@ export function OnboardingWizard({
   }, [projectPath]);
 
   const runApply = useCallback(async () => {
-    if (!projectPath.trim()) return;
+    if (!projectPath.trim() || !plan) return;
     setStep("apply");
     setBusy(true);
     setError(null);
-    setProgressLabel("Preparing…");
+    setProgressLabel("Applying setup…");
     try {
-      // Stream product-level progress from plan operation labels.
-      if (plan) {
-        for (const op of plan.operations) {
-          setProgressLabel(op.productLabel);
-        }
-      }
-      setProgressLabel("Applying setup…");
-      const r = await provisionApply({
-        project: projectPath.trim(),
-        agent: "codex",
-        enableAutostart: true,
-      });
+      // Apply the exact approved plan (state witness rejects stale plans).
+      const r = await provisionApplyPlan(plan);
       setReceipt(r);
       if (r.readiness === "ready") {
         setProgressLabel("Ready");
         setStep("complete");
+      } else if (r.readiness === "directVerified") {
+        setError(
+          "Development verification passed, but background capture was not fully verified.",
+        );
+        setStep("failed");
       } else {
         setError(r.error ?? "Setup did not complete successfully");
         setStep("failed");
@@ -146,7 +141,11 @@ export function OnboardingWizard({
   }, [projectPath, plan]);
 
   const retry = useCallback(async () => {
-    if (receipt && receipt.readiness === "rollbackRequired") {
+    // Auto-rollback already attempted on apply failure; manual restore if still needed.
+    if (
+      receipt &&
+      (receipt.readiness === "rollbackRequired" || receipt.readiness === "failed")
+    ) {
       try {
         await provisionRollback(receipt);
       } catch {

@@ -22,7 +22,7 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy -p moraine-core -p moraine-cli -p moraine-mcp -p moraine-server -p moraine-service -- -D warnings
+        run: cargo clippy -p moraine-core -p moraine-cli -p moraine-mcp -p moraine-server -p moraine-service -p moraine-provision --all-targets -- -D warnings
       - name: Test
         run: |
           cargo test -p moraine-core
@@ -31,6 +31,7 @@ jobs:
           cargo test -p moraine-cli
           cargo test -p moraine-mcp
           cargo test -p moraine-service
+          cargo test -p moraine-provision
 
   # Workspace Cargo.toml rust-version must build (includes edition-2024 deps via rmcp).
   msrv:
@@ -41,7 +42,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: MSRV check
         run: |
-          cargo check -p moraine-core -p moraine-cli -p moraine-mcp -p moraine-server -p moraine-service
+          cargo check -p moraine-core -p moraine-cli -p moraine-mcp -p moraine-server -p moraine-service -p moraine-provision
 
   frontend:
     runs-on: ubuntu-latest
@@ -75,6 +76,8 @@ jobs:
             libssl-dev
       - name: cargo check moraine-app
         run: cargo check -p moraine-app
+      - name: Provision command tests
+        run: cargo test -p moraine-app --test provision_commands
 
   linux-release-artifact:
     runs-on: ubuntu-latest
@@ -82,35 +85,56 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Build CLI + service release suite
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: System deps for desktop release build
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev
+      - name: Build complete Linux product (authoritative release script)
         env:
           MORAINE_GIT_COMMIT: ${{ github.sha }}
           MORAINE_TARGET_TRIPLE: x86_64-unknown-linux-gnu
           MORAINE_BUILD_PROFILE: release
         run: |
           set -euo pipefail
-          cargo build --release -p moraine-cli -p moraine-service
+          ./scripts/build-linux-release.sh
           VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')
-          OUT="dist/moraine-${VERSION}-linux-x86_64"
-          mkdir -p "$OUT/bin" "$OUT/share/documentation" "$OUT/systemd"
-          cp target/release/moraine target/release/moraine-service "$OUT/bin/"
-          chmod 755 "$OUT/bin/"*
-          cp crates/moraine-service/systemd/moraine-service.service.in "$OUT/systemd/"
-          cp scripts/packaging/install.sh scripts/packaging/uninstall.sh "$OUT/"
-          chmod 755 "$OUT/install.sh" "$OUT/uninstall.sh"
-          cp LICENSE SECURITY.md docs/INSTALL.md docs/REDACTION.md "$OUT/share/documentation/" || true
-          VERSION="$VERSION" python3 scripts/packaging/write_manifest.py "$OUT"
-          tar -C dist -czf "dist/moraine-${VERSION}-linux-x86_64.tar.gz" "moraine-${VERSION}-linux-x86_64"
-          (cd dist && sha256sum "moraine-${VERSION}-linux-x86_64.tar.gz" > "moraine-${VERSION}-linux-x86_64.tar.gz.sha256")
+          ARCHIVE="dist/moraine-${VERSION}-linux-x86_64.tar.gz"
+          test -f "$ARCHIVE"
+          # Primary package must contain desktop
+          tar -tzf "$ARCHIVE" | grep -E 'bin/moraine-app$'
+          tar -tzf "$ARCHIVE" | grep -E 'bin/moraine$'
+          tar -tzf "$ARCHIVE" | grep -E 'bin/moraine-service$'
+          # Install smoke (user prefix)
           CLEAN=$(mktemp -d)
+          STAGE=$(mktemp -d)
+          tar -C "$STAGE" -xzf "$ARCHIVE"
           export HOME="$CLEAN" MORAINE_PREFIX="$CLEAN/.local" XDG_CONFIG_HOME="$CLEAN/.config" PATH="$CLEAN/.local/bin:$PATH"
-          "dist/moraine-${VERSION}-linux-x86_64/install.sh"
+          "$STAGE"/moraine-*/install.sh
           test -x "$MORAINE_PREFIX/bin/moraine"
+          test -x "$MORAINE_PREFIX/lib/moraine/moraine-app" || test -x "$MORAINE_PREFIX/lib/moraine/moraine-app"*
           grep -q libexec/moraine/moraine-service "$XDG_CONFIG_HOME/systemd/user/moraine-service.service"
           ! grep -q '.cargo/bin' "$XDG_CONFIG_HOME/systemd/user/moraine-service.service"
           "$MORAINE_PREFIX/bin/moraine" version --json
-          "dist/moraine-${VERSION}-linux-x86_64/uninstall.sh"
+          # Direct-path enable + self-test (product Ready needs live service; direct is ok for smoke)
+          PROJ="$CLEAN/proj"
+          mkdir -p "$PROJ"
+          "$MORAINE_PREFIX/bin/moraine" enable --project "$PROJ" --skip-service --json
+          "$MORAINE_PREFIX/bin/moraine" self-test --project "$PROJ" --skip-service --json
+          test -d "$PROJ/.moraine"
+          "$STAGE"/moraine-*/uninstall.sh
           test ! -e "$MORAINE_PREFIX/bin/moraine"
+          # Ledger retained after uninstall
+          test -d "$PROJ/.moraine"
       - uses: actions/upload-artifact@v4
         with:
           name: moraine-linux-x86_64-suite

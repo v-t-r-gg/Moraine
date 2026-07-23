@@ -567,16 +567,18 @@ fn cmd_enable(
         enable_autostart: autostart,
         skip_service,
     };
-    let receipt =
+    let outcome =
         moraine_provision::enable_project_default(intent).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let receipt = outcome.receipt();
     if json {
-        println!("{}", serde_json::to_string_pretty(&receipt)?);
+        println!("{}", serde_json::to_string_pretty(&outcome)?);
     } else {
         println!(
             "Enable {} — {}",
             receipt.transaction_id,
             match receipt.readiness {
                 moraine_provision::Readiness::Ready => "ready",
+                moraine_provision::Readiness::DirectVerified => "direct-verified (dev)",
                 moraine_provision::Readiness::Degraded => "degraded",
                 moraine_provision::Readiness::Failed => "failed",
                 moraine_provision::Readiness::RollbackRequired => "rollback required",
@@ -598,13 +600,11 @@ fn cmd_enable(
             eprintln!("error: {err}");
         }
     }
-    Ok(
-        if receipt.readiness == moraine_provision::Readiness::Ready {
-            EXIT_OK
-        } else {
-            EXIT_ERR
-        },
-    )
+    Ok(if outcome.is_success() {
+        EXIT_OK
+    } else {
+        EXIT_ERR
+    })
 }
 
 fn init_tracing(verbose: u8) {

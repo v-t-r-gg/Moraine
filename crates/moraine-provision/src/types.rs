@@ -31,11 +31,25 @@ impl AgentKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Readiness {
+    /// Product path: background capture + adapter event verified.
     Ready,
     Degraded,
     Failed,
     RollbackRequired,
     NotConfigured,
+    /// Dev/test path only (`skip_service` / DirectCoreTest) — not product Ready.
+    DirectVerified,
+}
+
+/// Product capture vs direct core test (never conflate Ready).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum VerificationMode {
+    /// Requires Codex, MCP+hooks, service health, successful hook delivery, discoverable run.
+    #[default]
+    ProductCapture,
+    /// Explicit test/dev path using core APIs; yields DirectVerified, never product Ready.
+    DirectCoreTest,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,9 +65,20 @@ pub struct SystemState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceState {
+    /// True when a service **registration** exists (unit/task), not merely a binary on disk.
     pub installed: bool,
-    pub running: bool,
+    /// Suite service binary is present.
     pub binary_present: bool,
+    /// OS registration (systemd unit / equivalent) is present.
+    #[serde(default)]
+    pub registration_present: bool,
+    /// Registration appears valid (unit exists and references a present binary when known).
+    #[serde(default)]
+    pub registration_valid: bool,
+    pub running: bool,
+    /// Loopback endpoint answered (when probed).
+    #[serde(default)]
+    pub endpoint_ready: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub binary_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -156,15 +181,64 @@ pub struct ProvisionWarning {
     pub technical_detail: Option<String>,
 }
 
+/// Snapshot of system state at plan time; apply rejects if witness drifts.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupStateWitness {
+    pub project: String,
+    pub absolute_cli: String,
+    pub project_initialized: bool,
+    pub service_installed: bool,
+    pub service_running: bool,
+    pub enable_autostart: bool,
+    pub skip_service: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SetupPlan {
+    /// Stable id for the approved plan (wizard must apply this plan, not recompute).
+    pub plan_id: Uuid,
     pub intent: SetupIntent,
     pub operations: Vec<ProvisionOperation>,
     pub warnings: Vec<ProvisionWarning>,
     /// Absolute CLI path that will be written into agent config.
     pub absolute_cli: String,
     pub product_summary: Vec<String>,
+    pub state_witness: SetupStateWitness,
+}
+
+/// Result of transactional apply (auto-rollback attempted on failure).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "outcome")]
+pub enum ApplyOutcome {
+    Ready { receipt: SetupReceipt },
+    /// Dev/test self-test path completed without product Ready.
+    DirectVerified { receipt: SetupReceipt },
+    RolledBack {
+        receipt: SetupReceipt,
+        original_error: String,
+    },
+    RollbackRequired {
+        receipt: SetupReceipt,
+        original_error: String,
+        rollback_error: String,
+    },
+}
+
+impl ApplyOutcome {
+    pub fn receipt(&self) -> &SetupReceipt {
+        match self {
+            Self::Ready { receipt }
+            | Self::DirectVerified { receipt }
+            | Self::RolledBack { receipt, .. }
+            | Self::RollbackRequired { receipt, .. } => receipt,
+        }
+    }
+
+    pub fn is_success(&self) -> bool {
+        matches!(self, Self::Ready { .. } | Self::DirectVerified { .. })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

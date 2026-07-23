@@ -76,7 +76,18 @@ export interface ProvisionOperationDto {
   reversible: boolean;
 }
 
+export interface SetupStateWitnessDto {
+  project: string;
+  absoluteCli: string;
+  projectInitialized: boolean;
+  serviceInstalled: boolean;
+  serviceRunning: boolean;
+  enableAutostart: boolean;
+  skipService: boolean;
+}
+
 export interface SetupPlanDto {
+  planId: string;
   intent: {
     project: string;
     agent: string;
@@ -87,6 +98,7 @@ export interface SetupPlanDto {
   warnings: { code: string; message: string; technicalDetail?: string | null }[];
   absoluteCli: string;
   productSummary: string[];
+  stateWitness: SetupStateWitnessDto;
 }
 
 export interface SetupReceiptDto {

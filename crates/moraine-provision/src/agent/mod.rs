@@ -28,7 +28,10 @@ pub struct AgentDetection {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IntegrationState {
+    /// Fully configured only when both MCP and hooks are present.
     pub configured: bool,
+    pub mcp_present: bool,
+    pub hooks_present: bool,
     pub absolute_cli: Option<String>,
     pub config_path: Option<String>,
     pub details: Vec<String>,
@@ -64,7 +67,41 @@ pub struct IntegrationVerification {
     pub ok: bool,
     pub absolute_cli_ok: bool,
     pub config_present: bool,
+    pub mcp_present: bool,
+    pub hooks_present: bool,
     pub messages: Vec<String>,
+}
+
+/// Records a backup **before** the corresponding mutation; implementations must
+/// persist (journal + fsync) before returning Ok.
+pub trait BackupRecorder: Send {
+    fn record_backup(&mut self, backup: BackupRecord) -> Result<()>;
+}
+
+/// In-memory sink (tests only). Production apply uses journaled recorder.
+pub struct VecBackupRecorder {
+    pub backups: Vec<BackupRecord>,
+}
+
+impl VecBackupRecorder {
+    pub fn new() -> Self {
+        Self {
+            backups: Vec::new(),
+        }
+    }
+}
+
+impl Default for VecBackupRecorder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BackupRecorder for VecBackupRecorder {
+    fn record_backup(&mut self, backup: BackupRecord) -> Result<()> {
+        self.backups.push(backup);
+        Ok(())
+    }
 }
 
 pub trait AgentAdapter: Send + Sync {
@@ -75,7 +112,12 @@ pub trait AgentAdapter: Send + Sync {
     fn detect(&self) -> Result<AgentDetection>;
     fn inspect(&self, project: &Path) -> Result<IntegrationState>;
     fn plan_install(&self, project: &Path, absolute_cli: &Path) -> Result<IntegrationPlan>;
-    fn apply(&self, plan: &IntegrationPlan) -> Result<IntegrationReceipt>;
+    /// Apply integration. Each backup is recorded via `recorder` *before* mutation.
+    fn apply(
+        &self,
+        plan: &IntegrationPlan,
+        recorder: &mut dyn BackupRecorder,
+    ) -> Result<IntegrationReceipt>;
     fn verify(&self, project: &Path, expected_cli: &Path) -> Result<IntegrationVerification>;
     fn remove(&self, project: &Path) -> Result<Vec<BackupRecord>>;
 }

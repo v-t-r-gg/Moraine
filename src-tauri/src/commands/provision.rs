@@ -4,8 +4,8 @@ use std::path::PathBuf;
 
 use moraine_provision::{
     apply_default, health_default, inspect_default, plan as plan_setup, repair_default,
-    rollback_default, verify, AgentKind, HealthReport, RepairAction, RepairResult, SetupIntent,
-    SetupPlan, SetupReceipt, SystemState, VerificationReport,
+    rollback_default, verify, AgentKind, ApplyOutcome, HealthReport, RepairAction, RepairResult,
+    SetupIntent, SetupPlan, SetupReceipt, SystemState, VerificationReport,
 };
 use serde::Deserialize;
 
@@ -46,6 +46,10 @@ impl SetupIntentDto {
     }
 }
 
+fn outcome_to_receipt(outcome: ApplyOutcome) -> SetupReceipt {
+    outcome.receipt().clone()
+}
+
 /// Full system inspection for first-run / settings.
 #[tauri::command]
 pub fn provision_inspect() -> Result<SystemState, String> {
@@ -60,18 +64,26 @@ pub fn provision_plan(intent: SetupIntentDto) -> Result<SetupPlan, String> {
     plan_setup(intent, svc.as_ref()).map_err(map_err)
 }
 
-/// Apply a previously planned setup (or re-plan + apply from intent).
+/// Apply by re-planning from intent (legacy). Prefer `provision_apply_plan`.
 #[tauri::command]
 pub fn provision_apply(intent: SetupIntentDto) -> Result<SetupReceipt, String> {
     let intent = intent.into_intent()?;
     let svc = moraine_provision::default_service_manager();
     let plan = plan_setup(intent, svc.as_ref()).map_err(map_err)?;
-    apply_default(plan).map_err(map_err)
+    let outcome = apply_default(plan).map_err(map_err)?;
+    Ok(outcome_to_receipt(outcome))
 }
 
-/// Apply an explicit plan value (wizard may show plan then apply).
+/// Apply the **exact** user-approved plan (rejects stale state witness).
 #[tauri::command]
 pub fn provision_apply_plan(plan: SetupPlan) -> Result<SetupReceipt, String> {
+    let outcome = apply_default(plan).map_err(map_err)?;
+    Ok(outcome_to_receipt(outcome))
+}
+
+/// Full apply outcome including RolledBack / RollbackRequired.
+#[tauri::command]
+pub fn provision_apply_plan_outcome(plan: SetupPlan) -> Result<ApplyOutcome, String> {
     apply_default(plan).map_err(map_err)
 }
 
@@ -112,7 +124,8 @@ pub fn provision_repair(action: RepairAction) -> Result<RepairResult, String> {
 #[tauri::command]
 pub fn provision_enable(intent: SetupIntentDto) -> Result<SetupReceipt, String> {
     let intent = intent.into_intent()?;
-    moraine_provision::enable_project_default(intent).map_err(map_err)
+    let outcome = moraine_provision::enable_project_default(intent).map_err(map_err)?;
+    Ok(outcome_to_receipt(outcome))
 }
 
 /// Initialize a project folder (may not already contain .moraine/).

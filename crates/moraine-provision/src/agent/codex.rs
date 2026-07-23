@@ -80,13 +80,14 @@ impl AgentAdapter for CodexAdapter {
         let hooks_path = project.join(".codex/hooks.json");
         let mut details = Vec::new();
         let mut absolute_cli = None;
-        let mut configured = false;
+        let mut mcp_present = false;
+        let mut hooks_present = false;
         let mut needs_repair = false;
 
         if cfg_path.is_file() {
             let cfg = fs::read_to_string(&cfg_path)?;
             if cfg.contains("[mcp_servers.moraine]") {
-                configured = true;
+                mcp_present = true;
                 details.push("Codex connection is configured".into());
                 if let Some(cmd) = extract_command_from_toml(&cfg) {
                     absolute_cli = Some(cmd.clone());
@@ -107,16 +108,28 @@ impl AgentAdapter for CodexAdapter {
         if hooks_path.is_file() {
             let raw = fs::read_to_string(&hooks_path)?;
             if raw.contains("hook-codex") || raw.contains(MORAINE_HOOK_MARKER) {
-                configured = true;
+                hooks_present = true;
                 details.push("Capture hooks are present".into());
             }
         }
+        // Fully configured only when BOTH MCP and hooks are present.
+        let configured = mcp_present && hooks_present;
+        if mcp_present && !hooks_present {
+            needs_repair = true;
+            details.push("Connection present but capture hooks missing".into());
+        }
+        if hooks_present && !mcp_present {
+            needs_repair = true;
+            details.push("Capture hooks present but connection missing".into());
+        }
         if !configured {
-            details.push("Codex is not connected for this project".into());
+            details.push("Codex is not fully connected for this project".into());
         }
 
         Ok(IntegrationState {
             configured,
+            mcp_present,
+            hooks_present,
             absolute_cli,
             config_path: cfg_path.is_file().then(|| cfg_path.display().to_string()),
             details,
@@ -154,9 +167,12 @@ impl AgentAdapter for CodexAdapter {
         })
     }
 
-    fn apply(&self, plan: &IntegrationPlan) -> Result<IntegrationReceipt> {
+    fn apply(
+        &self,
+        plan: &IntegrationPlan,
+        recorder: &mut dyn super::BackupRecorder,
+    ) -> Result<IntegrationReceipt> {
         let project = PathBuf::from(&plan.project);
-        // Project must already be initialized (provision apply does init first).
         let _resolved = resolve_existing_project(Some(&project)).map_err(|e| {
             ProvisionError::msg(format!(
                 "project not initialized at {}: {e}",
@@ -183,28 +199,17 @@ args = ["mcp", "--project", "{project}"]
         );
 
         fs::create_dir_all(&codex_dir)?;
-        let mut backups = Vec::new();
+        let mut local_backups = Vec::new();
         let mut actions = Vec::new();
 
-        let existing_cfg = if cfg_path.is_file() {
-            fs::read_to_string(&cfg_path)?
+        // Validate hooks *before* mutating config so we fail without partial MCP write when possible.
+        let hooks_raw = if hooks_path.is_file() {
+            Some(fs::read_to_string(&hooks_path)?)
         } else {
-            String::new()
+            None
         };
-        let new_cfg = merge_mcp_block(&existing_cfg, &mcp_block);
-        if cfg_path.is_file() && new_cfg != existing_cfg {
-            backups.push(backup_file(&cfg_path)?);
-        }
-        if new_cfg != existing_cfg {
-            atomic_write(&cfg_path, new_cfg.as_bytes())?;
-            actions.push(format!("wrote {}", cfg_path.display()));
-        } else {
-            actions.push(format!("config unchanged {}", cfg_path.display()));
-        }
-
-        let mut hooks_doc = if hooks_path.is_file() {
-            let raw = fs::read_to_string(&hooks_path)?;
-            match serde_json::from_str::<Value>(&raw) {
+        let mut hooks_doc = if let Some(ref raw) = hooks_raw {
+            match serde_json::from_str::<Value>(raw) {
                 Ok(v) => v,
                 Err(e) => {
                     return Err(ProvisionError::msg(format!(
@@ -216,8 +221,32 @@ args = ["mcp", "--project", "{project}"]
         } else {
             json!({ "hooks": {} })
         };
+
+        let existing_cfg = if cfg_path.is_file() {
+            fs::read_to_string(&cfg_path)?
+        } else {
+            String::new()
+        };
+        let new_cfg = merge_mcp_block(&existing_cfg, &mcp_block);
+
+        // Write-ahead: record+persist backup BEFORE each mutation.
+        if cfg_path.is_file() && new_cfg != existing_cfg {
+            let bak = backup_file(&cfg_path)?;
+            recorder.record_backup(bak.clone())?;
+            local_backups.push(bak);
+            atomic_write(&cfg_path, new_cfg.as_bytes())?;
+            actions.push(format!("wrote {}", cfg_path.display()));
+        } else if new_cfg != existing_cfg {
+            atomic_write(&cfg_path, new_cfg.as_bytes())?;
+            actions.push(format!("wrote {}", cfg_path.display()));
+        } else {
+            actions.push(format!("config unchanged {}", cfg_path.display()));
+        }
+
         if hooks_path.is_file() {
-            backups.push(backup_file(&hooks_path)?);
+            let bak = backup_file(&hooks_path)?;
+            recorder.record_backup(bak.clone())?;
+            local_backups.push(bak);
         }
         let hook_cmd = format!("{cli_s} hook-codex");
         ensure_managed_hooks(&mut hooks_doc, &hook_cmd);
@@ -232,7 +261,7 @@ args = ["mcp", "--project", "{project}"]
             project: project_s,
             absolute_cli: cli_s.clone(),
             actions,
-            backups,
+            backups: local_backups,
             config_path: Some(cfg_path.display().to_string()),
             hooks_path: Some(hooks_path.display().to_string()),
         })
@@ -252,12 +281,13 @@ args = ["mcp", "--project", "{project}"]
         if !absolute_cli_ok {
             messages.push("Configured CLI path is missing or not absolute".into());
         }
-        let config_present = state.configured;
-        let ok = config_present && absolute_cli_ok && !state.needs_repair;
+        let ok = state.configured && absolute_cli_ok && !state.needs_repair;
         Ok(IntegrationVerification {
             ok,
             absolute_cli_ok,
-            config_present,
+            config_present: state.configured,
+            mcp_present: state.mcp_present,
+            hooks_present: state.hooks_present,
             messages,
         })
     }

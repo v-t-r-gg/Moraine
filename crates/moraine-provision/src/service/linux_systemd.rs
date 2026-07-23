@@ -194,6 +194,17 @@ impl super::ServiceManager for LinuxSystemdUserService {
         Ok(())
     }
 
+    fn reload_registration(&self) -> Result<()> {
+        // Required after unit file restore so systemd picks up prior ExecStart.
+        let st = Self::systemctl(&["daemon-reload"]).map_err(ProvisionError::Service)?;
+        if !st.success() {
+            return Err(ProvisionError::Service(
+                "failed to reload background capture registration".into(),
+            ));
+        }
+        Ok(())
+    }
+
     fn logs(&self, limit: usize) -> Result<Vec<ServiceLog>> {
         let n = limit.to_string();
         let output = Command::new("journalctl")

@@ -410,6 +410,105 @@ fn auto_rollback_reverses_service_install_and_start() {
     );
 }
 
+/// Unit repair: prior unit bytes restored + registration reload on auto-rollback.
+#[test]
+fn auto_rollback_restores_prior_unit_bytes_and_reloads() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    std::env::set_var("MORAINE_SERVICE_READY_MS", "100");
+    let suite = HermeticSuite::install();
+    let dir = tempdir().unwrap();
+    let project = dir.path().join("unit-repair");
+    fs::create_dir_all(&project).unwrap();
+    setup_agent(&project);
+
+    let unit_path = dir.path().join("systemd/user/moraine-service.service");
+    fs::create_dir_all(unit_path.parent().unwrap()).unwrap();
+    let original_unit = "# prior unit\nExecStart=/old/wrong/moraine-service\n";
+    fs::write(&unit_path, original_unit).unwrap();
+
+    let svc = MemoryServiceManager::with_unit_path(unit_path.clone());
+    use moraine_provision::{ProvisionOperation, SetupPlan};
+    let abs_cli = suite.cli.display().to_string();
+    let intent = product_intent(project.clone());
+    let witness = moraine_provision::compute_witness(&intent, &svc, &abs_cli).unwrap();
+    let p = SetupPlan {
+        plan_id: uuid::Uuid::new_v4(),
+        intent,
+        operations: vec![
+            ProvisionOperation {
+                id: "install_service".into(),
+                kind: ProvisionOpKind::InstallService,
+                product_label: "Enabling background capture".into(),
+                detail: "repair unit".into(),
+                reversible: true,
+            },
+            ProvisionOperation {
+                id: "start_service".into(),
+                kind: ProvisionOpKind::StartService,
+                product_label: "Starting background capture".into(),
+                detail: "test".into(),
+                reversible: true,
+            },
+            ProvisionOperation {
+                id: "self_test".into(),
+                kind: ProvisionOpKind::SelfTest,
+                product_label: "Testing local capture".into(),
+                detail: "test".into(),
+                reversible: false,
+            },
+        ],
+        warnings: vec![],
+        absolute_cli: abs_cli,
+        product_summary: vec![],
+        state_witness: witness,
+    };
+
+    let outcome = apply_with_options(
+        p,
+        &svc,
+        Some(VerifyOptions {
+            mode: VerificationMode::ProductCapture,
+            capture: Some(Arc::new(ControlledCapture {
+                fail_delivery: true,
+                materialize_run: false,
+            })),
+            service_probe: Some(Arc::new(AlwaysReadyProbe { version: None })),
+        }),
+        Some(Arc::new(AlwaysReadyProbe { version: None })),
+    )
+    .unwrap();
+
+    assert!(
+        matches!(outcome, ApplyOutcome::RolledBack { .. }),
+        "expected RolledBack, got {outcome:?}"
+    );
+    let receipt = outcome.receipt();
+    assert!(
+        receipt.transaction_wrote_unit,
+        "InstallService must have written/overwritten the unit"
+    );
+    assert!(
+        receipt
+            .service_prestate
+            .as_ref()
+            .is_some_and(|p| matches!(p.registration, FileSnapshot::Existing { .. })),
+        "prestate must snapshot prior unit as Existing: {:?}",
+        receipt.service_prestate
+    );
+    let restored = fs::read_to_string(&unit_path).expect("unit file must exist after rollback");
+    assert_eq!(
+        restored, original_unit,
+        "on-disk unit must equal original bytes after repair rollback"
+    );
+    assert!(
+        svc.reload_count() >= 1,
+        "reload_registration (daemon-reload equivalent) must run after unit restore, count={}",
+        svc.reload_count()
+    );
+    let st = svc.inspect().unwrap();
+    assert!(!st.running, "service must be stopped after auto-rollback");
+}
+
 /// Pre-enabled autostart must survive rollback of a failed later op.
 #[test]
 fn rollback_preserves_preexisting_autostart() {

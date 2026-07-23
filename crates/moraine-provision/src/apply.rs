@@ -1,6 +1,6 @@
 //! Write-ahead transactional apply with automatic rollback.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use moraine_core::init_project;
 use uuid::Uuid;
@@ -113,15 +113,19 @@ pub fn apply_with_options(
                 });
                 match bin {
                     Some(bin) => {
-                        // Snapshot existing unit before overwrite (also in service_prestate).
-                        if suite.unit.is_file() {
-                            let snap = durable_backup(&suite.unit)?;
-                            receipt.snapshots.push(snap);
-                            journal::write_journal(&receipt)?;
-                        } else {
-                            let snap = snapshot_absent(&suite.unit);
-                            receipt.snapshots.push(snap.clone());
-                            // Also ensure prestate registration is Absent
+                        // Write-ahead snapshot of the registration path this manager uses
+                        // (Linux: suite unit; hermetic MemoryServiceManager: inject unit_path).
+                        let unit_path = registration_unit_path(service, &suite);
+                        if !receipt
+                            .snapshots
+                            .iter()
+                            .any(|s| s.path() == unit_path.to_string_lossy())
+                        {
+                            if unit_path.is_file() {
+                                receipt.snapshots.push(durable_backup(&unit_path)?);
+                            } else {
+                                receipt.snapshots.push(snapshot_absent(&unit_path));
+                            }
                             journal::write_journal(&receipt)?;
                         }
                         match service.install(&bin) {
@@ -275,6 +279,17 @@ pub fn apply_with_options(
     }
 }
 
+/// Unit/registration path the active ServiceManager will install or restore.
+/// Prefers `inspect().unit_path` so hermetic managers (temp unit) and Linux
+/// (suite unit) stay consistent with what `install` actually writes.
+fn registration_unit_path(service: &dyn ServiceManager, suite: &SuitePaths) -> PathBuf {
+    service
+        .inspect()
+        .ok()
+        .and_then(|st| st.unit_path.map(PathBuf::from))
+        .unwrap_or_else(|| suite.unit.clone())
+}
+
 fn capture_service_prestate(
     receipt: &mut SetupReceipt,
     service: &dyn ServiceManager,
@@ -284,17 +299,15 @@ fn capture_service_prestate(
         return Ok(());
     }
     let st = service.inspect()?;
-    let registration = if suite.unit.is_file() {
-        durable_backup(&suite.unit)?
-    } else if let Some(ref up) = st.unit_path {
-        let p = Path::new(up);
-        if p.is_file() {
-            durable_backup(p)?
-        } else {
-            snapshot_absent(p)
-        }
+    let unit_path = st
+        .unit_path
+        .as_ref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| suite.unit.clone());
+    let registration = if unit_path.is_file() {
+        durable_backup(&unit_path)?
     } else {
-        snapshot_absent(&suite.unit)
+        snapshot_absent(&unit_path)
     };
     // Journal unit backup into snapshots as well when Existing (already durable_backup).
     if matches!(registration, FileSnapshot::Existing { .. }) {
@@ -366,65 +379,43 @@ pub fn rollback_completed_operations(
     let retained = Vec::new();
     let pre = receipt.service_prestate.as_ref();
 
-    // Reverse process lifecycle first (newest completed ops).
-    for op in receipt.completed.iter().rev() {
-        if !op.success {
-            continue;
-        }
-        match op.kind {
-            ProvisionOpKind::StartService => {
-                // Stop only if this transaction started a previously-stopped service.
-                if receipt.transaction_started_service {
-                    service.stop()?;
+    // Phase 1: restore or remove registration *before* process lifecycle so start/stop
+    // operate on the restored unit definition (requires daemon-reload on Linux).
+    if receipt.transaction_wrote_unit {
+        if let Some(pre) = pre {
+            match &pre.registration {
+                FileSnapshot::Existing { .. } => {
+                    restore_snapshot(&pre.registration)?;
+                    // Critical: systemd will keep the repaired unit until daemon-reload.
+                    service.reload_registration()?;
                 }
-                // If unit was repaired while previously running, ensure it is running again.
-                if pre.map(|p| p.was_running).unwrap_or(false)
-                    && receipt.transaction_wrote_unit
-                    && !receipt.transaction_started_service
-                {
-                    let _ = service.start();
-                }
-            }
-            ProvisionOpKind::InstallService => {
-                // Restore prior unit rather than unconditional uninstall.
-                if let Some(pre) = pre {
-                    match &pre.registration {
-                        FileSnapshot::Existing { .. } => {
-                            restore_snapshot(&pre.registration)?;
-                            // Reload after restore when Linux.
-                            let _ = service.stop();
-                            if pre.was_running {
-                                let _ = service.start();
-                            }
-                        }
-                        FileSnapshot::Absent { .. } => {
-                            // No prior unit — uninstall what we created.
-                            service.uninstall()?;
-                        }
-                    }
-                } else if receipt.transaction_wrote_unit {
+                FileSnapshot::Absent { .. } => {
                     service.uninstall()?;
                 }
             }
-            ProvisionOpKind::EnableAutostart => {
-                // Disable only when this transaction enabled it.
-                if receipt.transaction_enabled_autostart {
-                    service.disable_autostart()?;
-                }
-            }
-            ProvisionOpKind::ConfigureAgent
-            | ProvisionOpKind::InitializeProject
-            | ProvisionOpKind::SelfTest => {}
+        } else {
+            service.uninstall()?;
         }
     }
 
-    // Restore project file snapshots (Codex etc.) — not the unit if already restored above.
+    // Phase 2: process lifecycle from prestate flags (not reverse-order Start before Install).
+    if receipt.transaction_started_service {
+        service.stop()?;
+    }
+    if pre.map(|p| p.was_running).unwrap_or(false) {
+        // Prior service was running — bring it back on the restored registration.
+        let _ = service.start();
+    }
+
+    // Phase 3: autostart — only undo what this transaction enabled.
+    if receipt.transaction_enabled_autostart {
+        service.disable_autostart()?;
+    }
+
+    // Phase 4: project file snapshots (Codex etc.) — skip unit path already restored.
     for snap in receipt.snapshots.iter().rev() {
-        // Skip unit path if we already restored via service prestate Existing.
         if let Some(pre) = pre {
-            if snap.path() == pre.registration.path()
-                && matches!(pre.registration, FileSnapshot::Existing { .. })
-            {
+            if snap.path() == pre.registration.path() {
                 continue;
             }
         }

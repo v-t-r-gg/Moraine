@@ -22,6 +22,9 @@ pub trait ServiceManager: Send + Sync {
     fn restart(&self) -> Result<()>;
     fn enable_autostart(&self) -> Result<()>;
     fn disable_autostart(&self) -> Result<()>;
+    /// Reload registration after unit file restore (e.g. `systemctl --user daemon-reload`).
+    /// No-op on managers that do not cache registration (still required for Linux correctness).
+    fn reload_registration(&self) -> Result<()>;
     fn logs(&self, limit: usize) -> Result<Vec<ServiceLog>>;
 }
 

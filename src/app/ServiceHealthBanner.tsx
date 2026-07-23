@@ -31,8 +31,8 @@ export function ServiceHealthBanner({
           </span>
         )}
       </span>
-      <span title="Diagnose install and service drift">
-        CLI: <code style={{ fontSize: "10px" }}>{doctorHint}</code>
+      <span title="Advanced diagnostics (terminal)">
+        Advanced: <code style={{ fontSize: "10px" }}>{doctorHint}</code>
       </span>
     </div>
   );

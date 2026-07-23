@@ -46,7 +46,8 @@ export function ProjectList({
       <div className="moraine-scroll flex-1 overflow-auto p-1">
         {projects.length === 0 ? (
           <p className="px-2 py-3" style={{ color: "var(--muted)" }}>
-            No Moraine projects found. Use Add to select an initialized project, or open a run path.
+            No projects yet. Use <strong>Enable Moraine</strong> to connect a folder, or Add to
+            select one.
           </p>
         ) : (
           <ul className="grid gap-1">

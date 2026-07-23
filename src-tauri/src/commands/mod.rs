@@ -4,6 +4,7 @@ mod discovery;
 mod document;
 mod findings;
 mod history;
+mod provision;
 mod review;
 mod system;
 
@@ -13,5 +14,6 @@ pub use discovery::*;
 pub use document::*;
 pub use findings::*;
 pub use history::*;
+pub use provision::*;
 pub use review::*;
 pub use system::*;

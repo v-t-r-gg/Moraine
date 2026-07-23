@@ -25,7 +25,6 @@ pub use apply::{
     apply, apply_default, apply_receipt, apply_with_options, compute_witness, rollback,
     rollback_completed_operations, rollback_default, JournaledBackupRecorder,
 };
-pub use snapshot::{durable_backup, file_sha256, restore_snapshot, snapshot_absent};
 pub use error::{ProvisionError, Result};
 pub use health::{health, health_default, repair, repair_default};
 pub use inspect::{detect_agent, inspect, inspect_default, inspect_suite};
@@ -37,22 +36,20 @@ pub use service_ready::{
     default_service_probe, default_service_ready_timeout_ms, wait_for_service_ready,
     AlwaysOfflineProbe, AlwaysReadyProbe, LoopbackServiceProbe, ServiceProbe, ServiceReadyResult,
 };
+pub use snapshot::{durable_backup, file_sha256, restore_snapshot, snapshot_absent};
 pub use suite::{
     default_http_addr, default_prefix, default_socket_path, http_get_loopback, render_systemd_unit,
     setup_transactions_dir, SuitePaths, SuiteState,
 };
-pub use types::*;
 pub use types::FileSnapshot;
+pub use types::*;
 pub use verify::{
-    verify, verify_with, verify_with_options, ControlledCapture, EventCapture, HookCodexCapture,
-    VerifyOptions,
+    product_capture_event_ids, verify, verify_with, verify_with_options, ControlledCapture,
+    EventCapture, HookCodexCapture, VerifyOptions,
 };
 
 /// One-shot enable: plan → apply.
-pub fn enable_project(
-    intent: SetupIntent,
-    service: &dyn ServiceManager,
-) -> Result<ApplyOutcome> {
+pub fn enable_project(intent: SetupIntent, service: &dyn ServiceManager) -> Result<ApplyOutcome> {
     let p = plan(intent, service)?;
     apply(p, service)
 }

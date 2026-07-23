@@ -126,9 +126,13 @@ impl SuitePaths {
     /// Absolute path to the suite service binary when present.
     pub fn absolute_service(&self) -> Option<PathBuf> {
         if self.service.is_file() {
-            return Some(
-                fs::canonicalize(&self.service).unwrap_or_else(|_| self.service.clone()),
-            );
+            return Some(fs::canonicalize(&self.service).unwrap_or_else(|_| self.service.clone()));
+        }
+        if let Ok(over) = env::var("MORAINE_SERVICE_BIN") {
+            let p = PathBuf::from(over);
+            if p.is_file() {
+                return Some(fs::canonicalize(&p).unwrap_or(p));
+            }
         }
         if let Ok(exe) = env::current_exe() {
             if let Some(parent) = exe.parent() {
@@ -136,6 +140,13 @@ impl SuitePaths {
                 if sibling.is_file() {
                     return Some(fs::canonicalize(&sibling).unwrap_or(sibling));
                 }
+            }
+        }
+        let cli = self.absolute_cli();
+        if let Some(parent) = cli.parent() {
+            let sibling = parent.join("moraine-service");
+            if sibling.is_file() {
+                return Some(fs::canonicalize(&sibling).unwrap_or(sibling));
             }
         }
         None

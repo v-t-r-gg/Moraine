@@ -84,7 +84,9 @@ pub fn list_unfinished() -> Result<Vec<SetupReceipt>> {
             if let Ok(r) = serde_json::from_str::<SetupReceipt>(&raw) {
                 use crate::types::Readiness;
                 match r.readiness {
-                    Readiness::RollbackRequired | Readiness::NotConfigured | Readiness::Degraded => {
+                    Readiness::RollbackRequired
+                    | Readiness::NotConfigured
+                    | Readiness::Degraded => {
                         out.push(r);
                     }
                     _ => {}

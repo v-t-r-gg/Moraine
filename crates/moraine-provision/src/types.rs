@@ -76,6 +76,9 @@ pub struct ServiceState {
     #[serde(default)]
     pub registration_valid: bool,
     pub running: bool,
+    /// Whether the service is set to start at login / user session.
+    #[serde(default)]
+    pub autostart_enabled: bool,
     /// Loopback endpoint answered (when probed).
     #[serde(default)]
     pub endpoint_ready: bool,
@@ -229,9 +232,13 @@ pub struct SetupPlan {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "outcome")]
 pub enum ApplyOutcome {
-    Ready { receipt: SetupReceipt },
+    Ready {
+        receipt: SetupReceipt,
+    },
     /// Dev/test self-test path completed without product Ready.
-    DirectVerified { receipt: SetupReceipt },
+    DirectVerified {
+        receipt: SetupReceipt,
+    },
     RolledBack {
         receipt: SetupReceipt,
         original_error: String,
@@ -300,6 +307,16 @@ pub struct CompletedOperation {
     pub technical_detail: Option<String>,
 }
 
+/// Captured before first service mutation so rollback restores exact prestate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceSnapshot {
+    /// Unit/registration file: Existing (prior unit) or Absent (no prior unit).
+    pub registration: FileSnapshot,
+    pub was_running: bool,
+    pub autostart_was_enabled: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SetupReceipt {
@@ -309,12 +326,24 @@ pub struct SetupReceipt {
     /// File mutations recorded before apply (existing backups + previously-absent paths).
     #[serde(alias = "backups")]
     pub snapshots: Vec<FileSnapshot>,
+    /// Service prestate captured on first Install/Start/EnableAutostart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_prestate: Option<ServiceSnapshot>,
+    /// True if this transaction actually called enable_autostart (was previously off).
+    #[serde(default)]
+    pub transaction_enabled_autostart: bool,
+    /// True if this transaction actually started a previously-stopped service.
+    #[serde(default)]
+    pub transaction_started_service: bool,
+    /// True if this transaction wrote/replaced a unit file.
+    #[serde(default)]
+    pub transaction_wrote_unit: bool,
     pub readiness: Readiness,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failed_operation: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// True when rollback left known non-reversible changes (e.g. autostart enabled).
+    /// Notes when rollback could not fully restore (should stay empty on clean paths).
     #[serde(default)]
     pub retained_changes: Vec<String>,
     pub journal_path: String,

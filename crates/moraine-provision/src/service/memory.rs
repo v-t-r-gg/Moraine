@@ -45,6 +45,7 @@ impl super::ServiceManager for MemoryServiceManager {
             binary_present,
             registration_present,
             registration_valid: registration_present && binary_present,
+            autostart_enabled: g.autostart,
             endpoint_ready: g.running,
             binary_path: g.binary.as_ref().map(|p| p.display().to_string()),
             unit_path: None,

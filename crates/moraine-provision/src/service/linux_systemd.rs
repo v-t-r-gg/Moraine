@@ -41,6 +41,15 @@ impl LinuxSystemdUserService {
             .and_then(|o| String::from_utf8(o.stdout).ok())
             .map(|s| s.trim().to_string())
     }
+
+    fn unit_enabled() -> Option<String> {
+        Command::new("systemctl")
+            .args(["--user", "is-enabled", "moraine-service.service"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+    }
 }
 
 impl Default for LinuxSystemdUserService {
@@ -54,8 +63,8 @@ impl super::ServiceManager for LinuxSystemdUserService {
         let binary = self.suite.absolute_service();
         let binary_present = binary.as_ref().map(|p| p.is_file()).unwrap_or(false);
         let registration_present = self.suite.unit.is_file();
-        let registration_valid = registration_present
-            && unit_exec_matches_suite(&self.suite.unit, binary.as_deref());
+        let registration_valid =
+            registration_present && unit_exec_matches_suite(&self.suite.unit, binary.as_deref());
         let active = Self::unit_active();
         let running_unit = active.as_deref() == Some("active");
         let (http_online, version) = match http_get_loopback(33111, "/status") {
@@ -82,6 +91,7 @@ impl super::ServiceManager for LinuxSystemdUserService {
         } else {
             "Background capture is not set up".into()
         };
+        let autostart_enabled = Self::unit_enabled().as_deref() == Some("enabled");
         Ok(ServiceState {
             // "Installed" means registered for start — not binary-only.
             installed: registration_present,
@@ -89,6 +99,7 @@ impl super::ServiceManager for LinuxSystemdUserService {
             registration_present,
             registration_valid,
             running,
+            autostart_enabled,
             endpoint_ready: http_online,
             binary_path: binary.map(|p| p.display().to_string()),
             unit_path: Some(self.suite.unit.display().to_string()),
@@ -235,5 +246,3 @@ fn unit_exec_matches_suite(unit_path: &Path, suite_service: Option<&Path>) -> bo
         _ => exec_path == suite,
     }
 }
-
-

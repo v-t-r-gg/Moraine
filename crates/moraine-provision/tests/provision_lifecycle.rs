@@ -1,8 +1,8 @@
 //! Drive shipped provisioning APIs: product verify, write-ahead apply, rollback.
 
 use std::fs;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use moraine_provision::{
     apply, apply_with_options, enable_project, health, plan, rollback, verify, verify_with_options,
@@ -11,6 +11,9 @@ use moraine_provision::{
     SetupIntent, VecBackupRecorder, VerificationMode, VerifyOptions,
 };
 use tempfile::tempdir;
+
+/// Serialize env mutations (MORAINE_CLI / PATH) across tests.
+static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn direct_intent(project: PathBuf) -> SetupIntent {
     SetupIntent {
@@ -30,10 +33,54 @@ fn product_intent(project: PathBuf) -> SetupIntent {
     }
 }
 
-fn setup_agent(project: &std::path::Path) {
+/// Inject absolute fake `moraine` + `codex` so product verify is hermetic.
+struct HermeticSuite {
+    _dir: tempfile::TempDir,
+    cli: PathBuf,
+    service: PathBuf,
+}
+
+impl HermeticSuite {
+    fn install() -> Self {
+        let dir = tempdir().unwrap();
+        let cli = dir.path().join("moraine");
+        let service = dir.path().join("moraine-service");
+        let codex = dir.path().join("codex");
+        for p in [&cli, &service, &codex] {
+            fs::write(p, b"#!/bin/true\n").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = fs::metadata(p).unwrap().permissions();
+                perms.set_mode(0o755);
+                fs::set_permissions(p, perms).unwrap();
+            }
+        }
+        std::env::set_var("MORAINE_CLI", &cli);
+        std::env::set_var("MORAINE_SERVICE_BIN", &service);
+        std::env::set_var("MORAINE_CODEX", &codex);
+        let path = format!(
+            "{}:{}",
+            dir.path().display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        std::env::set_var("PATH", path);
+        Self {
+            _dir: dir,
+            cli,
+            service,
+        }
+    }
+}
+
+fn setup_agent(project: &Path) {
     moraine_core::init_project(Some(project)).unwrap();
     let cli = moraine_provision::SuitePaths::discover().absolute_cli();
-    assert!(cli.is_file(), "suite CLI: {}", cli.display());
+    assert!(
+        cli.is_absolute() && cli.is_file(),
+        "suite CLI must be absolute file: {}",
+        cli.display()
+    );
     let adapter = moraine_provision::adapter_for(AgentKind::Codex);
     let mut rec = VecBackupRecorder::new();
     adapter
@@ -55,6 +102,8 @@ fn direct_verify_never_product_ready() {
 
 #[test]
 fn product_happy_path_ready_with_injected_service_and_capture() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let _suite = HermeticSuite::install();
     let dir = tempdir().unwrap();
     let project = dir.path().join("happy");
     fs::create_dir_all(&project).unwrap();
@@ -75,14 +124,19 @@ fn product_happy_path_ready_with_injected_service_and_capture() {
     .unwrap();
     assert!(report.ok, "{report:?}");
     assert_eq!(report.readiness, Readiness::Ready);
-    assert!(report
-        .steps
-        .iter()
-        .any(|s| s.message.contains("event_id=")));
+    assert!(
+        report
+            .steps
+            .iter()
+            .any(|s| s.message.contains("verification_id=")),
+        "{report:?}"
+    );
 }
 
 #[test]
 fn product_verify_fails_when_hook_delivery_fails_no_core_fallback() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let _suite = HermeticSuite::install();
     let dir = tempdir().unwrap();
     let project = dir.path().join("hook-fail");
     fs::create_dir_all(&project).unwrap();
@@ -106,11 +160,14 @@ fn product_verify_fails_when_hook_delivery_fails_no_core_fallback() {
         },
     )
     .unwrap();
-    assert!(!report.ok);
-    assert!(report
-        .steps
-        .iter()
-        .any(|s| s.id == "capture.adapter_event" && !s.passed));
+    assert!(!report.ok, "{report:?}");
+    assert!(
+        report
+            .steps
+            .iter()
+            .any(|s| s.id == "capture.adapter_event" && !s.passed),
+        "must fail on capture, not steal stale run: {report:?}"
+    );
 }
 
 #[test]
@@ -212,14 +269,16 @@ fn rollback_deletes_files_that_did_not_exist_before_setup() {
     let mut p = plan(product_intent(project.clone()), &svc).unwrap();
     // Keep init + configure + install (install will fail without suite service in some envs)
     // Ensure install is present and will fail via fail_next after configure.
-    p.operations
-        .retain(|o| o.kind != ProvisionOpKind::SelfTest && o.kind != ProvisionOpKind::StartService && o.kind != ProvisionOpKind::EnableAutostart);
+    p.operations.retain(|o| {
+        o.kind != ProvisionOpKind::SelfTest
+            && o.kind != ProvisionOpKind::StartService
+            && o.kind != ProvisionOpKind::EnableAutostart
+    });
 
     // After plan, inject install failure
     let svc = MemoryServiceManager::new();
     // Recompute witness for fresh svc
-    p.state_witness =
-        moraine_provision::compute_witness(&p.intent, &svc, &p.absolute_cli).unwrap();
+    p.state_witness = moraine_provision::compute_witness(&p.intent, &svc, &p.absolute_cli).unwrap();
     // Pre-seed: configure will succeed creating files; then install fails.
     // Memory install without fail_next succeeds if we call install - need fail on InstallService.
     // Use fail_next so first service op fails — but InstallService calls install().
@@ -241,7 +300,10 @@ fn rollback_deletes_files_that_did_not_exist_before_setup() {
     let receipt = outcome.receipt();
     // Snapshots must include Absent for new files.
     assert!(
-        receipt.snapshots.iter().any(|s| matches!(s, FileSnapshot::Absent { .. })),
+        receipt
+            .snapshots
+            .iter()
+            .any(|s| matches!(s, FileSnapshot::Absent { .. })),
         "expected Absent snapshots: {:?}",
         receipt.snapshots
     );
@@ -259,89 +321,51 @@ fn rollback_deletes_files_that_did_not_exist_before_setup() {
 /// Release-blocking: auto-rollback stops/uninstalls service started by the transaction.
 #[test]
 fn auto_rollback_reverses_service_install_and_start() {
+    let _lock = ENV_LOCK.lock().unwrap();
     std::env::set_var("MORAINE_SERVICE_READY_MS", "100");
+    let suite = HermeticSuite::install();
     let dir = tempdir().unwrap();
     let project = dir.path().join("svc-rb");
     fs::create_dir_all(&project).unwrap();
-    moraine_core::init_project(Some(&project)).unwrap();
-    // Pre-configure agent so ConfigureAgent is quick; plan will still try install/start.
     setup_agent(&project);
 
     let svc = MemoryServiceManager::new();
-    let fake = dir.path().join("moraine-service");
-    fs::write(&fake, b"x").unwrap();
-
-    // Build a plan that only does Install, Start, SelfTest — inject product self-test fail.
-    let intent = product_intent(project.clone());
-    let mut p = plan(intent, &svc).unwrap();
-    p.operations.retain(|o| {
-        matches!(
-            o.kind,
-            ProvisionOpKind::InstallService
-                | ProvisionOpKind::StartService
-                | ProvisionOpKind::SelfTest
-        )
-    });
-    // Ensure install+start in plan (service not registered yet)
-    if !p
-        .operations
-        .iter()
-        .any(|o| o.kind == ProvisionOpKind::InstallService)
-    {
-        // Service already installed in plan computation — force by using fresh svc
-    }
-    p.state_witness =
-        moraine_provision::compute_witness(&p.intent, &svc, &p.absolute_cli).unwrap();
-
-    // Self-test will fail without injectables (product mode, service HTTP offline).
-    // But StartService may wait — env set short.
-    // Install may need binary: MemoryServiceManager.install needs to be called with path from suite.
-    // If suite has moraine-service sibling it works; else install fails early.
-    // Pre-install via memory so Start is in plan... actually if we pre-install, plan may skip install.
-    // Force operations manually:
     use moraine_provision::{ProvisionOperation, SetupPlan};
-    let ops = vec![
-        ProvisionOperation {
-            id: "install_service".into(),
-            kind: ProvisionOpKind::InstallService,
-            product_label: "Enabling background capture".into(),
-            detail: "test".into(),
-            reversible: true,
-        },
-        ProvisionOperation {
-            id: "start_service".into(),
-            kind: ProvisionOpKind::StartService,
-            product_label: "Starting background capture".into(),
-            detail: "test".into(),
-            reversible: true,
-        },
-        ProvisionOperation {
-            id: "self_test".into(),
-            kind: ProvisionOpKind::SelfTest,
-            product_label: "Testing local capture".into(),
-            detail: "test".into(),
-            reversible: false,
-        },
-    ];
+    let abs_cli = suite.cli.display().to_string();
+    let intent = product_intent(project.clone());
+    let witness = moraine_provision::compute_witness(&intent, &svc, &abs_cli).unwrap();
     let p = SetupPlan {
-        plan_id: p.plan_id,
-        intent: p.intent,
-        operations: ops,
+        plan_id: uuid::Uuid::new_v4(),
+        intent,
+        operations: vec![
+            ProvisionOperation {
+                id: "install_service".into(),
+                kind: ProvisionOpKind::InstallService,
+                product_label: "Enabling background capture".into(),
+                detail: "test".into(),
+                reversible: true,
+            },
+            ProvisionOperation {
+                id: "start_service".into(),
+                kind: ProvisionOpKind::StartService,
+                product_label: "Starting background capture".into(),
+                detail: "test".into(),
+                reversible: true,
+            },
+            ProvisionOperation {
+                id: "self_test".into(),
+                kind: ProvisionOpKind::SelfTest,
+                product_label: "Testing local capture".into(),
+                detail: "test".into(),
+                reversible: false,
+            },
+        ],
         warnings: vec![],
-        absolute_cli: p.absolute_cli,
+        absolute_cli: abs_cli,
         product_summary: vec![],
-        state_witness: moraine_provision::compute_witness(
-            &product_intent(project.clone()),
-            &svc,
-            &moraine_provision::SuitePaths::discover()
-                .absolute_cli()
-                .display()
-                .to_string(),
-        )
-        .unwrap(),
+        state_witness: witness,
     };
 
-    // apply_with_options: product self-test with failing capture so Ready fails after start.
     let outcome = apply_with_options(
         p,
         &svc,
@@ -358,20 +382,109 @@ fn auto_rollback_reverses_service_install_and_start() {
     .unwrap();
 
     assert!(
-        matches!(
-            outcome,
-            ApplyOutcome::RolledBack { .. } | ApplyOutcome::RollbackRequired { .. }
-        ),
-        "{outcome:?}"
+        matches!(outcome, ApplyOutcome::RolledBack { .. }),
+        "expected RolledBack, got {outcome:?}"
+    );
+    let receipt = outcome.receipt();
+    assert!(
+        receipt
+            .completed
+            .iter()
+            .any(|op| op.kind == ProvisionOpKind::InstallService && op.success),
+        "InstallService must have succeeded before failure: {:?}",
+        receipt.completed
+    );
+    assert!(
+        receipt
+            .completed
+            .iter()
+            .any(|op| op.kind == ProvisionOpKind::StartService && op.success),
+        "StartService must have succeeded before failure: {:?}",
+        receipt.completed
     );
     let st = svc.inspect().unwrap();
-    assert!(
-        !st.running,
-        "service must be stopped after auto-rollback"
-    );
+    assert!(!st.running, "service must be stopped after auto-rollback");
     assert!(
         !st.installed && !st.registration_present,
         "service must be uninstalled after auto-rollback: {st:?}"
+    );
+}
+
+/// Pre-enabled autostart must survive rollback of a failed later op.
+#[test]
+fn rollback_preserves_preexisting_autostart() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    std::env::set_var("MORAINE_SERVICE_READY_MS", "100");
+    let suite = HermeticSuite::install();
+    let dir = tempdir().unwrap();
+    let project = dir.path().join("as-pre");
+    fs::create_dir_all(&project).unwrap();
+    setup_agent(&project);
+
+    let svc = MemoryServiceManager::new();
+    svc.install(&suite.service).unwrap();
+    svc.enable_autostart().unwrap();
+    assert!(svc.inspect().unwrap().autostart_enabled);
+
+    use moraine_provision::{ProvisionOperation, SetupPlan};
+    let abs_cli = suite.cli.display().to_string();
+    let intent = SetupIntent {
+        project: project.clone(),
+        agent: AgentKind::Codex,
+        enable_autostart: true,
+        skip_service: false,
+    };
+    let witness = moraine_provision::compute_witness(&intent, &svc, &abs_cli).unwrap();
+    let p = SetupPlan {
+        plan_id: uuid::Uuid::new_v4(),
+        intent,
+        operations: vec![
+            ProvisionOperation {
+                id: "enable_autostart".into(),
+                kind: ProvisionOpKind::EnableAutostart,
+                product_label: "Keep capture available after restart".into(),
+                detail: "test".into(),
+                reversible: true,
+            },
+            ProvisionOperation {
+                id: "self_test".into(),
+                kind: ProvisionOpKind::SelfTest,
+                product_label: "Testing local capture".into(),
+                detail: "test".into(),
+                reversible: false,
+            },
+        ],
+        warnings: vec![],
+        absolute_cli: abs_cli,
+        product_summary: vec![],
+        state_witness: witness,
+    };
+
+    let outcome = apply_with_options(
+        p,
+        &svc,
+        Some(VerifyOptions {
+            mode: VerificationMode::ProductCapture,
+            capture: Some(Arc::new(ControlledCapture {
+                fail_delivery: true,
+                materialize_run: false,
+            })),
+            service_probe: Some(Arc::new(AlwaysReadyProbe { version: None })),
+        }),
+        Some(Arc::new(AlwaysReadyProbe { version: None })),
+    )
+    .unwrap();
+    assert!(
+        matches!(outcome, ApplyOutcome::RolledBack { .. }),
+        "{outcome:?}"
+    );
+    assert!(
+        !outcome.receipt().transaction_enabled_autostart,
+        "must not have re-enabled autostart"
+    );
+    assert!(
+        svc.inspect().unwrap().autostart_enabled,
+        "preexisting autostart must remain enabled after rollback"
     );
 }
 
@@ -389,8 +502,7 @@ fn mid_apply_failure_auto_rolls_back_and_restores_config_bytes() {
 
     let svc = MemoryServiceManager::new();
     let mut p = plan(product_intent(project.clone()), &svc).unwrap();
-    p.operations
-        .retain(|o| o.kind != ProvisionOpKind::SelfTest);
+    p.operations.retain(|o| o.kind != ProvisionOpKind::SelfTest);
     svc.fail_next("injected");
     // Wait — fail_next on first install; but init and configure run first.
     // fail_next triggers on install after configure — good.
@@ -440,6 +552,10 @@ fn rollback_restores_exact_snapshot_without_semantic_remove_after() {
             original_hash: "x".into(),
             created_at: chrono::Utc::now().to_rfc3339(),
         }],
+        service_prestate: None,
+        transaction_enabled_autostart: false,
+        transaction_started_service: false,
+        transaction_wrote_unit: false,
         readiness: Readiness::RollbackRequired,
         failed_operation: Some("configure_agent".into()),
         error: Some("test".into()),
@@ -484,10 +600,8 @@ fn product_apply_self_test_ready_with_injectables() {
     setup_agent(&project);
     let intent = product_intent(project.clone());
     let mut p = plan(intent, &svc).unwrap();
-    p.operations
-        .retain(|o| o.kind == ProvisionOpKind::SelfTest);
-    p.state_witness =
-        moraine_provision::compute_witness(&p.intent, &svc, &p.absolute_cli).unwrap();
+    p.operations.retain(|o| o.kind == ProvisionOpKind::SelfTest);
+    p.state_witness = moraine_provision::compute_witness(&p.intent, &svc, &p.absolute_cli).unwrap();
     let opts = VerifyOptions {
         mode: VerificationMode::ProductCapture,
         capture: Some(Arc::new(ControlledCapture {

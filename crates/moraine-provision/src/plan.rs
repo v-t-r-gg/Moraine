@@ -10,9 +10,7 @@ use crate::apply::compute_witness;
 use crate::error::{ProvisionError, Result};
 use crate::service::ServiceManager;
 use crate::suite::SuitePaths;
-use crate::types::{
-    ProvisionOpKind, ProvisionOperation, ProvisionWarning, SetupIntent, SetupPlan,
-};
+use crate::types::{ProvisionOpKind, ProvisionOperation, ProvisionWarning, SetupIntent, SetupPlan};
 
 pub fn plan(intent: SetupIntent, service: &dyn ServiceManager) -> Result<SetupPlan> {
     let suite = SuitePaths::discover();
@@ -70,9 +68,7 @@ pub fn plan(intent: SetupIntent, service: &dyn ServiceManager) -> Result<SetupPl
     let svc_state = service.inspect()?;
     if !intent.skip_service {
         // Install/repair when registration missing or invalid (wrong ExecStart).
-        if !svc_state.registration_present
-            || !svc_state.registration_valid
-            || !svc_state.installed
+        if !svc_state.registration_present || !svc_state.registration_valid || !svc_state.installed
         {
             operations.push(op(
                 ProvisionOpKind::InstallService,
@@ -112,10 +108,7 @@ pub fn plan(intent: SetupIntent, service: &dyn ServiceManager) -> Result<SetupPl
         false,
     ));
     product_summary.push("Verify capture works end-to-end".into());
-    product_summary.push(format!(
-        "Keep records inside {}",
-        intent.project.display()
-    ));
+    product_summary.push(format!("Keep records inside {}", intent.project.display()));
 
     let absolute_cli_s = absolute_cli.display().to_string();
     let state_witness = compute_witness(&intent, service, &absolute_cli_s)?;

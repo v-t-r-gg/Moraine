@@ -19,9 +19,7 @@ use uuid::Uuid;
 
 use crate::agent::adapter_for;
 use crate::error::Result;
-use crate::service_ready::{
-    default_service_probe, default_service_ready_timeout_ms, ServiceProbe,
-};
+use crate::service_ready::{default_service_probe, default_service_ready_timeout_ms, ServiceProbe};
 use crate::suite::SuitePaths;
 use crate::types::{
     Readiness, SetupIntent, VerificationMode, VerificationReport, VerificationStep,
@@ -37,15 +35,17 @@ pub struct VerifyOptions {
 
 /// Injectable capture delivery (real hook-codex or test double).
 pub trait EventCapture: Send + Sync {
-    /// Deliver synthetic hooks for `session_id` carrying `event_id`.
-    /// On success, returns a run_id that is discoverable **and** bound to this session
-    /// (and ideally references `event_id` in session/run metadata or objective).
+    /// Deliver synthetic hooks for `session_id` with shared `verification_id`.
+    ///
+    /// Implementations **must** use distinct mechanical event IDs for SessionStart vs
+    /// UserPromptSubmit (service dedupes on eventId). Correlate the resulting run by
+    /// `verification_id` in the objective (not by a single shared eventId).
     fn deliver_and_materialize(
         &self,
         project: &Path,
         cli: &Path,
         session_id: &str,
-        event_id: &str,
+        verification_id: &str,
     ) -> std::result::Result<Uuid, String>;
 }
 
@@ -68,7 +68,7 @@ impl EventCapture for HookCodexCapture {
         project: &Path,
         cli: &Path,
         session_id: &str,
-        event_id: &str,
+        verification_id: &str,
     ) -> std::result::Result<Uuid, String> {
         if !cli.is_file() || !is_moraine_cli_binary(cli) {
             return Err(format!(
@@ -76,14 +76,23 @@ impl EventCapture for HookCodexCapture {
                 cli.display()
             ));
         }
-        // Structural event_id + prompt marker (never accept stale runs).
-        let prompt = format!("Moraine self-test event_id={event_id}");
-        invoke_hook_codex(cli, project, session_id, event_id, "SessionStart", None)?;
+        // Distinct mechanical event IDs — service dedupes on eventId.
+        let start_event_id = format!("self-test-{verification_id}-session-start");
+        let prompt_event_id = format!("self-test-{verification_id}-user-prompt");
+        let prompt = format!("Moraine self-test verification_id={verification_id}");
         invoke_hook_codex(
             cli,
             project,
             session_id,
-            event_id,
+            &start_event_id,
+            "SessionStart",
+            None,
+        )?;
+        invoke_hook_codex(
+            cli,
+            project,
+            session_id,
+            &prompt_event_id,
             "UserPromptSubmit",
             Some(&prompt),
         )?;
@@ -93,21 +102,20 @@ impl EventCapture for HookCodexCapture {
         let deadline = Instant::now() + self.poll_timeout;
         let mut delay = Duration::from_millis(100);
         while Instant::now() < deadline {
-            // ONLY accept runs bound to this unique session_id AND event_id marker.
+            // ONLY accept runs bound to this session with the verification correlation ID.
             if let Ok(Some(run_id)) = find_session_run(&resolved.project_root, session_id) {
                 let runs = list_run_summaries(&resolved.project_root, resolved.project_id);
                 if let Some(r) = runs.iter().find(|r| r.run_id == run_id) {
-                    if r.objective.contains(event_id) {
+                    if r.objective.contains(verification_id) {
                         return Ok(run_id);
                     }
-                    // Keep polling until objective reflects the unique event_id.
                 }
             }
             std::thread::sleep(delay);
             delay = (delay * 2).min(Duration::from_millis(800));
         }
         Err(format!(
-            "no session-bound run for session={session_id} event_id={event_id} within {:?}",
+            "no session-bound run for session={session_id} verification_id={verification_id} within {:?}",
             self.poll_timeout
         ))
     }
@@ -125,21 +133,20 @@ impl EventCapture for ControlledCapture {
         project: &Path,
         _cli: &Path,
         session_id: &str,
-        event_id: &str,
+        verification_id: &str,
     ) -> std::result::Result<Uuid, String> {
         if self.fail_delivery {
             return Err(format!(
-                "controlled capture: hook delivery failed for event_id={event_id}"
+                "controlled capture: hook delivery failed for verification_id={verification_id}"
             ));
         }
         if !self.materialize_run {
             return Err(format!(
-                "controlled capture: delivery ok but no materialization for event_id={event_id}"
+                "controlled capture: delivery ok but no materialization for verification_id={verification_id}"
             ));
         }
-        // Simulate service processing this unique session/event (test double only).
-        let run_id = direct_core_capture_with_marker(project, session_id, event_id)?;
-        // Must be discoverable via session binding.
+        // Simulate service processing prompt event for this verification (test double only).
+        let run_id = direct_core_capture_with_marker(project, session_id, verification_id)?;
         let resolved = resolve_existing_project(Some(project)).map_err(|e| e.to_string())?;
         let bound = find_session_run(&resolved.project_root, session_id)
             .map_err(|e| e.to_string())?
@@ -279,10 +286,7 @@ fn verify_product(intent: &SetupIntent, opts: VerifyOptions) -> Result<Verificat
         .as_ref()
         .map(|c| {
             let p = Path::new(c);
-            p.is_absolute()
-                && is_moraine_cli_binary(p)
-                && p.is_file()
-                && paths_equal(c, &suite_cli)
+            p.is_absolute() && is_moraine_cli_binary(p) && p.is_file() && paths_equal(c, &suite_cli)
         })
         .unwrap_or(false);
     steps.push(step(
@@ -303,9 +307,7 @@ fn verify_product(intent: &SetupIntent, opts: VerifyOptions) -> Result<Verificat
         return Ok(fail_report(steps, project.display().to_string()));
     }
 
-    let probe = opts
-        .service_probe
-        .unwrap_or_else(default_service_probe);
+    let probe = opts.service_probe.unwrap_or_else(default_service_probe);
     let ready = probe.wait_ready(default_service_ready_timeout_ms());
     steps.push(step(
         "service.reachable",
@@ -325,18 +327,18 @@ fn verify_product(intent: &SetupIntent, opts: VerifyOptions) -> Result<Verificat
         .capture
         .unwrap_or_else(|| Arc::new(HookCodexCapture::default()));
     let session_id = format!("self-test-{}", Uuid::new_v4());
-    let event_id = format!("evt-{}", Uuid::new_v4());
+    let verification_id = Uuid::new_v4().to_string();
     let run_id = match capture.deliver_and_materialize(
         &resolved.project_root,
         &suite_cli,
         &session_id,
-        &event_id,
+        &verification_id,
     ) {
         Ok(id) => {
             steps.push(ok_step(
                 "capture.adapter_event",
                 "Created a test capture event",
-                format!("session={session_id} event_id={event_id} run_id={id}"),
+                format!("session={session_id} verification_id={verification_id} run_id={id}"),
             ));
             id
         }
@@ -350,26 +352,35 @@ fn verify_product(intent: &SetupIntent, opts: VerifyOptions) -> Result<Verificat
         }
     };
 
-    // Re-validate binding: discovery + session must agree for this run_id.
+    // Re-validate binding: discovery + session + verification_id in objective.
     let runs = list_run_summaries(&resolved.project_root, resolved.project_id);
     let found = runs.iter().any(|r| r.run_id == run_id);
     let session_bound = find_session_run(&resolved.project_root, &session_id)
         .ok()
         .flatten()
         == Some(run_id);
-    let bound_ok = found && session_bound;
+    let obj_ok = runs
+        .iter()
+        .find(|r| r.run_id == run_id)
+        .map(|r| r.objective.contains(&verification_id))
+        .unwrap_or(false);
+    let bound_ok = found && session_bound && obj_ok;
     steps.push(step(
         "discovery.run_visible",
         "Test run is discoverable",
         bound_ok,
         if bound_ok {
-            format!("found session-bound run {run_id} for event_id={event_id}")
+            format!(
+                "found session-bound run {run_id} for verification_id={verification_id}"
+            )
         } else {
             format!(
-                "run {run_id} not session-bound (found={found} session_bound={session_bound})"
+                "run {run_id} not correlated (found={found} session_bound={session_bound} obj_ok={obj_ok})"
             )
         },
-        Some(format!("session={session_id} event_id={event_id}")),
+        Some(format!(
+            "session={session_id} verification_id={verification_id}"
+        )),
     ));
     if !bound_ok {
         return Ok(fail_report(steps, project.display().to_string()));
@@ -462,9 +473,12 @@ fn verify_direct(intent: &SetupIntent) -> Result<VerificationReport> {
     }
 
     let session_id = format!("direct-test-{}", Uuid::new_v4());
-    let event_id = format!("direct-evt-{}", Uuid::new_v4());
-    let run_id = match direct_core_capture_with_marker(&resolved.project_root, &session_id, &event_id)
-    {
+    let verification_id = format!("direct-{}", Uuid::new_v4());
+    let run_id = match direct_core_capture_with_marker(
+        &resolved.project_root,
+        &session_id,
+        &verification_id,
+    ) {
         Ok(id) => {
             steps.push(ok_step(
                 "capture.direct_core",
@@ -522,9 +536,9 @@ fn verify_direct(intent: &SetupIntent) -> Result<VerificationReport> {
 fn direct_core_capture_with_marker(
     project: &Path,
     session_id: &str,
-    event_id: &str,
+    verification_id: &str,
 ) -> std::result::Result<Uuid, String> {
-    let objective = format!("Moraine self-test event_id={event_id}");
+    let objective = format!("Moraine self-test verification_id={verification_id}");
     session_observe(SessionObserveRequest {
         session_id: session_id.to_string(),
         integration: "codex".into(),
@@ -540,18 +554,26 @@ fn direct_core_capture_with_marker(
         session_id: session_id.to_string(),
         project: Some(project.to_path_buf()),
         objective: Some(objective.clone()),
-        idempotency_key: Some(format!("prov-{event_id}")),
+        idempotency_key: Some(format!("prov-{verification_id}")),
     })
     .map_err(|e| e.to_string())?;
 
     let confirmed = run_start(RunStartRequest {
         objective,
-        idempotency_key: format!("confirm-{event_id}"),
+        idempotency_key: format!("confirm-{verification_id}"),
         project: Some(project.to_path_buf()),
         session_id: Some(session_id.to_string()),
     })
     .map_err(|e| e.to_string())?;
     Ok(confirmed.run_id)
+}
+
+/// Public helper for tests: the two distinct mechanical event IDs for a verification.
+pub fn product_capture_event_ids(verification_id: &str) -> (String, String) {
+    (
+        format!("self-test-{verification_id}-session-start"),
+        format!("self-test-{verification_id}-user-prompt"),
+    )
 }
 
 fn find_session_run(project: &Path, session_id: &str) -> moraine_core::Result<Option<Uuid>> {
@@ -567,9 +589,7 @@ fn find_session_run(project: &Path, session_id: &str) -> moraine_core::Result<Op
         }
         let raw = std::fs::read_to_string(&p)?;
         // Require external session id match, not mere substring of UUID-like noise.
-        if !raw.contains(&format!("\"{session_id}\""))
-            && !raw.contains(session_id)
-        {
+        if !raw.contains(&format!("\"{session_id}\"")) && !raw.contains(session_id) {
             continue;
         }
         // Prefer structured parse

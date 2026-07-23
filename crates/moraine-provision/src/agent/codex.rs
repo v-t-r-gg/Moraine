@@ -160,10 +160,7 @@ impl AgentAdapter for CodexAdapter {
                 "Connect Codex for this project".into(),
                 "Keep records next to the project".into(),
             ],
-            files_to_touch: vec![
-                cfg.display().to_string(),
-                hooks.display().to_string(),
-            ],
+            files_to_touch: vec![cfg.display().to_string(), hooks.display().to_string()],
         })
     }
 
@@ -407,11 +404,7 @@ fn merge_mcp_block(existing: &str, mcp_block: &str) -> String {
 
 fn ensure_managed_hooks(doc: &mut Value, hook_cmd: &str) -> usize {
     strip_managed_hooks(doc);
-    if !doc
-        .get("hooks")
-        .map(|h| h.is_object())
-        .unwrap_or(false)
-    {
+    if !doc.get("hooks").map(|h| h.is_object()).unwrap_or(false) {
         doc["hooks"] = json!({});
     }
     let hooks = doc

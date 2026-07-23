@@ -125,10 +125,7 @@ pub fn health(
                 checks.push(HealthCheck {
                     id: "agent.integration".into(),
                     status: HealthStatus::Fail,
-                    user_message: format!(
-                        "{} integration needs repair",
-                        adapter.display_name()
-                    ),
+                    user_message: format!("{} integration needs repair", adapter.display_name()),
                     technical_detail: state.details.join("; "),
                     repair: Some(RepairAction {
                         id: "repair.agent".into(),

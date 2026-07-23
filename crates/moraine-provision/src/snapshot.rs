@@ -43,9 +43,11 @@ pub fn durable_backup(source: &Path) -> Result<FileSnapshot> {
             .map_err(|e| ProvisionError::msg(format!("fsync backup {}: {e}", bak.display())))?;
     }
     if let Some(parent) = bak.parent() {
-        if let Ok(dir) = File::open(parent) {
-            let _ = dir.sync_all();
-        }
+        File::open(parent)
+            .and_then(|dir| dir.sync_all())
+            .map_err(|e| {
+                ProvisionError::msg(format!("fsync backup parent {}: {e}", parent.display()))
+            })?;
     }
     Ok(FileSnapshot::Existing {
         path: source.display().to_string(),
@@ -99,11 +101,7 @@ pub fn restore_snapshot(snap: &FileSnapshot) -> Result<()> {
             }
             // Best-effort: remove empty parent .codex if we emptied it.
             if let Some(parent) = p.parent() {
-                if parent
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    == Some(".codex")
-                {
+                if parent.file_name().and_then(|n| n.to_str()) == Some(".codex") {
                     let _ = fs::remove_dir(parent); // only if empty
                 }
             }
@@ -132,11 +130,13 @@ pub fn atomic_write_durable(path: &Path, data: &[u8]) -> Result<()> {
         f.sync_all()?;
     }
     fs::rename(&tmp, path)?;
-    if let Ok(f) = File::open(path) {
-        let _ = f.sync_all();
-    }
-    if let Ok(dir) = File::open(parent) {
-        let _ = dir.sync_all();
-    }
+    File::open(path)
+        .and_then(|f| f.sync_all())
+        .map_err(|e| ProvisionError::msg(format!("fsync write {}: {e}", path.display())))?;
+    File::open(parent)
+        .and_then(|dir| dir.sync_all())
+        .map_err(|e| {
+            ProvisionError::msg(format!("fsync write parent {}: {e}", parent.display()))
+        })?;
     Ok(())
 }

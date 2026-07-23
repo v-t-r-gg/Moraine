@@ -13,10 +13,7 @@ use crate::types::{
 };
 
 /// Inspect suite, service, agents, and optional project candidates under scan roots.
-pub fn inspect(
-    service: &dyn ServiceManager,
-    scan_roots: &[PathBuf],
-) -> Result<SystemState> {
+pub fn inspect(service: &dyn ServiceManager, scan_roots: &[PathBuf]) -> Result<SystemState> {
     let suite_paths = SuitePaths::discover();
     let suite = inspect_suite(&suite_paths);
     let service_state = service.inspect()?;
@@ -168,5 +165,3 @@ pub fn detect_agent(kind: AgentKind) -> Result<DetectedAgent> {
         status_message: d.status_message,
     })
 }
-
-

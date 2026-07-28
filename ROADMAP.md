@@ -22,9 +22,9 @@ High-level direction. Product model: [VISION.md](./VISION.md), [ARCHITECTURE.md]
 ## Now
 
 * **W1 — Platform abstraction**
-  * W1-A: host capabilities and one authoritative suite/runtime layout
-  * W1-B: capture and background-runtime backend boundaries
-  * W1-C: capability-aware product closure and required Windows compile CI
+  * W1-A: host capabilities and one authoritative suite/runtime layout (merged)
+  * W1-B: capture and background-runtime backend boundaries (implemented on this branch)
+  * W1-C: capability-aware product closure and required Windows compile CI (planned)
 
 ### Validation language
 

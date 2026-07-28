@@ -1,12 +1,14 @@
 //! Codex lifecycle hook adapter: stdin JSON → Moraine local service IPC / spool.
 
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use anyhow::{Context, Result};
+use moraine_platform::CaptureEndpoint;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+
+use crate::capture::{self, CaptureDelivery};
 
 /// Read a Codex hook payload from stdin, map to a Moraine mechanical event, deliver.
 pub fn run_hook_codex(socket: Option<PathBuf>, spool_dir: Option<PathBuf>) -> Result<i32> {
@@ -26,30 +28,31 @@ pub fn run_hook_codex(socket: Option<PathBuf>, spool_dir: Option<PathBuf>) -> Re
     };
 
     let body = serde_json::to_vec(&event)?;
-    let socket_path = socket.unwrap_or_else(default_socket_path);
+    let endpoint = socket
+        .map(CaptureEndpoint::UnixSocket)
+        .unwrap_or_else(|| moraine_platform::RuntimeLayout::discover().capture_endpoint);
     let spool = spool_dir.unwrap_or_else(default_spool_dir);
 
-    if deliver_unix(&socket_path, &body).is_ok() {
-        return Ok(0);
+    match capture::deliver(&endpoint, &body) {
+        CaptureDelivery::Delivered => {}
+        CaptureDelivery::Unavailable => {
+            // A supported runtime is temporarily unavailable. Preserve the event
+            // durably and exit successfully so the agent is not disrupted.
+            write_spooled(&spool, &body)?;
+        }
+        CaptureDelivery::Unsupported => {
+            eprintln!(
+                "{}",
+                json!({
+                    "ok": false,
+                    "code": "unsupported_platform",
+                    "operation": "capture_delivery",
+                    "endpoint": endpoint,
+                })
+            );
+        }
     }
-
-    // Service unavailable: spool locally and exit 0 so the agent continues.
-    std::fs::create_dir_all(&spool).ok();
-    std::fs::create_dir_all(spool.join("processed")).ok();
-    std::fs::create_dir_all(spool.join("failed")).ok();
-    write_spooled(&spool, &body)?;
     Ok(0)
-}
-
-fn default_socket_path() -> PathBuf {
-    std::env::var_os("MORAINE_SOCKET")
-        .map(PathBuf::from)
-        .unwrap_or_else(
-            || match moraine_platform::RuntimeLayout::discover().capture_endpoint {
-                moraine_platform::CaptureEndpoint::UnixSocket(path) => path,
-                _ => PathBuf::new(),
-            },
-        )
 }
 
 fn default_spool_dir() -> PathBuf {
@@ -276,16 +279,6 @@ fn stable_event_id(hook_event: &str, session_id: &str, payload: &Value) -> Strin
         hasher.update(p.as_bytes());
     }
     format!("codex-{}", &hex::encode(hasher.finalize())[..24])
-}
-
-fn deliver_unix(socket_path: &Path, body: &[u8]) -> Result<()> {
-    use std::os::unix::net::UnixStream;
-    let mut stream = UnixStream::connect(socket_path)
-        .with_context(|| format!("connect {}", socket_path.display()))?;
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
-    stream.write_all(body)?;
-    let _ = stream.flush();
-    Ok(())
 }
 
 fn write_spooled(spool_dir: &Path, buf: &[u8]) -> Result<PathBuf> {

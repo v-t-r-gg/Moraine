@@ -7,7 +7,6 @@ use anyhow::Result;
 use serde_json::json;
 
 use crate::doctor;
-use crate::service_cmd;
 use crate::suite::{collect_version_report, SuitePaths};
 
 /// Inspect suite, repair/install user unit, start service, report next steps.
@@ -19,11 +18,13 @@ pub fn setup_post_install(json: bool) -> Result<i32> {
 
     // Install/repair unit when suite service binary exists
     if suite.service.is_file() {
-        match service_cmd::service_install(false) {
+        let runtime = moraine_provision::default_background_runtime_manager();
+        let spec = moraine_provision::RuntimeInstallSpec::discover(suite.service.clone());
+        match runtime.install_runtime(&spec) {
             Ok(()) => actions.push(format!("service unit → {}", suite.unit.display())),
             Err(e) => warnings.push(format!("service install: {e:#}")),
         }
-        match service_cmd::service_start(false) {
+        match runtime.start() {
             Ok(()) => actions.push("service start requested".into()),
             Err(e) => warnings.push(format!("service start: {e:#}")),
         }
@@ -35,8 +36,10 @@ pub fn setup_post_install(json: bool) -> Result<i32> {
     }
 
     let doctor_report = doctor::run_doctor(None, None);
-    let service_online =
-        ver.service.online || crate::suite::http_get_loopback(33111, "/status").is_ok();
+    let service_online = moraine_provision::default_background_runtime_manager()
+        .inspect()
+        .map(|state| state.diagnostics_ready && state.capture_ready)
+        .unwrap_or(false);
 
     // Structured inspect via shared control plane (same data desktop uses).
     let system = moraine_provision::inspect_default().ok();

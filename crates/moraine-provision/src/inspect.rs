@@ -171,7 +171,8 @@ fn derive_readiness(
     }
     if service.registration_valid
         && service.running
-        && service.endpoint_ready
+        && service.diagnostics_ready
+        && service.capture_ready
         && agents.iter().any(|a| a.detected)
         && projects.iter().any(|project| {
             project.initialized
@@ -223,6 +224,8 @@ mod tests {
                 components_coherent: true,
             },
             ServiceState {
+                backend: crate::types::BackgroundRuntimeBackend::MemoryTest,
+                supported: true,
                 installed: true,
                 binary_present: true,
                 registration_present: true,
@@ -230,11 +233,14 @@ mod tests {
                 running: true,
                 autostart_enabled: true,
                 endpoint_ready: true,
+                diagnostics_ready: true,
+                capture_ready: true,
                 binary_path: Some("/tmp/moraine-service".into()),
                 unit_path: Some("/tmp/moraine-service.service".into()),
                 version: Some("0.1.0".into()),
                 status_message: "ready".into(),
                 platform: "test".into(),
+                registration: None,
             },
             vec![DetectedAgent {
                 kind: AgentKind::Codex,

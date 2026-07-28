@@ -65,7 +65,11 @@ pub struct SystemState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ServiceState {
+pub struct BackgroundRuntimeState {
+    #[serde(default)]
+    pub backend: BackgroundRuntimeBackend,
+    #[serde(default = "default_true")]
+    pub supported: bool,
     /// True when a service **registration** exists (unit/task), not merely a binary on disk.
     pub installed: bool,
     /// Suite service binary is present.
@@ -83,6 +87,10 @@ pub struct ServiceState {
     /// Loopback endpoint answered (when probed).
     #[serde(default)]
     pub endpoint_ready: bool,
+    #[serde(default)]
+    pub diagnostics_ready: bool,
+    #[serde(default)]
+    pub capture_ready: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub binary_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -92,6 +100,39 @@ pub struct ServiceState {
     /// Product-level status, never OS jargon in the normal UI.
     pub status_message: String,
     pub platform: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registration: Option<RuntimeRegistrationState>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+pub type ServiceState = BackgroundRuntimeState;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundRuntimeBackend {
+    LinuxSystemdUser,
+    Unsupported,
+    #[default]
+    MemoryTest,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeRegistrationKind {
+    SystemdUserUnit,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeRegistrationState {
+    pub kind: RuntimeRegistrationKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -310,6 +351,20 @@ impl FileSnapshot {
 /// Backward-compatible alias used by older call sites / receipts.
 pub type BackupRecord = FileSnapshot;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum RuntimeRegistrationSnapshot {
+    File(FileSnapshot),
+}
+
+impl RuntimeRegistrationSnapshot {
+    pub fn path(&self) -> &str {
+        match self {
+            Self::File(snapshot) => snapshot.path(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompletedOperation {
@@ -327,8 +382,7 @@ pub struct CompletedOperation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceSnapshot {
-    /// Unit/registration file: Existing (prior unit) or Absent (no prior unit).
-    pub registration: FileSnapshot,
+    pub registration: RuntimeRegistrationSnapshot,
     pub was_running: bool,
     pub autostart_was_enabled: bool,
 }
@@ -473,4 +527,42 @@ pub struct ServiceLog {
     pub line: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<String>,
+}
+
+#[cfg(test)]
+mod compatibility_tests {
+    use super::*;
+
+    #[test]
+    fn c3_service_snapshot_registration_shape_remains_readable() {
+        let legacy = serde_json::json!({
+            "registration": {
+                "kind": "absent",
+                "path": "/tmp/moraine-service.service",
+                "createdAt": "2026-01-01T00:00:00Z"
+            },
+            "wasRunning": false,
+            "autostartWasEnabled": true
+        });
+        let snapshot: ServiceSnapshot = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(snapshot.registration.path(), "/tmp/moraine-service.service");
+        assert_eq!(serde_json::to_value(snapshot).unwrap(), legacy);
+    }
+
+    #[test]
+    fn shared_platform_fixture_covers_runtime_state_contract() {
+        let raw = include_str!("../../../src/shared/api/platform.contract.fixture.json");
+        let values: Vec<serde_json::Value> = serde_json::from_str(raw).unwrap();
+        let states: Vec<BackgroundRuntimeState> = values
+            .into_iter()
+            .map(|value| serde_json::from_value(value["runtime"].clone()).unwrap())
+            .collect();
+        assert_eq!(
+            states[0].backend,
+            BackgroundRuntimeBackend::LinuxSystemdUser
+        );
+        assert!(states[0].capture_ready);
+        assert_eq!(states[1].backend, BackgroundRuntimeBackend::Unsupported);
+        assert!(!states[1].supported);
+    }
 }

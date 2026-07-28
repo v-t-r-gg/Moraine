@@ -10,7 +10,7 @@ use crate::error::{ProvisionError, Result};
 use crate::journal;
 use crate::service::ServiceManager;
 use crate::service_ready::{default_service_probe, ServiceProbe};
-use crate::snapshot::{durable_backup, optional_file_sha256, restore_snapshot, snapshot_absent};
+use crate::snapshot::{optional_file_sha256, restore_snapshot};
 use crate::suite::SuitePaths;
 use crate::types::{
     ApplyOutcome, CompletedOperation, FileSnapshot, ProvisionOpKind, Readiness, ServiceSnapshot,
@@ -143,7 +143,7 @@ pub fn apply_with_options_and_capabilities(
                     Ok(install_receipt.actions.join("; "))
                 }
                 ProvisionOpKind::InstallService => {
-                    capture_service_prestate(&mut receipt, service, &suite)?;
+                    capture_service_prestate(&mut receipt, service)?;
                     let bin = suite
                         .absolute_service()
                         .or_else(|| {
@@ -158,11 +158,13 @@ pub fn apply_with_options_and_capabilities(
                     // still return an error, so rollback must treat the attempt as real.
                     receipt.transaction_wrote_unit = true;
                     journal::write_journal(&receipt)?;
-                    service.install(&bin)?;
+                    service.install_runtime(&crate::runtime::RuntimeInstallSpec::discover(
+                        bin.clone(),
+                    ))?;
                     Ok(format!("installed service from {}", bin.display()))
                 }
                 ProvisionOpKind::EnableAutostart => {
-                    capture_service_prestate(&mut receipt, service, &suite)?;
+                    capture_service_prestate(&mut receipt, service)?;
                     let already = receipt
                         .service_prestate
                         .as_ref()
@@ -178,7 +180,7 @@ pub fn apply_with_options_and_capabilities(
                     }
                 }
                 ProvisionOpKind::StartService => {
-                    capture_service_prestate(&mut receipt, service, &suite)?;
+                    capture_service_prestate(&mut receipt, service)?;
                     let was_running = receipt
                         .service_prestate
                         .as_ref()
@@ -304,39 +306,15 @@ pub fn apply_with_options_and_capabilities(
     }
 }
 
-/// Unit/registration path the active ServiceManager will install or restore.
-/// Prefers `inspect().unit_path` so hermetic managers (temp unit) and Linux
-/// (suite unit) stay consistent with what `install` actually writes.
 fn capture_service_prestate(
     receipt: &mut SetupReceipt,
     service: &dyn ServiceManager,
-    suite: &SuitePaths,
 ) -> Result<()> {
     if receipt.service_prestate.is_some() {
         return Ok(());
     }
     let st = service.inspect()?;
-    let unit_path = st
-        .unit_path
-        .as_ref()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| suite.unit.clone());
-    let registration = if unit_path.is_file() {
-        durable_backup(&unit_path)?
-    } else {
-        snapshot_absent(&unit_path)
-    };
-    // Journal unit backup into snapshots as well when Existing (already durable_backup).
-    if matches!(registration, FileSnapshot::Existing { .. }) {
-        // Already written to disk by durable_backup; also track on receipt snapshots if not duplicate.
-        if !receipt
-            .snapshots
-            .iter()
-            .any(|s| s.path() == registration.path())
-        {
-            receipt.snapshots.push(registration.clone());
-        }
-    }
+    let registration = service.capture_registration()?;
     receipt.service_prestate = Some(ServiceSnapshot {
         registration,
         was_running: st.running,
@@ -416,19 +394,10 @@ pub fn rollback_completed_operations(
         service.stop()?;
     }
 
-    // Phase 3: restore/remove registration and reload the manager's cached definition.
+    // Phase 3: delegate exact registration restoration and platform cache reload.
     if receipt.transaction_wrote_unit {
         if let Some(pre) = pre {
-            match &pre.registration {
-                FileSnapshot::Existing { .. } => {
-                    restore_snapshot(&pre.registration)?;
-                    // Critical: systemd will keep the repaired unit until daemon-reload.
-                    service.reload_registration()?;
-                }
-                FileSnapshot::Absent { .. } => {
-                    service.uninstall()?;
-                }
-            }
+            service.restore_registration(&pre.registration)?;
         } else {
             service.uninstall()?;
         }
@@ -495,11 +464,6 @@ pub fn compute_witness(
         optional_file_sha256(std::path::Path::new(absolute_cli)).unwrap_or_default();
     let cfg = intent.project.join(".codex/config.toml");
     let hooks = intent.project.join(".codex/hooks.json");
-    let unit = st
-        .unit_path
-        .as_ref()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| suite.unit.clone());
     Ok(SetupStateWitness {
         project: intent.project.display().to_string(),
         absolute_cli: absolute_cli.to_string(),
@@ -507,7 +471,7 @@ pub fn compute_witness(
         suite_cli_hash,
         codex_config_hash: optional_file_sha256(&cfg),
         codex_hooks_hash: optional_file_sha256(&hooks),
-        service_unit_hash: optional_file_sha256(&unit),
+        service_unit_hash: service.registration_fingerprint()?,
         project_initialized: initialized,
         service_installed: st.installed,
         service_registration_valid: st.registration_valid,

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::suite::http_get_loopback;
+use crate::diagnostics::probe_default;
 
 /// Default max wait (overridable via `MORAINE_SERVICE_READY_MS` for tests).
 pub fn default_service_ready_timeout_ms() -> u64 {
@@ -80,24 +80,13 @@ pub fn wait_for_service_ready(max_wait_ms: u64) -> ServiceReadyResult {
     let mut attempts = 0u32;
     loop {
         attempts += 1;
-        if let Ok(body) = http_get_loopback(33111, "/status") {
-            let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
-            let online = v
-                .get("online")
-                .and_then(|x| x.as_bool())
-                .or_else(|| v.get("status").and_then(|s| s.as_str()).map(|s| s == "ok"))
-                .unwrap_or(true);
-            let version = v
-                .get("version")
-                .or_else(|| v.get("productVersion"))
-                .and_then(|x| x.as_str())
-                .map(|s| s.to_string());
-            if online {
+        if let Ok(status) = probe_default() {
+            if status.online && status.capture_ready {
                 return ServiceReadyResult {
                     ready: true,
                     attempts,
                     waited_ms: waited,
-                    version,
+                    version: status.version,
                     message: "background capture is ready".into(),
                 };
             }

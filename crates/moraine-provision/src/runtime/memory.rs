@@ -4,7 +4,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::error::{ProvisionError, Result};
-use crate::types::{ServiceLog, ServiceState};
+use crate::types::{
+    BackgroundRuntimeBackend, BackgroundRuntimeState, RuntimeRegistrationKind,
+    RuntimeRegistrationSnapshot, RuntimeRegistrationState, ServiceLog,
+};
 
 #[derive(Debug, Default)]
 struct Inner {
@@ -28,13 +31,13 @@ struct Inner {
 
 /// Deterministic service manager for unit tests and non-Linux stubs.
 #[derive(Debug, Default)]
-pub struct MemoryServiceManager {
+pub struct MemoryRuntimeManager {
     inner: Mutex<Inner>,
     /// When set, install() writes a unit file here (hermetic registration tests).
     unit_path: Option<PathBuf>,
 }
 
-impl MemoryServiceManager {
+impl MemoryRuntimeManager {
     pub fn new() -> Self {
         Self::default()
     }
@@ -78,8 +81,8 @@ impl MemoryServiceManager {
     }
 }
 
-impl super::ServiceManager for MemoryServiceManager {
-    fn inspect(&self) -> Result<ServiceState> {
+impl super::BackgroundRuntimeManager for MemoryRuntimeManager {
+    fn inspect(&self) -> Result<BackgroundRuntimeState> {
         let mut g = self.inner.lock().unwrap();
         if let Some((remaining, message)) = g.fail_inspect_after.as_mut() {
             if *remaining == 0 {
@@ -99,7 +102,9 @@ impl super::ServiceManager for MemoryServiceManager {
         } else {
             g.installed
         };
-        Ok(ServiceState {
+        Ok(BackgroundRuntimeState {
+            backend: BackgroundRuntimeBackend::MemoryTest,
+            supported: true,
             installed: registration_present,
             running: g.running,
             binary_present,
@@ -107,6 +112,8 @@ impl super::ServiceManager for MemoryServiceManager {
             registration_valid: registration_present && binary_present,
             autostart_enabled: g.autostart,
             endpoint_ready: g.running,
+            diagnostics_ready: g.running,
+            capture_ready: g.running,
             binary_path: g.binary.as_ref().map(|p| p.display().to_string()),
             unit_path,
             version: None,
@@ -120,6 +127,41 @@ impl super::ServiceManager for MemoryServiceManager {
                 "Background capture is not set up".into()
             },
             platform: "memory".into(),
+            registration: registration_present.then(|| RuntimeRegistrationState {
+                kind: RuntimeRegistrationKind::SystemdUserUnit,
+                location: self
+                    .unit_path
+                    .as_ref()
+                    .map(|path| path.display().to_string()),
+                fingerprint: self
+                    .unit_path
+                    .as_ref()
+                    .and_then(|path| crate::snapshot::file_sha256(path).ok()),
+            }),
+        })
+    }
+
+    fn capture_registration(&self) -> Result<RuntimeRegistrationSnapshot> {
+        let path = self
+            .unit_path
+            .clone()
+            .unwrap_or_else(|| crate::suite::SuitePaths::discover().unit);
+        let snapshot = if path.is_file() {
+            crate::snapshot::durable_backup(&path)?
+        } else {
+            crate::snapshot::snapshot_absent(&path)
+        };
+        Ok(RuntimeRegistrationSnapshot::File(snapshot))
+    }
+
+    fn registration_fingerprint(&self) -> Result<Option<String>> {
+        let Some(path) = &self.unit_path else {
+            return Ok(None);
+        };
+        Ok(if path.is_file() {
+            Some(crate::snapshot::file_sha256(path)?)
+        } else {
+            None
         })
     }
 
@@ -144,6 +186,15 @@ impl super::ServiceManager for MemoryServiceManager {
         if let Some(msg) = g.fail_after_install.take() {
             return Err(ProvisionError::Service(msg));
         }
+        Ok(())
+    }
+
+    fn restore_registration(&self, snapshot: &RuntimeRegistrationSnapshot) -> Result<()> {
+        let RuntimeRegistrationSnapshot::File(snapshot) = snapshot;
+        crate::snapshot::restore_snapshot(snapshot)?;
+        let mut inner = self.inner.lock().unwrap();
+        inner.reload_count = inner.reload_count.saturating_add(1);
+        inner.installed = matches!(snapshot, crate::types::FileSnapshot::Existing { .. });
         Ok(())
     }
 
@@ -206,12 +257,6 @@ impl super::ServiceManager for MemoryServiceManager {
     fn disable_autostart(&self) -> Result<()> {
         let mut g = self.inner.lock().unwrap();
         g.autostart = false;
-        Ok(())
-    }
-
-    fn reload_registration(&self) -> Result<()> {
-        let mut g = self.inner.lock().unwrap();
-        g.reload_count = g.reload_count.saturating_add(1);
         Ok(())
     }
 

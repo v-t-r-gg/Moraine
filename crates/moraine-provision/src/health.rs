@@ -37,7 +37,15 @@ pub fn health(
 
     // Service
     let svc = service.inspect()?;
-    if svc.running {
+    if !svc.supported {
+        checks.push(HealthCheck {
+            id: "service.supported".into(),
+            status: HealthStatus::Fail,
+            user_message: "Background capture is not available on this platform".into(),
+            technical_detail: svc.status_message.clone(),
+            repair: None,
+        });
+    } else if svc.running && svc.diagnostics_ready && svc.capture_ready {
         checks.push(HealthCheck {
             id: "service.running".into(),
             status: HealthStatus::Pass,
@@ -183,7 +191,10 @@ pub fn repair(action: &RepairAction, service: &dyn ServiceManager) -> Result<Rep
                 })
             });
             match bin {
-                Some(b) => match service.install(&b).and_then(|_| service.start()) {
+                Some(b) => match service
+                    .install_runtime(&crate::runtime::RuntimeInstallSpec::discover(b))
+                    .and_then(|_| service.start())
+                {
                     Ok(()) => Ok(RepairResult {
                         ok: true,
                         action_id: action.id.clone(),

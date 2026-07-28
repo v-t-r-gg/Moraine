@@ -1,19 +1,24 @@
+mod capture;
+
 use anyhow::Result;
 use axum::{
     extract::{Path as AxumPath, State},
     routing::{get, post},
     Json, Router,
 };
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::time::Duration;
-use std::{net::SocketAddr, path::PathBuf, sync::Arc};
-use tokio::{
-    io::AsyncReadExt,
-    net::{TcpListener, UnixListener},
-    sync::Notify,
+use std::{
+    net::SocketAddr,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
+use tokio::{net::TcpListener, sync::Notify};
 use tracing::{error, info};
 
 const MAX_SPOOL_FILES: usize = moraine_service::MAX_PENDING_EVENTS;
@@ -21,7 +26,8 @@ const MAX_SPOOL_FILES: usize = moraine_service::MAX_PENDING_EVENTS;
 #[derive(Clone)]
 struct AppState {
     spool_dir: PathBuf,
-    socket_path: PathBuf,
+    capture_endpoint: moraine_platform::CaptureEndpoint,
+    capture_ready: Arc<AtomicBool>,
     http_addr: String,
     started_at_unix: u64,
 }
@@ -29,13 +35,10 @@ struct AppState {
 #[derive(Parser)]
 #[command(author, version, about = "Moraine local integration runtime")]
 struct Args {
-    #[command(subcommand)]
-    command: Option<ServiceCmd>,
-
     /// Loopback HTTP listen address for diagnostics only (e.g. 127.0.0.1:33111).
     /// Must not bind to non-loopback interfaces. Hook delivery uses the Unix socket.
-    #[arg(long, default_value = "127.0.0.1:33111")]
-    http: String,
+    #[arg(long)]
+    http: Option<String>,
 
     /// Unix domain socket for hook / adapter event delivery (primary capture transport).
     #[arg(long)]
@@ -44,20 +47,6 @@ struct Args {
     /// Spool directory for undelivered events
     #[arg(long)]
     spool_dir: Option<PathBuf>,
-}
-
-#[derive(Subcommand)]
-enum ServiceCmd {
-    /// Install a systemd --user unit (Linux)
-    Install,
-    /// Start the service via systemd --user (Linux)
-    Start,
-    /// Stop the service via systemd --user (Linux)
-    Stop,
-    /// Show service status via systemd --user (Linux)
-    Status,
-    /// Print the unit file to stdout
-    UnitFile,
 }
 
 #[derive(Serialize)]
@@ -70,71 +59,6 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     let args = Args::parse();
-
-    if let Some(cmd) = args.command.as_ref() {
-        // Handle cli-only commands and exit
-        match cmd {
-            ServiceCmd::UnitFile => {
-                println!("{}", systemd_unit());
-                return Ok(());
-            }
-            ServiceCmd::Install => {
-                if cfg!(target_os = "linux") {
-                    let home_unit = dirs::config_dir()
-                        .unwrap_or_else(|| std::path::PathBuf::from("~/.config"))
-                        .join("systemd/user/moraine-service.service");
-                    if let Some(parent) = home_unit.parent() {
-                        std::fs::create_dir_all(parent).ok();
-                    }
-                    std::fs::write(&home_unit, systemd_unit())?;
-                    let _ = std::process::Command::new("systemctl")
-                        .args(["--user", "daemon-reload"])
-                        .status();
-                    println!("wrote unit to {}", home_unit.display());
-                    return Ok(());
-                } else {
-                    println!("install is only supported on Linux/systemd");
-                    return Ok(());
-                }
-            }
-            ServiceCmd::Start => {
-                if cfg!(target_os = "linux") {
-                    let s = std::process::Command::new("systemctl")
-                        .args(["--user", "start", "moraine-service.service"])
-                        .status()?;
-                    println!("systemctl start returned: {}", s);
-                    return Ok(());
-                } else {
-                    println!("start is only supported on Linux/systemd");
-                    return Ok(());
-                }
-            }
-            ServiceCmd::Stop => {
-                if cfg!(target_os = "linux") {
-                    let s = std::process::Command::new("systemctl")
-                        .args(["--user", "stop", "moraine-service.service"])
-                        .status()?;
-                    println!("systemctl stop returned: {}", s);
-                    return Ok(());
-                } else {
-                    println!("stop is only supported on Linux/systemd");
-                    return Ok(());
-                }
-            }
-            ServiceCmd::Status => {
-                if cfg!(target_os = "linux") {
-                    let s = std::process::Command::new("systemctl")
-                        .args(["--user", "status", "moraine-service.service"])
-                        .status()?;
-                    println!("systemctl status returned: {}", s);
-                    return Ok(());
-                } else {
-                    println!("status is only supported on Linux/systemd");
-                    return Ok(());
-                }
-            }
-        }
-    }
 
     let spool_dir = args
         .spool_dir
@@ -152,8 +76,12 @@ async fn main() -> Result<()> {
         .await
         .ok();
 
+    let runtime_layout = moraine_platform::RuntimeLayout::discover();
+    let http = args
+        .http
+        .unwrap_or_else(|| runtime_layout.diagnostics_endpoint.to_string());
     // Diagnostics HTTP on loopback only — not the hook transport.
-    let http_addr: SocketAddr = args.http.parse()?;
+    let http_addr: SocketAddr = http.parse()?;
     if !http_addr.ip().is_loopback() {
         anyhow::bail!(
             "refusing non-loopback HTTP bind {http_addr}; diagnostics must use 127.0.0.1/::1. \
@@ -161,17 +89,20 @@ async fn main() -> Result<()> {
         );
     }
 
-    let runtime_layout = moraine_platform::RuntimeLayout::discover();
-    let socket_path = resolve_capture_socket(args.unix_socket.as_deref(), &runtime_layout)?;
+    let capture_endpoint = resolve_capture_endpoint(args.unix_socket.as_deref(), &runtime_layout)?;
+    // Capture is the product intake. Bind it before diagnostics can report online.
+    let capture_listener = capture::bind(&capture_endpoint).await?;
     let started_at_unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let shutdown = Arc::new(Notify::new());
+    let capture_ready = Arc::new(AtomicBool::new(true));
     let state = AppState {
         spool_dir: spool_dir.clone(),
-        socket_path: socket_path.clone(),
-        http_addr: args.http.clone(),
+        capture_endpoint: capture_endpoint.clone(),
+        capture_ready: capture_ready.clone(),
+        http_addr: http,
         started_at_unix,
     };
     let app = Router::new()
@@ -190,18 +121,6 @@ async fn main() -> Result<()> {
         spool_dir = %spool_dir.display(),
         "starting moraine-service (hooks=unix-socket, diagnostics=loopback-http)"
     );
-
-    // Unix domain socket: primary hook/adapter intake (not TCP).
-    {
-        let spool = spool_dir.clone();
-        let shutdown_clone = shutdown.clone();
-        let listener_socket = socket_path.clone();
-        tokio::spawn(async move {
-            if let Err(e) = unix_listener_loop(listener_socket, spool, shutdown_clone).await {
-                error!(error = %e, "unix listener failed");
-            }
-        });
-    }
 
     // Spool processing task: periodically scan spool dir and process events
     {
@@ -239,24 +158,56 @@ async fn main() -> Result<()> {
         notify.notify_waiters();
     });
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            shutdown.notified().await;
-        })
-        .await?;
+    let http_shutdown = shutdown.clone();
+    let http = async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                http_shutdown.notified().await;
+            })
+            .await
+    };
+    let capture_shutdown = shutdown.clone();
+    let capture = capture_listener.run(spool_dir, capture_shutdown);
+    tokio::pin!(http);
+    tokio::pin!(capture);
 
-    Ok(())
+    tokio::select! {
+        result = &mut capture => {
+            capture_ready.store(false, Ordering::Release);
+            shutdown.notify_waiters();
+            match result {
+                Ok(()) => {
+                    http.await?;
+                    Ok(())
+                }
+                Err(error) => {
+                    error!(%error, "capture listener failed; stopping runtime");
+                    Err(error)
+                }
+            }
+        }
+        result = &mut http => {
+            shutdown.notify_waiters();
+            result?;
+            capture.await?;
+            Ok(())
+        }
+    }
 }
 
-fn resolve_capture_socket(
+fn resolve_capture_endpoint(
     explicit: Option<&std::path::Path>,
     layout: &moraine_platform::RuntimeLayout,
-) -> Result<PathBuf> {
+) -> Result<moraine_platform::CaptureEndpoint> {
     if let Some(path) = explicit {
-        return Ok(path.to_path_buf());
+        return Ok(moraine_platform::CaptureEndpoint::UnixSocket(
+            path.to_path_buf(),
+        ));
     }
     match &layout.capture_endpoint {
-        moraine_platform::CaptureEndpoint::UnixSocket(path) => Ok(path.clone()),
+        moraine_platform::CaptureEndpoint::UnixSocket(path) => {
+            Ok(moraine_platform::CaptureEndpoint::UnixSocket(path.clone()))
+        }
         endpoint => anyhow::bail!("unsupported capture endpoint for moraine-service: {endpoint:?}"),
     }
 }
@@ -288,7 +239,14 @@ async fn handle_status(State(state): State<AppState>) -> Json<Value> {
         "serviceProtocolVersion": build.service_protocol_version,
         "schema": build.schema,
         "executablePath": executable,
-        "socketPath": state.socket_path.display().to_string(),
+        "captureReady": state.capture_ready.load(Ordering::Acquire),
+        "captureEndpoint": state.capture_endpoint,
+        "socketPath": match &state.capture_endpoint {
+            moraine_platform::CaptureEndpoint::UnixSocket(path) => {
+                Some(path.display().to_string())
+            }
+            _ => None,
+        },
         "httpAddr": state.http_addr,
         "spoolDir": state.spool_dir.display().to_string(),
         "indexPath": index_path.display().to_string(),
@@ -422,51 +380,6 @@ async fn handle_rescan_project(
     handle_rebuild(State(state)).await
 }
 
-async fn unix_listener_loop(
-    socket_path: PathBuf,
-    spool_dir: PathBuf,
-    shutdown: Arc<Notify>,
-) -> Result<()> {
-    let _ = std::fs::remove_file(&socket_path);
-    if let Some(parent) = socket_path.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-    let listener = UnixListener::bind(&socket_path)?;
-    info!(socket=%socket_path.display(), "unix socket bound");
-    tokio::fs::create_dir_all(spool_dir.join("processed"))
-        .await
-        .ok();
-    tokio::fs::create_dir_all(spool_dir.join("failed"))
-        .await
-        .ok();
-
-    loop {
-        tokio::select! {
-            Ok((stream, _addr)) = listener.accept() => {
-                let mut buf = Vec::new();
-                // Read one byte past the accepted maximum so an oversized event is
-                // rejected instead of being silently truncated into a valid payload.
-                let mut limited = stream.take((moraine_service::MAX_EVENT_BYTES + 1) as u64);
-                match tokio::io::AsyncReadExt::read_to_end(&mut limited, &mut buf).await {
-                    Ok(_) => {
-                        match moraine_service::write_spooled_payload(&spool_dir, &buf).await {
-                            Ok(p) => info!(file=%p.display(), "spooled event"),
-                            Err(e) => error!(error=%e, "failed to spool payload"),
-                        }
-                    }
-                    Err(e) => error!(%e, "failed to read unix socket payload"),
-                }
-            }
-            _ = shutdown.notified() => {
-                info!(socket=%socket_path.display(), "shutting down unix listener");
-                break;
-            }
-        }
-    }
-
-    Ok(())
-}
-
 fn is_spool_event_file(path: &std::path::Path) -> bool {
     path.is_file()
         && path
@@ -525,37 +438,6 @@ async fn spool_processor_loop(spool_dir: PathBuf, shutdown: Arc<Notify>) -> Resu
     Ok(())
 }
 
-/// Render a user unit with an absolute ExecStart for the running binary.
-/// Prefer `moraine service install` from the installed suite CLI.
-fn systemd_unit() -> String {
-    let exec = std::env::current_exe()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|_| "/usr/bin/moraine-service".into());
-    // Refuse to embed private build paths that would pin a checkout target/.
-    let exec = if exec.contains("/target/") {
-        // Fall back to suite layout; installers rewrite absolute paths.
-        "%h/.local/libexec/moraine/moraine-service".into()
-    } else {
-        exec
-    };
-    format!(
-        r#"[Unit]
-Description=Moraine local integration runtime (per-user)
-After=network.target
-
-[Service]
-Type=simple
-ExecStart={exec} --http 127.0.0.1:33111 --unix-socket %t/moraine-service.sock
-Restart=on-failure
-RestartSec=2
-Environment=RUST_LOG=info
-
-[Install]
-WantedBy=default.target
-"#
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -576,8 +458,9 @@ mod tests {
             "/runtime/default.sock".into(),
         ));
         assert_eq!(
-            resolve_capture_socket(Some(std::path::Path::new("/explicit.sock")), &runtime).unwrap(),
-            PathBuf::from("/explicit.sock")
+            resolve_capture_endpoint(Some(std::path::Path::new("/explicit.sock")), &runtime)
+                .unwrap(),
+            moraine_platform::CaptureEndpoint::UnixSocket(PathBuf::from("/explicit.sock"))
         );
     }
 
@@ -587,15 +470,15 @@ mod tests {
             "/runtime/shared.sock".into(),
         ));
         assert_eq!(
-            resolve_capture_socket(None, &runtime).unwrap(),
-            PathBuf::from("/runtime/shared.sock")
+            resolve_capture_endpoint(None, &runtime).unwrap(),
+            moraine_platform::CaptureEndpoint::UnixSocket(PathBuf::from("/runtime/shared.sock"))
         );
     }
 
     #[test]
     fn unsupported_capture_endpoint_fails_explicitly() {
         let runtime = layout(moraine_platform::CaptureEndpoint::Unsupported);
-        assert!(resolve_capture_socket(None, &runtime)
+        assert!(resolve_capture_endpoint(None, &runtime)
             .unwrap_err()
             .to_string()
             .contains("unsupported capture endpoint"));

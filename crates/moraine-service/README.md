@@ -28,14 +28,12 @@ Diagnostics clients
 cargo run -p moraine-service -- --http 127.0.0.1:33111 --unix-socket /tmp/moraine-service.sock
 ```
 
-Systemd user unit (Linux):
+Background-runtime lifecycle (Linux currently uses the shared systemd backend):
 
 ```bash
-cargo run -p moraine-service -- install
-cargo run -p moraine-service -- start
+moraine service install
+moraine service start
 ```
-
-Unit template: [crates/moraine-service/systemd/moraine-service.service](crates/moraine-service/systemd/moraine-service.service)
 
 Codex hooks: [docs/integrations/CODEX.md](../../docs/integrations/CODEX.md).
 

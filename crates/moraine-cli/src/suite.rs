@@ -3,7 +3,6 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use moraine_core::{BuildIdentity, SuiteManifest};
 use moraine_platform::{HostPlatform, RuntimeLayout, SuiteLayout, UserPaths, DIAGNOSTICS_PORT};
@@ -263,54 +262,9 @@ pub fn http_get_loopback(port: u16, path: &str) -> Result<String, String> {
     }
 }
 
-pub fn systemctl_user(args: &[&str]) -> Result<std::process::ExitStatus, String> {
-    Command::new("systemctl")
-        .arg("--user")
-        .args(args)
-        .status()
-        .map_err(|e| e.to_string())
-}
-
-/// Render systemd user unit with absolute ExecStart.
-pub fn render_systemd_unit(service_bin: &Path, http: &str, socket: &str) -> String {
-    format!(
-        r#"[Unit]
-Description=Moraine local integration runtime (per-user)
-After=network.target
-
-[Service]
-Type=simple
-ExecStart={exec} --http {http} --unix-socket {socket}
-Restart=on-failure
-RestartSec=2
-Environment=RUST_LOG=info
-
-[Install]
-WantedBy=default.target
-"#,
-        exec = shell_escape_path(service_bin),
-        http = http,
-        socket = socket,
-    )
-}
-
-fn shell_escape_path(p: &Path) -> String {
-    // systemd ExecStart: quote if spaces
-    let s = p.display().to_string();
-    if s.contains(' ') || s.contains('\\') {
-        format!("\"{}\"", s.replace('"', "\\\""))
-    } else {
-        s
-    }
-}
-
 pub fn default_socket_path() -> PathBuf {
     match RuntimeLayout::discover().capture_endpoint {
         moraine_platform::CaptureEndpoint::UnixSocket(path) => path,
         _ => PathBuf::new(),
     }
-}
-
-pub fn default_http_addr() -> &'static str {
-    "127.0.0.1:33111"
 }

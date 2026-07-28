@@ -21,10 +21,9 @@ if [ ! -x target/release/moraine ]; then
 fi
 
 STAGE="$CLEAN/stage"
-mkdir -p "$STAGE/bin" "$STAGE/systemd"
+mkdir -p "$STAGE/bin"
 cp target/release/moraine target/release/moraine-service "$STAGE/bin/"
 chmod 755 "$STAGE/bin/"*
-cp crates/moraine-service/systemd/moraine-service.service.in "$STAGE/systemd/"
 cp scripts/packaging/install.sh scripts/packaging/uninstall.sh "$STAGE/"
 VERSION="$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')"
 VERSION="$VERSION" MORAINE_GIT_COMMIT="$(git rev-parse HEAD)" \

@@ -167,8 +167,10 @@ pub fn default_socket_path() -> PathBuf {
     }
 }
 
-pub fn default_http_addr() -> &'static str {
-    "127.0.0.1:33111"
+pub fn default_http_addr() -> String {
+    moraine_platform::RuntimeLayout::discover()
+        .diagnostics_endpoint
+        .to_string()
 }
 
 pub fn default_http_port() -> u16 {
@@ -199,38 +201,6 @@ pub fn http_get_loopback(port: u16, path: &str) -> std::result::Result<String, S
         Ok(raw[idx + 4..].to_string())
     } else {
         Err("invalid HTTP response".into())
-    }
-}
-
-/// Render systemd user unit with absolute ExecStart.
-pub fn render_systemd_unit(service_bin: &Path, http: &str, socket: &str) -> String {
-    format!(
-        r#"[Unit]
-Description=Moraine local integration runtime (per-user)
-After=network.target
-
-[Service]
-Type=simple
-ExecStart={exec} --http {http} --unix-socket {socket}
-Restart=on-failure
-RestartSec=2
-Environment=RUST_LOG=info
-
-[Install]
-WantedBy=default.target
-"#,
-        exec = shell_escape_path(service_bin),
-        http = http,
-        socket = socket,
-    )
-}
-
-fn shell_escape_path(p: &Path) -> String {
-    let s = p.display().to_string();
-    if s.contains(' ') || s.contains('\\') {
-        format!("\"{}\"", s.replace('"', "\\\""))
-    } else {
-        s
     }
 }
 

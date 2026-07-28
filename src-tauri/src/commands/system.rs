@@ -43,7 +43,7 @@ fn probe_service(cli_version: &str) -> (bool, Option<String>, bool) {
         Ok(st) if st.online => {
             // status DTO may not include version; best-effort HTTP via discovery is enough for online.
             let ver = std::net::TcpStream::connect_timeout(
-                &"127.0.0.1:33111".parse().unwrap(),
+                &moraine_platform::RuntimeLayout::discover().diagnostics_endpoint,
                 std::time::Duration::from_millis(80),
             )
             .ok()
@@ -59,9 +59,8 @@ fn fetch_service_version() -> Option<String> {
     use std::io::{Read, Write};
     use std::net::TcpStream;
     use std::time::Duration;
-    let mut stream =
-        TcpStream::connect_timeout(&"127.0.0.1:33111".parse().ok()?, Duration::from_millis(400))
-            .ok()?;
+    let address = moraine_platform::RuntimeLayout::discover().diagnostics_endpoint;
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(400)).ok()?;
     stream.set_read_timeout(Some(Duration::from_secs(1))).ok()?;
     stream
         .write_all(b"GET /status HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")

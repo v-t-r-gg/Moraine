@@ -355,7 +355,12 @@ pub fn run_doctor(project: Option<&Path>, integration: Option<&str>) -> DoctorRe
             Some("0700 preferred"),
             (!restricted).then_some("chmod 700 the spool directory"),
         ));
-        if let Ok(body) = http_get_loopback(33111, "/status") {
+        if let Ok(body) = http_get_loopback(
+            moraine_platform::RuntimeLayout::discover()
+                .diagnostics_endpoint
+                .port(),
+            "/status",
+        ) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
                 if let Some(sp) = v.get("spool") {
                     checks.push(check(

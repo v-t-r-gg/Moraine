@@ -4,13 +4,18 @@
 
 pub mod agent;
 pub mod apply;
+pub mod diagnostics;
 pub mod error;
 pub mod health;
 pub mod inspect;
 pub mod journal;
 pub mod plan;
 pub mod platform_support;
-pub mod service;
+pub mod runtime;
+/// Source compatibility for C3 callers; runtime ownership lives in `runtime`.
+pub mod service {
+    pub use crate::runtime::*;
+}
 pub mod service_ready;
 pub mod snapshot;
 pub mod suite;
@@ -31,8 +36,12 @@ pub use health::{health, health_default, repair, repair_default};
 pub use inspect::{detect_agent, inspect, inspect_default, inspect_suite};
 pub use plan::plan;
 pub use platform_support::ensure_product_capture_supported;
-pub use service::{
-    default_service_manager, LinuxSystemdUserService, MemoryServiceManager, ServiceManager,
+pub use runtime::linux_systemd::render_systemd_unit;
+pub use runtime::{
+    background_runtime_manager_for_host, default_background_runtime_manager,
+    default_service_manager, BackgroundRuntimeManager, LinuxSystemdUserRuntime,
+    LinuxSystemdUserService, MemoryRuntimeManager, MemoryServiceManager, RuntimeInstallSpec,
+    ServiceManager, UnsupportedRuntimeManager,
 };
 pub use service_ready::{
     default_service_probe, default_service_ready_timeout_ms, wait_for_service_ready,
@@ -40,7 +49,7 @@ pub use service_ready::{
 };
 pub use snapshot::{durable_backup, file_sha256, restore_snapshot, snapshot_absent};
 pub use suite::{
-    default_http_addr, default_prefix, default_socket_path, http_get_loopback, render_systemd_unit,
+    default_http_addr, default_prefix, default_socket_path, http_get_loopback,
     setup_transactions_dir, SuitePaths, SuiteState,
 };
 pub use types::FileSnapshot;

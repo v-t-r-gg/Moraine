@@ -131,11 +131,28 @@ impl ServiceManager for BreakJournalOnInstall {
         self.inner.inspect()
     }
 
+    fn capture_registration(
+        &self,
+    ) -> moraine_provision::Result<moraine_provision::RuntimeRegistrationSnapshot> {
+        self.inner.capture_registration()
+    }
+
+    fn registration_fingerprint(&self) -> moraine_provision::Result<Option<String>> {
+        self.inner.registration_fingerprint()
+    }
+
     fn install(&self, executable: &Path) -> moraine_provision::Result<()> {
         self.inner.install(executable)?;
         fs::remove_dir_all(&self.journal_dir)?;
         fs::write(&self.journal_dir, b"blocks journal directory recreation")?;
         Ok(())
+    }
+
+    fn restore_registration(
+        &self,
+        snapshot: &moraine_provision::RuntimeRegistrationSnapshot,
+    ) -> moraine_provision::Result<()> {
+        self.inner.restore_registration(snapshot)
     }
 
     fn uninstall(&self) -> moraine_provision::Result<()> {
@@ -160,10 +177,6 @@ impl ServiceManager for BreakJournalOnInstall {
 
     fn disable_autostart(&self) -> moraine_provision::Result<()> {
         self.inner.disable_autostart()
-    }
-
-    fn reload_registration(&self) -> moraine_provision::Result<()> {
-        self.inner.reload_registration()
     }
 
     fn logs(&self, limit: usize) -> moraine_provision::Result<Vec<ServiceLog>> {
@@ -727,10 +740,10 @@ fn auto_rollback_restores_prior_unit_bytes_and_reloads() {
         "InstallService must have written/overwritten the unit"
     );
     assert!(
-        receipt
-            .service_prestate
-            .as_ref()
-            .is_some_and(|p| matches!(p.registration, FileSnapshot::Existing { .. })),
+        receipt.service_prestate.as_ref().is_some_and(|p| matches!(
+            p.registration,
+            moraine_provision::RuntimeRegistrationSnapshot::File(FileSnapshot::Existing { .. })
+        )),
         "prestate must snapshot prior unit as Existing: {:?}",
         receipt.service_prestate
     );

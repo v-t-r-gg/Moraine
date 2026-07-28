@@ -32,6 +32,10 @@ export interface ServiceStateDto {
   installed: boolean;
   running: boolean;
   binaryPresent: boolean;
+  registrationPresent: boolean;
+  registrationValid: boolean;
+  autostartEnabled: boolean;
+  endpointReady: boolean;
   binaryPath?: string | null;
   unitPath?: string | null;
   version?: string | null;
@@ -79,8 +83,14 @@ export interface ProvisionOperationDto {
 export interface SetupStateWitnessDto {
   project: string;
   absoluteCli: string;
+  suiteVersion: string;
+  suiteCliHash: string;
+  codexConfigHash?: string | null;
+  codexHooksHash?: string | null;
+  serviceUnitHash?: string | null;
   projectInitialized: boolean;
   serviceInstalled: boolean;
+  serviceRegistrationValid: boolean;
   serviceRunning: boolean;
   enableAutostart: boolean;
   skipService: boolean;
@@ -103,18 +113,67 @@ export interface SetupPlanDto {
 
 export interface SetupReceiptDto {
   transactionId: string;
+  intent: {
+    project: string;
+    agent: string;
+    enableAutostart: boolean;
+    skipService: boolean;
+  };
   completed: {
     id: string;
     kind: string;
     productLabel: string;
     success: boolean;
     message?: string | null;
+    technicalDetail?: string | null;
   }[];
+  snapshots: FileSnapshotDto[];
+  servicePrestate?: ServiceSnapshotDto | null;
+  transactionEnabledAutostart: boolean;
+  transactionStartedService: boolean;
+  transactionWroteUnit: boolean;
+  transactionInitializedProject: boolean;
   readiness: string;
   failedOperation?: string | null;
   error?: string | null;
+  retainedChanges: string[];
   journalPath: string;
 }
+
+export type FileSnapshotDto =
+  | {
+      kind: "existing";
+      path: string;
+      backupPath: string;
+      originalHash: string;
+      createdAt: string;
+    }
+  | {
+      kind: "absent";
+      path: string;
+      createdAt: string;
+    };
+
+export interface ServiceSnapshotDto {
+  registration: FileSnapshotDto;
+  wasRunning: boolean;
+  autostartWasEnabled: boolean;
+}
+
+export type ApplyOutcomeDto =
+  | { outcome: "ready"; receipt: SetupReceiptDto }
+  | { outcome: "directVerified"; receipt: SetupReceiptDto }
+  | {
+      outcome: "rolledBack";
+      receipt: SetupReceiptDto;
+      originalError: string;
+    }
+  | {
+      outcome: "rollbackRequired";
+      receipt: SetupReceiptDto;
+      originalError: string;
+      rollbackError: string;
+    };
 
 export interface VerificationStepDto {
   id: string;
@@ -170,11 +229,11 @@ export async function provisionPlan(intent: SetupIntentDto): Promise<SetupPlanDt
   return invoke("provision_plan", { intent });
 }
 
-export async function provisionApply(intent: SetupIntentDto): Promise<SetupReceiptDto> {
+export async function provisionApply(intent: SetupIntentDto): Promise<ApplyOutcomeDto> {
   return invoke("provision_apply", { intent });
 }
 
-export async function provisionApplyPlan(plan: SetupPlanDto): Promise<SetupReceiptDto> {
+export async function provisionApplyPlan(plan: SetupPlanDto): Promise<ApplyOutcomeDto> {
   return invoke("provision_apply_plan", { plan });
 }
 
@@ -200,7 +259,7 @@ export async function provisionRepair(action: RepairActionDto): Promise<RepairRe
   return invoke("provision_repair", { action });
 }
 
-export async function provisionEnable(intent: SetupIntentDto): Promise<SetupReceiptDto> {
+export async function provisionEnable(intent: SetupIntentDto): Promise<ApplyOutcomeDto> {
   return invoke("provision_enable", { intent });
 }
 
@@ -230,6 +289,10 @@ function browserProvisionStub<T>(cmd: string, _args?: Record<string, unknown>): 
           installed: false,
           running: false,
           binaryPresent: false,
+          registrationPresent: false,
+          registrationValid: false,
+          autostartEnabled: false,
+          endpointReady: false,
           statusMessage: "Browser mode — open the desktop app to set up Moraine",
           platform: "browser",
         },

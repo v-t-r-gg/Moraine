@@ -22,7 +22,7 @@ pub fn inspect(service: &dyn ServiceManager, scan_roots: &[PathBuf]) -> Result<S
     for root in scan_roots {
         projects.extend(scan_project_candidates(root, 3)?);
     }
-    let readiness = derive_readiness(&suite, &service_state, &agents);
+    let readiness = derive_readiness(&suite, &service_state, &agents, &projects);
     Ok(SystemState {
         suite,
         service: service_state,
@@ -35,7 +35,8 @@ pub fn inspect(service: &dyn ServiceManager, scan_roots: &[PathBuf]) -> Result<S
 /// Convenience: default service manager + no scan roots.
 pub fn inspect_default() -> Result<SystemState> {
     let svc = crate::service::default_service_manager();
-    inspect(svc.as_ref(), &[])
+    let roots = moraine_core::registered_project_roots().unwrap_or_default();
+    inspect(svc.as_ref(), &roots)
 }
 
 pub fn inspect_suite(paths: &SuitePaths) -> SuiteState {
@@ -137,11 +138,17 @@ fn derive_readiness(
     suite: &SuiteState,
     service: &ServiceState,
     agents: &[DetectedAgent],
+    projects: &[ProjectCandidate],
 ) -> Readiness {
     if !suite.cli_present && !suite.manifest_present {
         return Readiness::NotConfigured;
     }
-    if service.running && agents.iter().any(|a| a.detected) {
+    if service.registration_valid
+        && service.running
+        && service.endpoint_ready
+        && agents.iter().any(|a| a.detected)
+        && projects.iter().any(|project| project.initialized)
+    {
         return Readiness::Ready;
     }
     if service.installed || suite.service_present {

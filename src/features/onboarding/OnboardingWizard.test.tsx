@@ -80,6 +80,7 @@ vi.mock("@/shared/api/provision", () => ({
 }));
 
 import { OnboardingWizard } from "./OnboardingWizard";
+import { provisionInspect } from "@/shared/api/provision";
 
 describe("OnboardingWizard", () => {
   it("walks welcome → agents → project with product copy only", async () => {
@@ -130,5 +131,52 @@ describe("OnboardingWizard", () => {
     expect(plan).toHaveTextContent(/Enable background capture/);
     expect(plan).toHaveTextContent(/Connect Codex/);
     expect(plan.textContent).not.toMatch(/systemctl|systemd|MCP|hooks\.json/i);
+  });
+
+  it("blocks ProductCapture setup when Codex is not detected", async () => {
+    vi.mocked(provisionInspect).mockResolvedValueOnce({
+      suite: {
+        prefix: "/tmp",
+        cliPath: "/tmp/moraine",
+        cliPresent: true,
+        servicePath: "",
+        servicePresent: false,
+        desktopPath: "",
+        desktopPresent: true,
+        manifestPath: "",
+        manifestPresent: false,
+        componentsCoherent: true,
+      },
+      service: {
+        installed: false,
+        running: false,
+        binaryPresent: false,
+        registrationPresent: false,
+        registrationValid: false,
+        autostartEnabled: false,
+        endpointReady: false,
+        statusMessage: "not set up",
+        platform: "test",
+      },
+      agents: [
+        {
+          kind: "codex",
+          id: "codex",
+          displayName: "Codex",
+          detected: false,
+          status: "notFound",
+          statusMessage: "Codex was not found",
+        },
+      ],
+      projects: [],
+      readiness: "notConfigured",
+    });
+    render(<OnboardingWizard onComplete={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: /^Continue$/i }));
+    const agents = await screen.findByTestId("wizard-agents");
+    expect(agents).toHaveTextContent(/cannot be verified until Codex is detected/i);
+    expect(
+      within(agents).getByRole("button", { name: /^Continue$/i }),
+    ).toBeDisabled();
   });
 });

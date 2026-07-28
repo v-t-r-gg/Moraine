@@ -14,6 +14,7 @@ import {
   provisionInspect,
   provisionPlan,
   provisionRollback,
+  type ApplyOutcomeDto,
   type DetectedAgentDto,
   type SetupPlanDto,
   type SetupReceiptDto,
@@ -118,9 +119,10 @@ export function OnboardingWizard({
     setProgressLabel("Applying setup…");
     try {
       // Apply the exact approved plan (state witness rejects stale plans).
-      const r = await provisionApplyPlan(plan);
+      const outcome: ApplyOutcomeDto = await provisionApplyPlan(plan);
+      const r = outcome.receipt;
       setReceipt(r);
-      if (r.readiness === "ready") {
+      if (outcome.outcome === "ready" && r.readiness === "ready") {
         setProgressLabel("Ready");
         setStep("complete");
       } else if (r.readiness === "directVerified") {
@@ -129,7 +131,13 @@ export function OnboardingWizard({
         );
         setStep("failed");
       } else {
-        setError(r.error ?? "Setup did not complete successfully");
+        setError(
+          outcome.outcome === "rollbackRequired"
+            ? `${outcome.originalError}. Automatic restoration needs attention: ${outcome.rollbackError}`
+            : outcome.outcome === "rolledBack"
+              ? `${outcome.originalError}. Incomplete changes were reversed.`
+              : r.error ?? "Setup did not complete successfully",
+        );
         setStep("failed");
       }
     } catch (e) {
@@ -318,14 +326,16 @@ function AgentsStep({
         ) : null}
       </div>
       {!codex.detected ? (
-        <p className="mt-3 text-xs" style={{ color: "var(--muted)" }}>
-          You can continue — Moraine will prepare the connection for when Codex is
-          available.
+        <p className="mt-3 text-xs" style={{ color: "#b45309" }}>
+          Install or start Codex, then reopen setup. Product capture cannot be
+          verified until Codex is detected.
         </p>
       ) : null}
       <div className="mt-8 flex gap-2">
         <SecondaryButton onClick={onBack}>Back</SecondaryButton>
-        <PrimaryButton onClick={onNext}>Continue</PrimaryButton>
+        <PrimaryButton onClick={onNext} disabled={!codex.detected}>
+          Continue
+        </PrimaryButton>
       </div>
     </div>
   );

@@ -88,6 +88,8 @@ pub fn apply_with_options(
                     let r = init_project(Some(&plan.intent.project))
                         .map_err(|e| ProvisionError::msg(e.to_string()))?;
                     receipt.transaction_initialized_project = r.created;
+                    moraine_core::register_project_root(&r.project_root)
+                        .map_err(|e| ProvisionError::msg(e.to_string()))?;
                     Ok(format!(
                         "project ready at {} (created={})",
                         r.project_root.display(),

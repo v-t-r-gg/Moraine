@@ -201,8 +201,10 @@ fn setup_project(base: &Path) -> (uuid::Uuid, PathBuf, uuid::Uuid, PathBuf) {
 #[test]
 fn discovery_routes_over_loopback_http() {
     let dir = tempdir().unwrap();
-    // Place project under cwd parent so scan finds it: run service with CWD = dir
-    let (project_id, _project_root, run_id, md) = setup_project(dir.path());
+    let (project_id, project_root, run_id, md) = setup_project(dir.path());
+    let data_home = dir.path().join("data");
+    moraine_core::register_project_root_at(&data_home.join("moraine/projects.json"), &project_root)
+        .unwrap();
     let side = moraine_core::moraine_sidecar_path(&md);
     let before_md = fs::read(&md).unwrap();
     let before_side = fs::read(&side).unwrap();
@@ -210,8 +212,7 @@ fn discovery_routes_over_loopback_http() {
     let spool = dir.path().join("spool");
     fs::create_dir_all(&spool).unwrap();
     let port = free_port();
-    // Service scans std::env::current_dir for rebuild — change cwd for process via -- not available.
-    // rebuild_index uses current_dir of the service process; spawn with cwd = dir.path().
+    // A fresh service process discovers the project from durable user data, not CWD.
     let http = format!("127.0.0.1:{port}");
     let sock = spool.join("t.sock");
     let bin = env!("CARGO_BIN_EXE_moraine-service");
@@ -225,6 +226,7 @@ fn discovery_routes_over_loopback_http() {
             &http,
         ])
         .current_dir(dir.path())
+        .env("XDG_DATA_HOME", &data_home)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

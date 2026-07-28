@@ -103,10 +103,7 @@ fn ureq_get(url: &str) -> Result<String, String> {
 
 #[tauri::command]
 pub fn discovery_projects(scan_root: Option<String>) -> Result<Vec<ProjectSummary>, String> {
-    let base = scan_root
-        .map(PathBuf::from)
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_else(|| PathBuf::from("."));
+    let explicit_scan_root = scan_root.map(PathBuf::from);
     // Prefer service index when available.
     if let Ok(body) = ureq_get("http://127.0.0.1:33111/projects") {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
@@ -129,7 +126,14 @@ pub fn discovery_projects(scan_root: Option<String>) -> Result<Vec<ProjectSummar
             }
         }
     }
-    let roots = scan_project_roots(&base, 5);
+    let mut roots = moraine_core::registered_project_roots().map_err(map_err)?;
+    if let Some(base) = explicit_scan_root {
+        for root in scan_project_roots(&base, 5) {
+            if !roots.contains(&root) {
+                roots.push(root);
+            }
+        }
+    }
     let mut out = Vec::new();
     for r in roots {
         match summarize_project(&r) {
@@ -177,9 +181,8 @@ pub fn discovery_runs(
     let root = if let Some(p) = root_path {
         PathBuf::from(p)
     } else {
-        // Find by scanning
-        let base = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        scan_project_roots(&base, 6)
+        moraine_core::registered_project_roots()
+            .map_err(map_err)?
             .into_iter()
             .find(|r| {
                 resolve_existing_project(Some(r))
@@ -236,10 +239,6 @@ pub fn discovery_run_detail(
 
 #[tauri::command]
 pub fn discovery_rebuild_index(scan_root: Option<String>) -> Result<serde_json::Value, String> {
-    let base = scan_root
-        .map(PathBuf::from)
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_else(|| PathBuf::from("."));
     // Prefer service rebuild
     if ureq_post("http://127.0.0.1:33111/index/rebuild").is_ok() {
         if let Ok(body) = ureq_get("http://127.0.0.1:33111/status") {
@@ -248,7 +247,14 @@ pub fn discovery_rebuild_index(scan_root: Option<String>) -> Result<serde_json::
         return Ok(serde_json::json!({ "ok": true, "mode": "service" }));
     }
     // Direct scan only (no durable secondary index from desktop).
-    let roots = scan_project_roots(&base, 6);
+    let mut roots = moraine_core::registered_project_roots().map_err(map_err)?;
+    if let Some(base) = scan_root.map(PathBuf::from) {
+        for root in scan_project_roots(&base, 6) {
+            if !roots.contains(&root) {
+                roots.push(root);
+            }
+        }
+    }
     Ok(serde_json::json!({
         "ok": true,
         "mode": "direct",
@@ -311,5 +317,6 @@ pub fn discovery_add_existing_project(path: String) -> Result<ProjectSummary, St
     if !p.join(".moraine").is_dir() {
         moraine_core::init_project(Some(&p)).map_err(map_err)?;
     }
+    moraine_core::register_project_root(&p).map_err(map_err)?;
     summarize_project(&p).map_err(map_err)
 }

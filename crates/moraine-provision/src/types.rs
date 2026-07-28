@@ -230,7 +230,11 @@ pub struct SetupPlan {
 
 /// Result of transactional apply (auto-rollback attempted on failure).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", tag = "outcome")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "outcome"
+)]
 pub enum ApplyOutcome {
     Ready {
         receipt: SetupReceipt,
@@ -269,7 +273,11 @@ impl ApplyOutcome {
 ///
 /// `Absent` means the path did not exist before the transaction — rollback deletes it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", tag = "kind")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "kind"
+)]
 pub enum FileSnapshot {
     Existing {
         path: String,

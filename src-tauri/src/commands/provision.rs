@@ -46,10 +46,6 @@ impl SetupIntentDto {
     }
 }
 
-fn outcome_to_receipt(outcome: ApplyOutcome) -> SetupReceipt {
-    outcome.receipt().clone()
-}
-
 /// Full system inspection for first-run / settings.
 #[tauri::command]
 pub fn provision_inspect() -> Result<SystemState, String> {
@@ -66,19 +62,26 @@ pub fn provision_plan(intent: SetupIntentDto) -> Result<SetupPlan, String> {
 
 /// Apply by re-planning from intent (legacy). Prefer `provision_apply_plan`.
 #[tauri::command]
-pub fn provision_apply(intent: SetupIntentDto) -> Result<SetupReceipt, String> {
+pub fn provision_apply(intent: SetupIntentDto) -> Result<ApplyOutcome, String> {
     let intent = intent.into_intent()?;
     let svc = moraine_provision::default_service_manager();
     let plan = plan_setup(intent, svc.as_ref()).map_err(map_err)?;
-    let outcome = apply_default(plan).map_err(map_err)?;
-    Ok(outcome_to_receipt(outcome))
+    apply_default(plan).map_err(map_err)
 }
 
 /// Apply the **exact** user-approved plan (rejects stale state witness).
 #[tauri::command]
-pub fn provision_apply_plan(plan: SetupPlan) -> Result<SetupReceipt, String> {
-    let outcome = apply_default(plan).map_err(map_err)?;
-    Ok(outcome_to_receipt(outcome))
+pub fn provision_apply_plan(plan: SetupPlan) -> Result<ApplyOutcome, String> {
+    let service = moraine_provision::default_service_manager();
+    apply_approved_plan_with_service(plan, service.as_ref())
+}
+
+/// Testable command boundary: applies the supplied plan verbatim and never replans.
+pub fn apply_approved_plan_with_service(
+    plan: SetupPlan,
+    service: &dyn moraine_provision::ServiceManager,
+) -> Result<ApplyOutcome, String> {
+    moraine_provision::apply(plan, service).map_err(map_err)
 }
 
 /// Full apply outcome including RolledBack / RollbackRequired.
@@ -122,10 +125,9 @@ pub fn provision_repair(action: RepairAction) -> Result<RepairResult, String> {
 
 /// One-shot enable: plan + apply + self-test.
 #[tauri::command]
-pub fn provision_enable(intent: SetupIntentDto) -> Result<SetupReceipt, String> {
+pub fn provision_enable(intent: SetupIntentDto) -> Result<ApplyOutcome, String> {
     let intent = intent.into_intent()?;
-    let outcome = moraine_provision::enable_project_default(intent).map_err(map_err)?;
-    Ok(outcome_to_receipt(outcome))
+    moraine_provision::enable_project_default(intent).map_err(map_err)
 }
 
 /// Initialize a project folder (may not already contain .moraine/).
@@ -133,6 +135,7 @@ pub fn provision_enable(intent: SetupIntentDto) -> Result<SetupReceipt, String> 
 pub fn provision_init_project(path: String) -> Result<serde_json::Value, String> {
     let p = PathBuf::from(path);
     let r = moraine_core::init_project(Some(&p)).map_err(|e| e.to_string())?;
+    moraine_core::register_project_root(&r.project_root).map_err(|e| e.to_string())?;
     Ok(serde_json::json!({
         "ok": true,
         "projectRoot": r.project_root.display().to_string(),

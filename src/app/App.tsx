@@ -15,7 +15,7 @@ const LegacyDocumentApp = lazy(async () => {
   return { default: m.LegacyDocumentApp };
 });
 
-const ONBOARDING_DONE_KEY = "moraine.onboarding.completed";
+const ONBOARDING_DISMISSED_KEY = "moraine.onboarding.dismissed.this-session";
 
 /**
  * C3 installed-product shell:
@@ -34,21 +34,19 @@ export function App() {
     let cancelled = false;
     void (async () => {
       try {
-        const done =
-          typeof localStorage !== "undefined" &&
-          localStorage.getItem(ONBOARDING_DONE_KEY) === "1";
-        if (done) {
-          if (!cancelled) setOnboardingChecked(true);
-          return;
-        }
         const st = await provisionInspect();
         if (cancelled) return;
-        // First-run when no projects and capture not running.
+        const dismissed =
+          typeof sessionStorage !== "undefined" &&
+          sessionStorage.getItem(ONBOARDING_DISMISSED_KEY) === "1";
+        // Product readiness requires a configured project, not merely a running service.
+        const hasConfiguredProject = st.projects.some((project) => project.initialized);
         const needs =
-          st.projects.length === 0 &&
-          st.readiness !== "ready" &&
-          !st.service.running;
-        if (needs) {
+          !hasConfiguredProject ||
+          st.readiness !== "ready" ||
+          !st.service.registrationValid ||
+          !st.service.endpointReady;
+        if (needs && !dismissed) {
           setRoute("onboarding");
         }
       } catch {
@@ -82,7 +80,7 @@ export function App() {
         <OnboardingWizard
           onComplete={(projectPath) => {
             try {
-              localStorage.setItem(ONBOARDING_DONE_KEY, "1");
+              sessionStorage.removeItem(ONBOARDING_DISMISSED_KEY);
             } catch {
               /* ignore */
             }
@@ -91,7 +89,7 @@ export function App() {
           }}
           onDismiss={() => {
             try {
-              localStorage.setItem(ONBOARDING_DONE_KEY, "1");
+              sessionStorage.setItem(ONBOARDING_DISMISSED_KEY, "1");
             } catch {
               /* ignore */
             }

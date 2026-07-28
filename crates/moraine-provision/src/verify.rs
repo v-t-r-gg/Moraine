@@ -5,7 +5,7 @@
 //! Direct core APIs are never used as a fallback for product Ready.
 
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -18,7 +18,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::agent::adapter_for;
-use crate::error::Result;
+use crate::error::{ProvisionError, Result};
 use crate::service_ready::{default_service_probe, default_service_ready_timeout_ms, ServiceProbe};
 use crate::suite::SuitePaths;
 use crate::types::{
@@ -402,6 +402,31 @@ fn verify_product(intent: &SetupIntent, opts: VerifyOptions) -> Result<Verificat
         return Ok(fail_report(steps, project.display().to_string()));
     }
 
+    let verified_run = runs
+        .iter()
+        .find(|summary| summary.run_id == run_id)
+        .expect("bound run was established above");
+    match remove_verified_self_test_run(
+        &resolved.project_root,
+        verified_run,
+        &session_id,
+        &verification_id,
+    ) {
+        Ok(()) => steps.push(ok_step(
+            "capture.self_test_cleanup",
+            "Removed the test capture record",
+            "End-to-end capture was proven without leaving a normal project run",
+        )),
+        Err(error) => {
+            steps.push(fail_step(
+                "capture.self_test_cleanup",
+                "Removed the test capture record",
+                error.to_string(),
+            ));
+            return Ok(fail_report(steps, project.display().to_string()));
+        }
+    }
+
     let all_passed = steps.iter().all(|s| s.passed);
     Ok(VerificationReport {
         ok: all_passed,
@@ -419,6 +444,53 @@ fn verify_product(intent: &SetupIntent, opts: VerifyOptions) -> Result<Verificat
             "Verification failed — Moraine is not ready yet".into()
         },
     })
+}
+
+fn remove_verified_self_test_run(
+    project: &Path,
+    run: &moraine_core::RunSummary,
+    session_id: &str,
+    verification_id: &str,
+) -> Result<()> {
+    if !run.objective.contains(verification_id) {
+        return Err(ProvisionError::msg(
+            "refusing to remove a run that is not the current verification",
+        ));
+    }
+    let markdown = if run.absolute_path.is_empty() {
+        project.join(&run.record_path)
+    } else {
+        PathBuf::from(&run.absolute_path)
+    };
+    let sidecar = PathBuf::from(format!("{}.moraine.json", markdown.display()));
+    for path in [&sidecar, &markdown] {
+        if path.exists() {
+            std::fs::remove_file(path)?;
+        }
+    }
+
+    let sessions = project.join(".moraine/sessions");
+    if sessions.is_dir() {
+        for entry in std::fs::read_dir(sessions)? {
+            let path = entry?.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            let raw = std::fs::read_to_string(&path)?;
+            if raw.contains(session_id) {
+                std::fs::remove_file(path)?;
+            }
+        }
+    }
+    if list_run_summaries(project, run.project_id)
+        .iter()
+        .any(|summary| summary.run_id == run.run_id)
+    {
+        return Err(ProvisionError::msg(
+            "verification run remained discoverable after cleanup",
+        ));
+    }
+    Ok(())
 }
 
 fn verify_direct(intent: &SetupIntent) -> Result<VerificationReport> {

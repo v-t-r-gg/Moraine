@@ -57,6 +57,10 @@ vi.mock("@/shared/api/provision", () => ({
       installed: true,
       running: true,
       binaryPresent: true,
+      registrationPresent: true,
+      registrationValid: true,
+      autostartEnabled: true,
+      endpointReady: true,
       statusMessage: "running",
       platform: "test",
     },
@@ -72,6 +76,7 @@ vi.mock("@/shared/api/provision", () => ({
 }));
 
 import { App } from "./App";
+import { provisionInspect } from "@/shared/api/provision";
 
 describe("App product shell (C3)", () => {
   it("starts on ledger workspace with service health banner", async () => {
@@ -82,5 +87,48 @@ describe("App product shell (C3)", () => {
     expect(screen.getByTestId("service-health-banner")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Open legacy document/i })).toBeInTheDocument();
     expect(screen.getByTestId("service-health-banner")).toHaveTextContent(/Discovery/i);
+  });
+
+  it("does not let a legacy localStorage flag override real setup state", async () => {
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: vi.fn().mockReturnValue("1"),
+        setItem: vi.fn(),
+        removeItem: vi.fn(),
+      },
+    });
+    vi.mocked(provisionInspect).mockResolvedValueOnce({
+      suite: {
+        prefix: "",
+        cliPath: "",
+        cliPresent: true,
+        servicePath: "",
+        servicePresent: true,
+        desktopPath: "",
+        desktopPresent: true,
+        manifestPath: "",
+        manifestPresent: true,
+        componentsCoherent: true,
+      },
+      service: {
+        installed: true,
+        running: true,
+        binaryPresent: true,
+        registrationPresent: true,
+        registrationValid: true,
+        autostartEnabled: true,
+        endpointReady: true,
+        statusMessage: "running",
+        platform: "test",
+      },
+      agents: [],
+      projects: [],
+      readiness: "degraded",
+    });
+
+    render(<App />);
+
+    expect(await screen.findByTestId("onboarding-wizard")).toBeInTheDocument();
   });
 });

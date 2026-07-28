@@ -1,6 +1,7 @@
 mod commands;
 mod state;
 
+pub use commands::apply_approved_plan_with_service;
 use state::AppState;
 use tracing_subscriber::EnvFilter;
 

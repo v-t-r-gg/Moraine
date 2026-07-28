@@ -192,7 +192,7 @@ fn product_happy_path_ready_with_injected_service_and_capture() {
     fs::create_dir_all(&project).unwrap();
     setup_agent(&project);
     let report = verify_with_options(
-        &product_intent(project),
+        &product_intent(project.clone()),
         VerifyOptions {
             mode: VerificationMode::ProductCapture,
             capture: Some(Arc::new(ControlledCapture {
@@ -214,6 +214,18 @@ fn product_happy_path_ready_with_injected_service_and_capture() {
             .any(|s| s.message.contains("verification_id=")),
         "{report:?}"
     );
+    let resolved = moraine_core::resolve_existing_project(Some(&project)).unwrap();
+    let runs = moraine_core::list_run_summaries(&resolved.project_root, resolved.project_id);
+    assert!(
+        runs.iter().all(|run| !run
+            .objective
+            .starts_with("Moraine self-test verification_id=")),
+        "successful ProductCapture must clean up its synthetic run: {runs:?}"
+    );
+    assert!(report
+        .steps
+        .iter()
+        .any(|step| step.id == "capture.self_test_cleanup" && step.passed));
 }
 
 #[test]

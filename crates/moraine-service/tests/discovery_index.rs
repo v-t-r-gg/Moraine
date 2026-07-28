@@ -144,3 +144,31 @@ fn summarize_scale_many_runs() {
         "listing 40 runs took too long: {elapsed:?}"
     );
 }
+
+#[tokio::test]
+async fn registered_project_survives_restart_and_rebuilds_discovery() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("outside-service-cwd");
+    std::fs::create_dir_all(&project).unwrap();
+    moraine_core::init_project(Some(&project)).unwrap();
+    let registry = dir.path().join("user-data/projects.json");
+    moraine_core::register_project_root_at(&registry, &project).unwrap();
+
+    // Simulate a fresh service process: only the durable registry and canonical
+    // project bundle survive; the index starts absent.
+    let index = dir.path().join("fresh-spool/index.json");
+    moraine_service::rebuild_index_from_registry(registry.clone(), index.clone())
+        .await
+        .unwrap();
+    let first =
+        serde_json::from_slice::<serde_json::Value>(&std::fs::read(&index).unwrap()).unwrap();
+    assert_eq!(first["projects"].as_array().unwrap().len(), 1);
+
+    moraine_service::rebuild_index_from_registry(registry, index.clone())
+        .await
+        .unwrap();
+    let second =
+        serde_json::from_slice::<serde_json::Value>(&std::fs::read(&index).unwrap()).unwrap();
+    assert_eq!(second["projects"].as_array().unwrap().len(), 1);
+    assert!(second["revision"].as_u64().unwrap() > first["revision"].as_u64().unwrap());
+}

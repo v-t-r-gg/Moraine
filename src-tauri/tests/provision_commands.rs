@@ -114,3 +114,60 @@ fn provision_command_source_registers_shared_handlers() {
         "must not shell out to CLI"
     );
 }
+
+#[test]
+fn rust_and_typescript_apply_outcome_fixture_round_trips() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let raw =
+        fs::read_to_string(root.join("../src/shared/api/provision.contract.fixture.json")).unwrap();
+    let outcome: ApplyOutcome = serde_json::from_str(&raw).expect("Rust must accept UI fixture");
+    let encoded = serde_json::to_value(&outcome).unwrap();
+    assert_eq!(encoded["outcome"], "rollbackRequired");
+    let receipt = &encoded["receipt"];
+    for field in [
+        "intent",
+        "snapshots",
+        "servicePrestate",
+        "transactionEnabledAutostart",
+        "transactionStartedService",
+        "transactionWroteUnit",
+        "transactionInitializedProject",
+        "retainedChanges",
+    ] {
+        assert!(
+            receipt.get(field).is_some(),
+            "serialized receipt missing {field}"
+        );
+    }
+}
+
+#[test]
+fn tauri_applies_exact_approved_plan_without_replanning() {
+    with_fake_cli(|_| {
+        let dir = tempdir().unwrap();
+        let project = dir.path().join("exact-plan");
+        fs::create_dir_all(&project).unwrap();
+        let service = MemoryServiceManager::new();
+        let intent = SetupIntent {
+            project: project.clone(),
+            agent: AgentKind::Codex,
+            enable_autostart: false,
+            skip_service: true,
+        };
+        let mut approved = plan(intent, &service).unwrap();
+        approved.operations.clear();
+
+        let outcome =
+            moraine_app_lib::apply_approved_plan_with_service(approved, &service).unwrap();
+
+        assert!(matches!(outcome, ApplyOutcome::DirectVerified { .. }));
+        assert!(
+            !project.join(".moraine").exists(),
+            "a hidden replan would have initialized the project"
+        );
+        assert!(
+            outcome.receipt().completed.is_empty(),
+            "only operations present in the approved plan may execute"
+        );
+    });
+}

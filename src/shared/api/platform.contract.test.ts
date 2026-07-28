@@ -4,6 +4,7 @@ import type {
   CapabilityStatusDto,
   HostPlatformDto,
   PlatformCapabilitiesDto,
+  ServiceStateDto,
 } from "./provision";
 
 type CaptureEndpointDto =
@@ -16,6 +17,7 @@ interface PlatformContractFixture {
   serviceRegistration: string | null;
   desktopRegistration: string | null;
   captureEndpoint: CaptureEndpointDto;
+  runtime: ServiceStateDto;
 }
 
 const hosts: HostPlatformDto[] = ["linux", "windows", "mac_os", "other"];
@@ -43,5 +45,8 @@ describe("platform Rust/TypeScript contract", () => {
     expect(states[1].serviceRegistration).toBeNull();
     expect(states[1].captureEndpoint.kind).toBe("unsupported");
     expect(states[1].capabilities.backgroundRuntime).not.toBe("supported");
+    expect(states[0].runtime.captureReady).toBe(true);
+    expect(states[1].runtime.backend).toBe("unsupported");
+    expect(states[1].runtime.supported).toBe(false);
   });
 });

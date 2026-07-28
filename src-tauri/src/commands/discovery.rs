@@ -9,6 +9,14 @@ use moraine_core::{
 use serde::Serialize;
 use uuid::Uuid;
 
+fn diagnostics_addr() -> std::net::SocketAddr {
+    moraine_platform::RuntimeLayout::discover().diagnostics_endpoint
+}
+
+fn diagnostics_url(path: &str) -> String {
+    format!("http://{}{}", diagnostics_addr(), path)
+}
+
 fn map_err(e: moraine_core::Error) -> String {
     e.to_string()
 }
@@ -28,12 +36,12 @@ pub struct DiscoveryStatusDto {
 pub fn discovery_status() -> Result<DiscoveryStatusDto, String> {
     // Best-effort loopback probe (service optional).
     let client_ok = std::net::TcpStream::connect_timeout(
-        &"127.0.0.1:33111".parse().unwrap(),
+        &diagnostics_addr(),
         std::time::Duration::from_millis(80),
     )
     .is_ok();
     if client_ok {
-        if let Ok(body) = ureq_get("http://127.0.0.1:33111/status") {
+        if let Ok(body) = ureq_get(&diagnostics_url("/status")) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
                 let revision = v
                     .get("revision")
@@ -105,7 +113,7 @@ fn ureq_get(url: &str) -> Result<String, String> {
 pub fn discovery_projects(scan_root: Option<String>) -> Result<Vec<ProjectSummary>, String> {
     let explicit_scan_root = scan_root.map(PathBuf::from);
     // Prefer service index when available.
-    if let Ok(body) = ureq_get("http://127.0.0.1:33111/projects") {
+    if let Ok(body) = ureq_get(&diagnostics_url("/projects")) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
             if let Some(arr) = v.get("projects").and_then(|p| p.as_array()) {
                 let mut out = Vec::new();
@@ -240,8 +248,8 @@ pub fn discovery_run_detail(
 #[tauri::command]
 pub fn discovery_rebuild_index(scan_root: Option<String>) -> Result<serde_json::Value, String> {
     // Prefer service rebuild
-    if ureq_post("http://127.0.0.1:33111/index/rebuild").is_ok() {
-        if let Ok(body) = ureq_get("http://127.0.0.1:33111/status") {
+    if ureq_post(&diagnostics_url("/index/rebuild")).is_ok() {
+        if let Ok(body) = ureq_get(&diagnostics_url("/status")) {
             return Ok(serde_json::from_str(&body).unwrap_or(serde_json::json!({"ok": true})));
         }
         return Ok(serde_json::json!({ "ok": true, "mode": "service" }));
@@ -303,7 +311,7 @@ fn ureq_post(url: &str) -> Result<String, String> {
 
 #[tauri::command]
 pub fn discovery_rescan_project(project_id: String) -> Result<serde_json::Value, String> {
-    let url = format!("http://127.0.0.1:33111/projects/{project_id}/rescan");
+    let url = diagnostics_url(&format!("/projects/{project_id}/rescan"));
     if let Ok(body) = ureq_post(&url) {
         return Ok(serde_json::from_str(&body).unwrap_or(serde_json::json!({"ok": true})));
     }

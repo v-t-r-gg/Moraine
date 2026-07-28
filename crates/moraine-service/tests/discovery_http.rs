@@ -238,6 +238,8 @@ fn discovery_routes_over_loopback_http() {
         serde_json::from_str(&http_get(&format!("{base}/status")).unwrap()).unwrap();
     assert_eq!(status["status"], "ok");
     assert_eq!(status["online"], true);
+    assert_eq!(status["captureReady"], true);
+    assert_eq!(status["captureEndpoint"]["kind"], "unix_socket");
 
     let rebuild: serde_json::Value =
         serde_json::from_str(&http_post(&format!("{base}/index/rebuild")).unwrap()).unwrap();
@@ -308,4 +310,38 @@ fn service_binary_available() {
     assert!(p.is_file(), "missing {}", p.display());
     let _ = free_port();
     let _ = spawn_service; // silence if unused in optimized builds
+}
+
+#[test]
+fn capture_bind_failure_never_opens_diagnostics() {
+    let dir = tempdir().unwrap();
+    let blocked_parent = dir.path().join("not-a-directory");
+    fs::write(&blocked_parent, b"file").unwrap();
+    let socket = blocked_parent.join("capture.sock");
+    let port = free_port();
+    let http = format!("127.0.0.1:{port}");
+    let bin = env!("CARGO_BIN_EXE_moraine-service");
+    let mut child = Command::new(bin)
+        .args([
+            "--spool-dir",
+            dir.path().to_str().unwrap(),
+            "--unix-socket",
+            socket.to_str().unwrap(),
+            "--http",
+            &http,
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline && child.try_wait().unwrap().is_none() {
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(child.try_wait().unwrap().is_some(), "service did not fail");
+    assert!(
+        TcpStream::connect(&http).is_err(),
+        "diagnostics opened despite capture bind failure"
+    );
 }

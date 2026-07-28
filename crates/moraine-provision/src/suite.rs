@@ -167,8 +167,10 @@ pub fn default_socket_path() -> PathBuf {
     }
 }
 
-pub fn default_http_addr() -> &'static str {
-    "127.0.0.1:33111"
+pub fn default_http_addr() -> String {
+    moraine_platform::RuntimeLayout::discover()
+        .diagnostics_endpoint
+        .to_string()
 }
 
 pub fn default_http_port() -> u16 {

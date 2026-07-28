@@ -171,7 +171,8 @@ fn derive_readiness(
     }
     if service.registration_valid
         && service.running
-        && service.endpoint_ready
+        && service.diagnostics_ready
+        && service.capture_ready
         && agents.iter().any(|a| a.detected)
         && projects.iter().any(|project| {
             project.initialized

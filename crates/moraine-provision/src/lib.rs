@@ -4,6 +4,7 @@
 
 pub mod agent;
 pub mod apply;
+pub mod diagnostics;
 pub mod error;
 pub mod health;
 pub mod inspect;

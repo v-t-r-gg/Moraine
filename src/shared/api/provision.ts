@@ -31,6 +31,8 @@ export interface ProjectCandidateDto {
 }
 
 export interface ServiceStateDto {
+  backend: "linux_systemd_user" | "unsupported" | "memory_test";
+  supported: boolean;
   installed: boolean;
   running: boolean;
   binaryPresent: boolean;
@@ -38,11 +40,18 @@ export interface ServiceStateDto {
   registrationValid: boolean;
   autostartEnabled: boolean;
   endpointReady: boolean;
+  diagnosticsReady: boolean;
+  captureReady: boolean;
   binaryPath?: string | null;
   unitPath?: string | null;
   version?: string | null;
   statusMessage: string;
   platform: string;
+  registration?: {
+    kind: "systemd_user_unit";
+    location?: string | null;
+    fingerprint?: string | null;
+  } | null;
 }
 
 export interface SuiteStateDto {
@@ -322,7 +331,11 @@ function browserProvisionStub<T>(cmd: string, _args?: Record<string, unknown>): 
           registrationPresent: false,
           registrationValid: false,
           autostartEnabled: false,
+          backend: "unsupported",
+          supported: false,
           endpointReady: false,
+          diagnosticsReady: false,
+          captureReady: false,
           statusMessage: "Browser mode — open the desktop app to set up Moraine",
           platform: "browser",
         },

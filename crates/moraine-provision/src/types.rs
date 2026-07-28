@@ -548,4 +548,21 @@ mod compatibility_tests {
         assert_eq!(snapshot.registration.path(), "/tmp/moraine-service.service");
         assert_eq!(serde_json::to_value(snapshot).unwrap(), legacy);
     }
+
+    #[test]
+    fn shared_platform_fixture_covers_runtime_state_contract() {
+        let raw = include_str!("../../../src/shared/api/platform.contract.fixture.json");
+        let values: Vec<serde_json::Value> = serde_json::from_str(raw).unwrap();
+        let states: Vec<BackgroundRuntimeState> = values
+            .into_iter()
+            .map(|value| serde_json::from_value(value["runtime"].clone()).unwrap())
+            .collect();
+        assert_eq!(
+            states[0].backend,
+            BackgroundRuntimeBackend::LinuxSystemdUser
+        );
+        assert!(states[0].capture_ready);
+        assert_eq!(states[1].backend, BackgroundRuntimeBackend::Unsupported);
+        assert!(!states[1].supported);
+    }
 }

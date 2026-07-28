@@ -6,7 +6,7 @@ use std::process::Command;
 
 use crate::error::{ProvisionError, Result};
 use crate::runtime::RuntimeInstallSpec;
-use crate::suite::{http_get_loopback, SuitePaths};
+use crate::suite::SuitePaths;
 use crate::types::{
     BackgroundRuntimeBackend, BackgroundRuntimeState, RuntimeRegistrationKind,
     RuntimeRegistrationSnapshot, RuntimeRegistrationState, ServiceLog,
@@ -109,19 +109,12 @@ impl super::BackgroundRuntimeManager for LinuxSystemdUserRuntime {
             registration_present && unit_exec_matches_suite(&self.suite.unit, binary.as_deref());
         let active = Self::unit_active();
         let running_unit = active.as_deref() == Some("active");
-        let (http_online, version) = match http_get_loopback(33111, "/status") {
-            Ok(body) => {
-                let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
-                let ver = v
-                    .get("version")
-                    .or_else(|| v.get("productVersion"))
-                    .and_then(|x| x.as_str())
-                    .map(|s| s.to_string());
-                (true, ver)
-            }
-            Err(_) => (false, None),
+        let (diagnostics_ready, capture_ready, version) = match crate::diagnostics::probe_default()
+        {
+            Ok(status) => (status.online, status.capture_ready, status.version),
+            Err(_) => (false, false, None),
         };
-        let running = running_unit || http_online;
+        let running = running_unit || diagnostics_ready;
         let status_message = if running {
             "Background capture is running".into()
         } else if registration_present && !binary_present {
@@ -144,9 +137,9 @@ impl super::BackgroundRuntimeManager for LinuxSystemdUserRuntime {
             registration_valid,
             running,
             autostart_enabled,
-            endpoint_ready: http_online,
-            diagnostics_ready: http_online,
-            capture_ready: http_online,
+            endpoint_ready: diagnostics_ready && capture_ready,
+            diagnostics_ready,
+            capture_ready,
             binary_path: binary.map(|p| p.display().to_string()),
             unit_path: Some(self.suite.unit.display().to_string()),
             version,
@@ -329,5 +322,41 @@ fn unit_exec_matches_suite(unit_path: &Path, suite_service: Option<&Path>) -> bo
     match (fs::canonicalize(exec_path), fs::canonicalize(suite)) {
         (Ok(a), Ok(b)) => a == b,
         _ => exec_path == suite,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rendered_unit_uses_complete_runtime_spec() {
+        let spec = RuntimeInstallSpec {
+            executable: "/home/user/.local/libexec/moraine/moraine-service".into(),
+            capture_endpoint: moraine_platform::CaptureEndpoint::UnixSocket(
+                "/run/user/1000/moraine-service.sock".into(),
+            ),
+            diagnostics_endpoint: "127.0.0.1:33111".parse().unwrap(),
+            spool_dir: "/home/user/.cache/moraine-service/spool".into(),
+        };
+        let unit = render_systemd_unit(&spec).unwrap();
+        assert!(unit.contains(
+            "ExecStart=/home/user/.local/libexec/moraine/moraine-service \
+             --http 127.0.0.1:33111 \
+             --unix-socket /run/user/1000/moraine-service.sock \
+             --spool-dir /home/user/.cache/moraine-service/spool"
+        ));
+    }
+
+    #[test]
+    fn registration_rejects_wrong_executable() {
+        let temp = tempfile::tempdir().unwrap();
+        let expected = temp.path().join("expected");
+        let wrong = temp.path().join("wrong");
+        std::fs::write(&expected, b"expected").unwrap();
+        std::fs::write(&wrong, b"wrong").unwrap();
+        let unit = temp.path().join("moraine.service");
+        std::fs::write(&unit, format!("ExecStart={}\n", wrong.display())).unwrap();
+        assert!(!unit_exec_matches_suite(&unit, Some(&expected)));
     }
 }

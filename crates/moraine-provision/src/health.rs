@@ -37,7 +37,15 @@ pub fn health(
 
     // Service
     let svc = service.inspect()?;
-    if svc.running {
+    if !svc.supported {
+        checks.push(HealthCheck {
+            id: "service.supported".into(),
+            status: HealthStatus::Fail,
+            user_message: "Background capture is not available on this platform".into(),
+            technical_detail: svc.status_message.clone(),
+            repair: None,
+        });
+    } else if svc.running && svc.diagnostics_ready && svc.capture_ready {
         checks.push(HealthCheck {
             id: "service.running".into(),
             status: HealthStatus::Pass,

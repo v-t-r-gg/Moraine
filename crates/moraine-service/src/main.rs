@@ -29,8 +29,8 @@ struct AppState {
 struct Args {
     /// Loopback HTTP listen address for diagnostics only (e.g. 127.0.0.1:33111).
     /// Must not bind to non-loopback interfaces. Hook delivery uses the Unix socket.
-    #[arg(long, default_value = "127.0.0.1:33111")]
-    http: String,
+    #[arg(long)]
+    http: Option<String>,
 
     /// Unix domain socket for hook / adapter event delivery (primary capture transport).
     #[arg(long)]
@@ -68,8 +68,12 @@ async fn main() -> Result<()> {
         .await
         .ok();
 
+    let runtime_layout = moraine_platform::RuntimeLayout::discover();
+    let http = args
+        .http
+        .unwrap_or_else(|| runtime_layout.diagnostics_endpoint.to_string());
     // Diagnostics HTTP on loopback only — not the hook transport.
-    let http_addr: SocketAddr = args.http.parse()?;
+    let http_addr: SocketAddr = http.parse()?;
     if !http_addr.ip().is_loopback() {
         anyhow::bail!(
             "refusing non-loopback HTTP bind {http_addr}; diagnostics must use 127.0.0.1/::1. \
@@ -77,7 +81,6 @@ async fn main() -> Result<()> {
         );
     }
 
-    let runtime_layout = moraine_platform::RuntimeLayout::discover();
     let capture_endpoint = resolve_capture_endpoint(args.unix_socket.as_deref(), &runtime_layout)?;
     // Capture is the product intake. Bind it before diagnostics can report online.
     let capture_listener = capture::bind(&capture_endpoint).await?;
@@ -89,7 +92,7 @@ async fn main() -> Result<()> {
     let state = AppState {
         spool_dir: spool_dir.clone(),
         capture_endpoint: capture_endpoint.clone(),
-        http_addr: args.http.clone(),
+        http_addr: http,
         started_at_unix,
     };
     let app = Router::new()

@@ -32,10 +32,9 @@ unknown hosts report unsupported capabilities and cannot produce product
 `Ready`. Test doubles require explicit injection and are never selected because
 of an unsupported production host.
 
-W1-A does not change the existing production runtime-manager factory. Removing
-its non-Linux memory fallback is a blocking W1-B task: unsupported production
-platforms must select an explicit unsupported backend, never
-`MemoryServiceManager`.
+W1-B completed the production runtime-manager factory: unsupported production
+platforms select an explicit unsupported backend, never the memory test
+implementation.
 
 ## Windows decisions carried into W2
 
@@ -51,9 +50,9 @@ platforms must select an explicit unsupported backend, never
 Linux paths must remain byte-for-byte compatible and are protected by layout
 tests. Windows layouts can be constructed, serialized, and contract-tested on
 the current host without claiming that the Moraine workspace compiles or runs
-on Windows. W1-B removes direct Unix IPC and duplicate systemd lifecycle
-ownership; Windows compilation becomes enforced in W1-C together with
-capability-aware product closure.
+on Windows. W1-B confines direct Unix IPC to Linux capture backends and removes
+duplicate systemd lifecycle ownership; Windows compilation becomes enforced in
+W1-C together with capability-aware product closure.
 
 W1-A establishes a Windows layout model only. Windows runtime support and
 Windows CI are not yet established; Moraine remains a Linux-supported product.

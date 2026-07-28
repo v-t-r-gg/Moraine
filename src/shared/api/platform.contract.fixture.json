@@ -14,6 +14,29 @@
     "captureEndpoint": {
       "kind": "unix_socket",
       "value": "/run/user/1000/moraine-service.sock"
+    },
+    "runtime": {
+      "backend": "linux_systemd_user",
+      "supported": true,
+      "installed": true,
+      "binaryPresent": true,
+      "registrationPresent": true,
+      "registrationValid": true,
+      "running": true,
+      "autostartEnabled": true,
+      "endpointReady": true,
+      "diagnosticsReady": true,
+      "captureReady": true,
+      "binaryPath": "/home/user/.local/libexec/moraine/moraine-service",
+      "unitPath": "/home/user/.config/systemd/user/moraine-service.service",
+      "version": "0.1.0",
+      "statusMessage": "Background capture is running",
+      "platform": "linux",
+      "registration": {
+        "kind": "systemd_user_unit",
+        "location": "/home/user/.config/systemd/user/moraine-service.service",
+        "fingerprint": "abc123"
+      }
     }
   },
   {
@@ -30,6 +53,22 @@
     "desktopRegistration": null,
     "captureEndpoint": {
       "kind": "unsupported"
+    },
+    "runtime": {
+      "backend": "unsupported",
+      "supported": false,
+      "installed": false,
+      "binaryPresent": false,
+      "registrationPresent": false,
+      "registrationValid": false,
+      "running": false,
+      "autostartEnabled": false,
+      "endpointReady": false,
+      "diagnosticsReady": false,
+      "captureReady": false,
+      "statusMessage": "Background capture is not supported on Windows yet",
+      "platform": "windows",
+      "registration": null
     }
   },
   {
@@ -46,6 +85,22 @@
     "desktopRegistration": null,
     "captureEndpoint": {
       "kind": "unsupported"
+    },
+    "runtime": {
+      "backend": "unsupported",
+      "supported": false,
+      "installed": false,
+      "binaryPresent": false,
+      "registrationPresent": false,
+      "registrationValid": false,
+      "running": false,
+      "autostartEnabled": false,
+      "endpointReady": false,
+      "diagnosticsReady": false,
+      "captureReady": false,
+      "statusMessage": "Background capture is not supported",
+      "platform": "other",
+      "registration": null
     }
   }
 ]

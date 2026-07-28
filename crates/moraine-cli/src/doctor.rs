@@ -1,6 +1,7 @@
 //! `moraine doctor` health report (C2).
 
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -9,9 +10,10 @@ use moraine_core::{resolve_existing_project, BuildIdentity};
 use serde::Serialize;
 
 use crate::suite::{
-    collect_version_report, current_exe_path, default_socket_path, enumerate_moraine_on_path,
-    http_get_loopback, SuitePaths,
+    collect_version_report, current_exe_path, enumerate_moraine_on_path, SuitePaths,
 };
+#[cfg(unix)]
+use crate::suite::{default_socket_path, http_get_loopback};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -303,86 +305,89 @@ pub fn run_doctor(project: Option<&Path>, integration: Option<&str>) -> DoctorRe
         ));
     }
 
-    // Socket path + ownership
-    let sock = default_socket_path();
-    if sock.exists() {
-        let meta = fs::metadata(&sock).ok();
-        let mode = meta.as_ref().map(|m| m.permissions().mode() & 0o777);
-        let uid_ok = meta
-            .as_ref()
-            .map(|m| m.uid() == libc_uid())
-            .unwrap_or(false);
-        checks.push(check(
-            "service.socket",
-            if uid_ok { "pass" } else { "warn" },
-            format!(
-                "socket {} mode={:o} uid_ok={uid_ok}",
-                sock.display(),
-                mode.unwrap_or(0)
-            ),
-            Some(&sock.display().to_string()),
-            Some("user-owned unix socket"),
-            None,
-        ));
-    } else {
-        checks.push(check(
-            "service.socket",
-            "info",
-            format!(
-                "expected unix socket {} (created when service runs)",
-                sock.display()
-            ),
-            None,
-            Some(&sock.display().to_string()),
-            Some("moraine service start"),
-        ));
-    }
+    #[cfg(unix)]
+    {
+        // Socket path + ownership
+        let sock = default_socket_path();
+        if sock.exists() {
+            let meta = fs::metadata(&sock).ok();
+            let mode = meta.as_ref().map(|m| m.permissions().mode() & 0o777);
+            let uid_ok = meta
+                .as_ref()
+                .map(|m| m.uid() == libc_uid())
+                .unwrap_or(false);
+            checks.push(check(
+                "service.socket",
+                if uid_ok { "pass" } else { "warn" },
+                format!(
+                    "socket {} mode={:o} uid_ok={uid_ok}",
+                    sock.display(),
+                    mode.unwrap_or(0)
+                ),
+                Some(&sock.display().to_string()),
+                Some("user-owned unix socket"),
+                None,
+            ));
+        } else {
+            checks.push(check(
+                "service.socket",
+                "info",
+                format!(
+                    "expected unix socket {} (created when service runs)",
+                    sock.display()
+                ),
+                None,
+                Some(&sock.display().to_string()),
+                Some("moraine service start"),
+            ));
+        }
 
-    // Spool directory permissions
-    let spool = dirs::cache_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("moraine-service/spool");
-    if spool.is_dir() {
-        let mode = fs::metadata(&spool)
-            .map(|m| m.permissions().mode() & 0o777)
-            .unwrap_or(0);
-        let restricted = mode & 0o077 == 0;
-        checks.push(check(
-            "service.spool_perms",
-            if restricted { "pass" } else { "warn" },
-            format!("spool {} mode={mode:o}", spool.display()),
-            Some(&format!("{mode:o}")),
-            Some("0700 preferred"),
-            (!restricted).then_some("chmod 700 the spool directory"),
-        ));
-        if let Ok(body) = http_get_loopback(
-            moraine_platform::RuntimeLayout::discover()
-                .diagnostics_endpoint
-                .port(),
-            "/status",
-        ) {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
-                if let Some(sp) = v.get("spool") {
-                    checks.push(check(
-                        "service.spool_counts",
-                        "info",
-                        format!("spool counts {sp}"),
-                        Some(&sp.to_string()),
-                        None,
-                        None,
-                    ));
+        // Spool directory permissions
+        let spool = dirs::cache_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("moraine-service/spool");
+        if spool.is_dir() {
+            let mode = fs::metadata(&spool)
+                .map(|m| m.permissions().mode() & 0o777)
+                .unwrap_or(0);
+            let restricted = mode & 0o077 == 0;
+            checks.push(check(
+                "service.spool_perms",
+                if restricted { "pass" } else { "warn" },
+                format!("spool {} mode={mode:o}", spool.display()),
+                Some(&format!("{mode:o}")),
+                Some("0700 preferred"),
+                (!restricted).then_some("chmod 700 the spool directory"),
+            ));
+            if let Ok(body) = http_get_loopback(
+                moraine_platform::RuntimeLayout::discover()
+                    .diagnostics_endpoint
+                    .port(),
+                "/status",
+            ) {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
+                    if let Some(sp) = v.get("spool") {
+                        checks.push(check(
+                            "service.spool_counts",
+                            "info",
+                            format!("spool counts {sp}"),
+                            Some(&sp.to_string()),
+                            None,
+                            None,
+                        ));
+                    }
                 }
             }
+        } else {
+            checks.push(check(
+                "service.spool",
+                "info",
+                format!("spool dir not yet created ({})", spool.display()),
+                None,
+                None,
+                None,
+            ));
         }
-    } else {
-        checks.push(check(
-            "service.spool",
-            "info",
-            format!("spool dir not yet created ({})", spool.display()),
-            None,
-            None,
-            None,
-        ));
     }
 
     // Desktop
@@ -758,6 +763,7 @@ fn probe_mcp_tools_list(cli: &Path, project: &Path) -> Result<Vec<String>, Strin
     Ok(names)
 }
 
+#[cfg(unix)]
 fn libc_uid() -> u32 {
     // Avoid libc crate: read from /proc or nix; use std only.
     std::fs::read_to_string("/proc/self/status")

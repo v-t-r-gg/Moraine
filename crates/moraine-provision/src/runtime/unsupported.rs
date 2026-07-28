@@ -3,7 +3,9 @@ use std::path::Path;
 use moraine_platform::HostPlatform;
 
 use crate::error::{ProvisionError, Result};
-use crate::types::{BackgroundRuntimeBackend, BackgroundRuntimeState, ServiceLog};
+use crate::types::{
+    BackgroundRuntimeBackend, BackgroundRuntimeState, RuntimeRegistrationSnapshot, ServiceLog,
+};
 
 pub struct UnsupportedRuntimeManager {
     host: HostPlatform,
@@ -45,8 +47,19 @@ impl super::BackgroundRuntimeManager for UnsupportedRuntimeManager {
         })
     }
 
+    fn capture_registration(&self) -> Result<RuntimeRegistrationSnapshot> {
+        Err(self.unsupported("background_runtime_capture_registration"))
+    }
+
+    fn registration_fingerprint(&self) -> Result<Option<String>> {
+        Err(self.unsupported("background_runtime_registration_fingerprint"))
+    }
+
     fn install(&self, _executable: &Path) -> Result<()> {
         Err(self.unsupported("background_runtime_install"))
+    }
+    fn restore_registration(&self, _snapshot: &RuntimeRegistrationSnapshot) -> Result<()> {
+        Err(self.unsupported("background_runtime_restore_registration"))
     }
     fn uninstall(&self) -> Result<()> {
         Err(self.unsupported("background_runtime_uninstall"))
@@ -65,9 +78,6 @@ impl super::BackgroundRuntimeManager for UnsupportedRuntimeManager {
     }
     fn disable_autostart(&self) -> Result<()> {
         Err(self.unsupported("background_runtime_disable_autostart"))
-    }
-    fn reload_registration(&self) -> Result<()> {
-        Err(self.unsupported("background_runtime_reload_registration"))
     }
     fn logs(&self, _limit: usize) -> Result<Vec<ServiceLog>> {
         Err(self.unsupported("background_runtime_logs"))

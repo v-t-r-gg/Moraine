@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::error::Result;
-use crate::types::{BackgroundRuntimeState, ServiceLog};
+use crate::types::{BackgroundRuntimeState, RuntimeRegistrationSnapshot, ServiceLog};
 use moraine_platform::{CaptureEndpoint, HostPlatform};
 
 #[derive(Debug, Clone)]
@@ -39,20 +39,20 @@ impl RuntimeInstallSpec {
 /// Background capture lifecycle. Implementations hide OS terminology from the UI.
 pub trait BackgroundRuntimeManager: Send + Sync {
     fn inspect(&self) -> Result<BackgroundRuntimeState>;
+    fn capture_registration(&self) -> Result<RuntimeRegistrationSnapshot>;
+    fn registration_fingerprint(&self) -> Result<Option<String>>;
     /// Compatibility entry point for existing injected managers.
     fn install(&self, executable: &Path) -> Result<()>;
     fn install_runtime(&self, spec: &RuntimeInstallSpec) -> Result<()> {
         self.install(&spec.executable)
     }
+    fn restore_registration(&self, snapshot: &RuntimeRegistrationSnapshot) -> Result<()>;
     fn uninstall(&self) -> Result<()>;
     fn start(&self) -> Result<()>;
     fn stop(&self) -> Result<()>;
     fn restart(&self) -> Result<()>;
     fn enable_autostart(&self) -> Result<()>;
     fn disable_autostart(&self) -> Result<()>;
-    /// Reload registration after unit file restore (e.g. `systemctl --user daemon-reload`).
-    /// No-op on managers that do not cache registration (still required for Linux correctness).
-    fn reload_registration(&self) -> Result<()>;
     fn logs(&self, limit: usize) -> Result<Vec<ServiceLog>>;
 }
 

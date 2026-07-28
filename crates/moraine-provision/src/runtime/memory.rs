@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use crate::error::{ProvisionError, Result};
 use crate::types::{
     BackgroundRuntimeBackend, BackgroundRuntimeState, RuntimeRegistrationKind,
-    RuntimeRegistrationState, ServiceLog,
+    RuntimeRegistrationSnapshot, RuntimeRegistrationState, ServiceLog,
 };
 
 #[derive(Debug, Default)]
@@ -141,6 +141,30 @@ impl super::BackgroundRuntimeManager for MemoryRuntimeManager {
         })
     }
 
+    fn capture_registration(&self) -> Result<RuntimeRegistrationSnapshot> {
+        let path = self
+            .unit_path
+            .clone()
+            .unwrap_or_else(|| crate::suite::SuitePaths::discover().unit);
+        let snapshot = if path.is_file() {
+            crate::snapshot::durable_backup(&path)?
+        } else {
+            crate::snapshot::snapshot_absent(&path)
+        };
+        Ok(RuntimeRegistrationSnapshot::File(snapshot))
+    }
+
+    fn registration_fingerprint(&self) -> Result<Option<String>> {
+        let Some(path) = &self.unit_path else {
+            return Ok(None);
+        };
+        Ok(if path.is_file() {
+            Some(crate::snapshot::file_sha256(path)?)
+        } else {
+            None
+        })
+    }
+
     fn install(&self, executable: &Path) -> Result<()> {
         let mut g = self.inner.lock().unwrap();
         g.install_count = g.install_count.saturating_add(1);
@@ -162,6 +186,15 @@ impl super::BackgroundRuntimeManager for MemoryRuntimeManager {
         if let Some(msg) = g.fail_after_install.take() {
             return Err(ProvisionError::Service(msg));
         }
+        Ok(())
+    }
+
+    fn restore_registration(&self, snapshot: &RuntimeRegistrationSnapshot) -> Result<()> {
+        let RuntimeRegistrationSnapshot::File(snapshot) = snapshot;
+        crate::snapshot::restore_snapshot(snapshot)?;
+        let mut inner = self.inner.lock().unwrap();
+        inner.reload_count = inner.reload_count.saturating_add(1);
+        inner.installed = matches!(snapshot, crate::types::FileSnapshot::Existing { .. });
         Ok(())
     }
 
@@ -224,12 +257,6 @@ impl super::BackgroundRuntimeManager for MemoryRuntimeManager {
     fn disable_autostart(&self) -> Result<()> {
         let mut g = self.inner.lock().unwrap();
         g.autostart = false;
-        Ok(())
-    }
-
-    fn reload_registration(&self) -> Result<()> {
-        let mut g = self.inner.lock().unwrap();
-        g.reload_count = g.reload_count.saturating_add(1);
         Ok(())
     }
 

@@ -9,7 +9,7 @@ use crate::runtime::RuntimeInstallSpec;
 use crate::suite::{http_get_loopback, SuitePaths};
 use crate::types::{
     BackgroundRuntimeBackend, BackgroundRuntimeState, RuntimeRegistrationKind,
-    RuntimeRegistrationState, ServiceLog,
+    RuntimeRegistrationSnapshot, RuntimeRegistrationState, ServiceLog,
 };
 
 pub struct LinuxSystemdUserRuntime {
@@ -160,6 +160,23 @@ impl super::BackgroundRuntimeManager for LinuxSystemdUserRuntime {
         })
     }
 
+    fn capture_registration(&self) -> Result<RuntimeRegistrationSnapshot> {
+        let snapshot = if self.suite.unit.is_file() {
+            crate::snapshot::durable_backup(&self.suite.unit)?
+        } else {
+            crate::snapshot::snapshot_absent(&self.suite.unit)
+        };
+        Ok(RuntimeRegistrationSnapshot::File(snapshot))
+    }
+
+    fn registration_fingerprint(&self) -> Result<Option<String>> {
+        Ok(if self.suite.unit.is_file() {
+            Some(crate::snapshot::file_sha256(&self.suite.unit)?)
+        } else {
+            None
+        })
+    }
+
     fn install(&self, executable: &Path) -> Result<()> {
         let layout = moraine_platform::RuntimeLayout::discover();
         self.install_runtime(&RuntimeInstallSpec {
@@ -188,6 +205,18 @@ impl super::BackgroundRuntimeManager for LinuxSystemdUserRuntime {
         }
         fs::write(&self.suite.unit, &unit)?;
         let _ = Self::systemctl(&["daemon-reload"]);
+        Ok(())
+    }
+
+    fn restore_registration(&self, snapshot: &RuntimeRegistrationSnapshot) -> Result<()> {
+        let RuntimeRegistrationSnapshot::File(snapshot) = snapshot;
+        crate::snapshot::restore_snapshot(snapshot)?;
+        let status = Self::systemctl(&["daemon-reload"]).map_err(ProvisionError::Service)?;
+        if !status.success() {
+            return Err(ProvisionError::Service(
+                "failed to reload restored background capture registration".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -245,17 +274,6 @@ impl super::BackgroundRuntimeManager for LinuxSystemdUserRuntime {
         if !st.success() {
             return Err(ProvisionError::Service(
                 "failed to disable background capture at login".into(),
-            ));
-        }
-        Ok(())
-    }
-
-    fn reload_registration(&self) -> Result<()> {
-        // Required after unit file restore so systemd picks up prior ExecStart.
-        let st = Self::systemctl(&["daemon-reload"]).map_err(ProvisionError::Service)?;
-        if !st.success() {
-            return Err(ProvisionError::Service(
-                "failed to reload background capture registration".into(),
             ));
         }
         Ok(())

@@ -351,6 +351,20 @@ impl FileSnapshot {
 /// Backward-compatible alias used by older call sites / receipts.
 pub type BackupRecord = FileSnapshot;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum RuntimeRegistrationSnapshot {
+    File(FileSnapshot),
+}
+
+impl RuntimeRegistrationSnapshot {
+    pub fn path(&self) -> &str {
+        match self {
+            Self::File(snapshot) => snapshot.path(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompletedOperation {
@@ -368,8 +382,7 @@ pub struct CompletedOperation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceSnapshot {
-    /// Unit/registration file: Existing (prior unit) or Absent (no prior unit).
-    pub registration: FileSnapshot,
+    pub registration: RuntimeRegistrationSnapshot,
     pub was_running: bool,
     pub autostart_was_enabled: bool,
 }
@@ -514,4 +527,25 @@ pub struct ServiceLog {
     pub line: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<String>,
+}
+
+#[cfg(test)]
+mod compatibility_tests {
+    use super::*;
+
+    #[test]
+    fn c3_service_snapshot_registration_shape_remains_readable() {
+        let legacy = serde_json::json!({
+            "registration": {
+                "kind": "absent",
+                "path": "/tmp/moraine-service.service",
+                "createdAt": "2026-01-01T00:00:00Z"
+            },
+            "wasRunning": false,
+            "autostartWasEnabled": true
+        });
+        let snapshot: ServiceSnapshot = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(snapshot.registration.path(), "/tmp/moraine-service.service");
+        assert_eq!(serde_json::to_value(snapshot).unwrap(), legacy);
+    }
 }

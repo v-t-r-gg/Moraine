@@ -2297,6 +2297,7 @@ dependencies = [
  "hex",
  "moraine-core",
  "moraine-mcp",
+ "moraine-platform",
  "moraine-provision",
  "serde",
  "serde_json",
@@ -2317,6 +2318,7 @@ dependencies = [
  "dirs",
  "fs4",
  "hex",
+ "moraine-platform",
  "notify",
  "parking_lot",
  "serde",
@@ -2351,6 +2353,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "moraine-platform"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "moraine-provision"
 version = "0.1.0"
 dependencies = [
@@ -2359,6 +2371,7 @@ dependencies = [
  "dirs",
  "hex",
  "moraine-core",
+ "moraine-platform",
  "moraine-service",
  "serde",
  "serde_json",
@@ -2397,6 +2410,7 @@ dependencies = [
  "dirs",
  "hex",
  "moraine-core",
+ "moraine-platform",
  "serde",
  "serde_json",
  "sha2",

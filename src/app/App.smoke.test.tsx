@@ -41,6 +41,15 @@ vi.mock("@/shared/api/discovery", async () => {
 
 vi.mock("@/shared/api/provision", () => ({
   provisionInspect: vi.fn().mockResolvedValue({
+    platform: {
+      host: "linux",
+      userPaths: "supported",
+      suiteLayout: "supported",
+      captureTransport: "supported",
+      backgroundRuntime: "supported",
+      desktopHost: "supported",
+      userInstallation: "supported",
+    },
     suite: {
       prefix: "",
       cliPath: "",
@@ -106,6 +115,15 @@ describe("App product shell (C3)", () => {
       },
     });
     vi.mocked(provisionInspect).mockResolvedValueOnce({
+      platform: {
+        host: "linux",
+        userPaths: "supported",
+        suiteLayout: "supported",
+        captureTransport: "supported",
+        backgroundRuntime: "supported",
+        desktopHost: "supported",
+        userInstallation: "supported",
+      },
       suite: {
         prefix: "",
         cliPath: "",

@@ -5,13 +5,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use moraine_core::SuiteManifest;
+use moraine_platform::{HostPlatform, RuntimeLayout, SuiteLayout, UserPaths, DIAGNOSTICS_PORT};
 use serde::{Deserialize, Serialize};
 
 /// Default user-scoped install prefix (`~/.local`).
 pub fn default_prefix() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".local")
+    moraine_platform::default_prefix(HostPlatform::current())
 }
 
 #[derive(Debug, Clone)]
@@ -28,19 +27,20 @@ pub struct SuitePaths {
 
 impl SuitePaths {
     pub fn from_prefix(prefix: impl AsRef<Path>) -> Self {
-        let prefix = prefix.as_ref().to_path_buf();
-        let share = prefix.join("share/moraine");
+        let layout = SuiteLayout::from_prefix(
+            HostPlatform::current(),
+            prefix.as_ref(),
+            &UserPaths::discover(),
+        );
         Self {
-            cli: prefix.join("bin/moraine"),
-            service: prefix.join("libexec/moraine/moraine-service"),
-            desktop: prefix.join("lib/moraine/moraine-app"),
-            manifest: share.join("manifest.json"),
-            share,
-            unit: dirs::config_dir()
-                .unwrap_or_else(|| PathBuf::from("~/.config"))
-                .join("systemd/user/moraine-service.service"),
-            desktop_entry: prefix.join("share/applications/app.moraine.desktop"),
-            prefix,
+            prefix: layout.prefix,
+            cli: layout.cli,
+            service: layout.service,
+            desktop: layout.desktop,
+            share: layout.share,
+            manifest: layout.manifest,
+            unit: layout.service_registration.unwrap_or_default(),
+            desktop_entry: layout.desktop_registration.unwrap_or_default(),
         }
     }
 
@@ -157,20 +157,14 @@ impl Default for SuitePaths {
 
 /// Directory for setup transaction journals.
 pub fn setup_transactions_dir() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".local/share")
-        })
-        .join("moraine/setup-transactions")
+    RuntimeLayout::discover().transaction_journals
 }
 
 pub fn default_socket_path() -> PathBuf {
-    env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(env::temp_dir)
-        .join("moraine-service.sock")
+    match RuntimeLayout::discover().capture_endpoint {
+        moraine_platform::CaptureEndpoint::UnixSocket(path) => path,
+        _ => PathBuf::new(),
+    }
 }
 
 pub fn default_http_addr() -> &'static str {
@@ -178,7 +172,7 @@ pub fn default_http_addr() -> &'static str {
 }
 
 pub fn default_http_port() -> u16 {
-    33111
+    DIAGNOSTICS_PORT
 }
 
 /// Minimal loopback HTTP/1.1 GET without external curl.

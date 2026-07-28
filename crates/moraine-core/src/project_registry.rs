@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::atomic::write_atomic;
 use crate::error::{Error, Result};
-use crate::paths::MorainePaths;
 
 thread_local! {
     static REGISTRY_PATH_OVERRIDE: std::cell::RefCell<Option<PathBuf>> =
@@ -44,9 +43,7 @@ pub fn default_project_registry_path() -> Result<PathBuf> {
     if let Some(path) = REGISTRY_PATH_OVERRIDE.with(|slot| slot.borrow().clone()) {
         return Ok(path);
     }
-    Ok(MorainePaths::default_ensure()?
-        .data_dir
-        .join("projects.json"))
+    Ok(moraine_platform::RuntimeLayout::discover().project_registry)
 }
 
 /// Runs a synchronous operation with an isolated project-registry path.

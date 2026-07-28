@@ -55,6 +55,7 @@ pub enum VerificationMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SystemState {
+    pub platform: moraine_platform::PlatformCapabilities,
     pub suite: SuiteState,
     pub service: ServiceState,
     pub agents: Vec<DetectedAgent>,

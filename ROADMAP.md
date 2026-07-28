@@ -14,16 +14,17 @@ High-level direction. Product model: [VISION.md](./VISION.md), [ARCHITECTURE.md]
 * React desktop migration (Svelte removed from app)  
 * Append-only ledger semantics; target-scoped redaction (C1)  
 * **C2 — Stranger-safe Linux installation and Codex reference pack** (merged)  
+* **C3 — Beta hardening and product-surface freeze** (merged)
+  * Transactional provisioning and exact rollback
+  * Truthful ProductCapture onboarding and durable project discovery
+  * Complete Linux source and release-package validation
 
 ## Now
 
-* **C3 — Beta hardening and product-surface freeze** (this branch)  
-  * Transactional provisioning, write-ahead service repair, and exact rollback
-  * Desktop ProductCapture onboarding with full `ApplyOutcome` state
-  * Durable canonical-root registry feeding rebuildable discovery
-  * Self-test capture lifecycle without ordinary-run pollution
-  * Complete local/CI-equivalent source gate and Linux package smoke
-  * Reconcile product/install/development documentation
+* **W1 — Platform abstraction**
+  * W1-A: host capabilities and one authoritative suite/runtime layout
+  * W1-B: capture and background-runtime backend boundaries
+  * W1-C: capability-aware product closure and required Windows compile CI
 
 ### Validation language
 
@@ -33,15 +34,15 @@ High-level direction. Product model: [VISION.md](./VISION.md), [ARCHITECTURE.md]
 * **Tested in CI:** only after the corresponding PR checks report success.
 * **Graphical Linux session:** not claimed by headless tests; a real
   WebKit/systemd user-session lifecycle remains manual acceptance evidence.
-* **Planned:** W1–W3 below.
+* **Planned:** unfinished W1 work and W2–W3 below.
 * **Deferred:** the explicitly listed capabilities below.
 
 ## Next (ordered)
 
-1. **W1 — Platform abstraction** (IPC/paths beyond Linux assumptions)  
-2. **W2 — Native Windows 11 port**  
-3. **W3 — Signed installer and WinGet**  
-4. Second agent adapter (subordinate to Windows portfolio reach)  
+1. Complete **W1 — Platform abstraction** (IPC/paths beyond Linux assumptions)
+2. **W2 — Native Windows 11 port**
+3. **W3 — Signed installer and WinGet**
+4. Second agent adapter (subordinate to Windows portfolio reach)
 
 ## Deferred (do not expand in C3)
 

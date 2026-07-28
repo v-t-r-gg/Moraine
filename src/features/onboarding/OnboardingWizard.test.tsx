@@ -7,6 +7,15 @@ vi.mock("@/shared/api", () => ({
 
 vi.mock("@/shared/api/provision", () => ({
   provisionInspect: vi.fn().mockResolvedValue({
+    platform: {
+      host: "linux",
+      userPaths: "supported",
+      suiteLayout: "supported",
+      captureTransport: "supported",
+      backgroundRuntime: "supported",
+      desktopHost: "supported",
+      userInstallation: "supported",
+    },
     suite: {
       prefix: "/tmp",
       cliPath: "/tmp/moraine",
@@ -135,6 +144,15 @@ describe("OnboardingWizard", () => {
 
   it("blocks ProductCapture setup when Codex is not detected", async () => {
     vi.mocked(provisionInspect).mockResolvedValueOnce({
+      platform: {
+        host: "linux",
+        userPaths: "supported",
+        suiteLayout: "supported",
+        captureTransport: "supported",
+        backgroundRuntime: "supported",
+        desktopHost: "supported",
+        userInstallation: "supported",
+      },
       suite: {
         prefix: "/tmp",
         cliPath: "/tmp/moraine",

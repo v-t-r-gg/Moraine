@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/moraine-platform",
     "crates/moraine-core",
     "crates/moraine-cli",
     "crates/moraine-server",
@@ -23,6 +24,7 @@ description = "Local-first ledger for autonomous agent work"
 
 [workspace.dependencies]
 moraine-core = { path = "crates/moraine-core" }
+moraine-platform = { path = "crates/moraine-platform" }
 moraine-provision = { path = "crates/moraine-provision" }
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }

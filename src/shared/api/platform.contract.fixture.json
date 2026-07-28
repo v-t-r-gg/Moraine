@@ -1,0 +1,51 @@
+[
+  {
+    "capabilities": {
+      "host": "linux",
+      "userPaths": "supported",
+      "suiteLayout": "supported",
+      "captureTransport": "supported",
+      "backgroundRuntime": "supported",
+      "desktopHost": "supported",
+      "userInstallation": "supported"
+    },
+    "serviceRegistration": "/home/user/.config/systemd/user/moraine-service.service",
+    "desktopRegistration": "/home/user/.local/share/applications/app.moraine.desktop",
+    "captureEndpoint": {
+      "kind": "unix_socket",
+      "value": "/run/user/1000/moraine-service.sock"
+    }
+  },
+  {
+    "capabilities": {
+      "host": "windows",
+      "userPaths": "supported",
+      "suiteLayout": "supported",
+      "captureTransport": "unsupported",
+      "backgroundRuntime": "unsupported",
+      "desktopHost": "unsupported",
+      "userInstallation": "unsupported"
+    },
+    "serviceRegistration": null,
+    "desktopRegistration": null,
+    "captureEndpoint": {
+      "kind": "unsupported"
+    }
+  },
+  {
+    "capabilities": {
+      "host": "other",
+      "userPaths": "unsupported",
+      "suiteLayout": "unsupported",
+      "captureTransport": "unsupported",
+      "backgroundRuntime": "unsupported",
+      "desktopHost": "unsupported",
+      "userInstallation": "unsupported"
+    },
+    "serviceRegistration": null,
+    "desktopRegistration": null,
+    "captureEndpoint": {
+      "kind": "unsupported"
+    }
+  }
+]

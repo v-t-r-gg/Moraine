@@ -25,6 +25,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid = { version = "1", features = ["v4", "serde"] }
 moraine-core.workspace = true
+moraine-platform.workspace = true
 sha2 = { workspace = true }
 hex = { workspace = true }
  

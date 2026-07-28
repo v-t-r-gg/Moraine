@@ -136,11 +136,9 @@ async fn main() -> Result<()> {
         }
     }
 
-    let spool_dir = args.spool_dir.unwrap_or_else(|| {
-        dirs::cache_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("moraine-service/spool")
-    });
+    let spool_dir = args
+        .spool_dir
+        .unwrap_or_else(|| moraine_platform::RuntimeLayout::discover().spool_dir);
     std::fs::create_dir_all(&spool_dir)?;
     #[cfg(unix)]
     {
@@ -163,12 +161,13 @@ async fn main() -> Result<()> {
         );
     }
 
-    let socket_path = args.unix_socket.clone().unwrap_or_else(|| {
-        std::env::var_os("XDG_RUNTIME_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir)
-            .join("moraine-service.sock")
-    });
+    let socket_path =
+        args.unix_socket.clone().unwrap_or_else(
+            || match moraine_platform::RuntimeLayout::discover().capture_endpoint {
+                moraine_platform::CaptureEndpoint::UnixSocket(path) => path,
+                _ => PathBuf::new(),
+            },
+        );
     let started_at_unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())

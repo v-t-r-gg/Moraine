@@ -1,0 +1,16 @@
+[package]
+name = "moraine-platform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Narrow host-platform, capability, and layout contracts for Moraine"
+
+[dependencies]
+dirs.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile = "3"

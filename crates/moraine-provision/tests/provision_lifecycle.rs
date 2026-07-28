@@ -190,8 +190,7 @@ fn existing_initialized_project_is_registered_by_successful_apply() {
     let dir = tempdir().unwrap();
     let data_home = dir.path().join("data");
     let registry_path = data_home.join("moraine/projects.json");
-    let previous_data_home = std::env::var_os("XDG_DATA_HOME");
-    std::env::set_var("XDG_DATA_HOME", &data_home);
+    let journal_dir = data_home.join("moraine/setup-transactions");
     let project = dir.path().join("existing");
     fs::create_dir_all(&project).unwrap();
     moraine_core::init_project(Some(&project)).unwrap();
@@ -210,14 +209,11 @@ fn existing_initialized_project_is_registered_by_successful_apply() {
                 .operations
                 .iter()
                 .any(|operation| operation.kind == ProvisionOpKind::InitializeProject));
-            apply(approved, &service).unwrap()
+            moraine_provision::journal::with_journal_dir_override(journal_dir, || {
+                apply(approved, &service).unwrap()
+            })
         },
     );
-    if let Some(value) = previous_data_home {
-        std::env::set_var("XDG_DATA_HOME", value);
-    } else {
-        std::env::remove_var("XDG_DATA_HOME");
-    }
     assert!(
         matches!(outcome, ApplyOutcome::DirectVerified { .. }),
         "{outcome:?}"
@@ -843,8 +839,11 @@ fn inspect_plan_apply_direct_path() {
 
 #[test]
 fn product_apply_self_test_ready_with_injectables() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let _suite = HermeticSuite::install();
     let dir = tempdir().unwrap();
     let project = dir.path().join("prod-apply");
+    let registry_path = dir.path().join("data/moraine/projects.json");
     fs::create_dir_all(&project).unwrap();
     let svc = MemoryServiceManager::new();
     setup_agent(&project);
@@ -865,13 +864,16 @@ fn product_apply_self_test_ready_with_injectables() {
         })),
         service_probe: Some(Arc::new(AlwaysReadyProbe { version: None })),
     };
-    let outcome = apply_with_options(
-        p,
-        &svc,
-        Some(opts),
-        Some(Arc::new(AlwaysReadyProbe { version: None })),
-    )
-    .unwrap();
+    let outcome =
+        moraine_core::project_registry::with_project_registry_path_override(registry_path, || {
+            apply_with_options(
+                p,
+                &svc,
+                Some(opts),
+                Some(Arc::new(AlwaysReadyProbe { version: None })),
+            )
+            .unwrap()
+        });
     assert!(matches!(outcome, ApplyOutcome::Ready { .. }), "{outcome:?}");
 }
 

@@ -10,8 +10,37 @@ use crate::error::{ProvisionError, Result};
 use crate::suite::setup_transactions_dir;
 use crate::types::SetupReceipt;
 
+thread_local! {
+    static JOURNAL_DIR_OVERRIDE: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn journal_dir() -> PathBuf {
+    JOURNAL_DIR_OVERRIDE
+        .with(|slot| slot.borrow().clone())
+        .unwrap_or_else(setup_transactions_dir)
+}
+
 pub fn journal_path(transaction_id: Uuid) -> PathBuf {
-    setup_transactions_dir().join(format!("{transaction_id}.json"))
+    journal_dir().join(format!("{transaction_id}.json"))
+}
+
+/// Runs a synchronous operation with an isolated transaction-journal directory.
+#[doc(hidden)]
+pub fn with_journal_dir_override<T>(path: PathBuf, operation: impl FnOnce() -> T) -> T {
+    struct Reset(Option<PathBuf>);
+
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            JOURNAL_DIR_OVERRIDE.with(|slot| {
+                *slot.borrow_mut() = self.0.take();
+            });
+        }
+    }
+
+    let previous = JOURNAL_DIR_OVERRIDE.with(|slot| slot.replace(Some(path)));
+    let _reset = Reset(previous);
+    operation()
 }
 
 /// Persist receipt with fsync. Failure aborts the transaction (not best-effort).
@@ -24,7 +53,7 @@ pub fn write_journal(receipt: &SetupReceipt) -> Result<PathBuf> {
     let dir = path
         .parent()
         .map(Path::to_path_buf)
-        .unwrap_or_else(setup_transactions_dir);
+        .unwrap_or_else(journal_dir);
     fs::create_dir_all(&dir)?;
     write_journal_at(&path, receipt)?;
     Ok(path)
@@ -76,7 +105,7 @@ pub fn write_journal_at(path: &Path, receipt: &SetupReceipt) -> Result<()> {
 
 /// List unfinished transactions (readiness not Ready/DirectVerified/Failed after rollback).
 pub fn list_unfinished() -> Result<Vec<SetupReceipt>> {
-    let dir = setup_transactions_dir();
+    let dir = journal_dir();
     if !dir.is_dir() {
         return Ok(Vec::new());
     }

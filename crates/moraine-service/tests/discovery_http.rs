@@ -19,6 +19,7 @@ struct Svc {
     http: String,
     #[allow(dead_code)]
     spool: PathBuf,
+    socket: PathBuf,
 }
 
 impl Drop for Svc {
@@ -65,6 +66,7 @@ fn spawn_service(spool: &Path, http_port: u16) -> Svc {
         child,
         http: base,
         spool: spool.to_path_buf(),
+        socket: sock,
     }
 }
 
@@ -344,4 +346,88 @@ fn capture_bind_failure_never_opens_diagnostics() {
         TcpStream::connect(&http).is_err(),
         "diagnostics opened despite capture bind failure"
     );
+}
+
+#[test]
+fn second_process_cannot_disrupt_active_capture_socket() {
+    let dir = tempdir().unwrap();
+    let spool = dir.path().join("spool");
+    fs::create_dir_all(&spool).unwrap();
+    let first_port = free_port();
+    let first = spawn_service(&spool, first_port);
+    let second_port = free_port();
+    let bin = env!("CARGO_BIN_EXE_moraine-service");
+    let second = Command::new(bin)
+        .args([
+            "--spool-dir",
+            spool.to_str().unwrap(),
+            "--unix-socket",
+            first.socket.to_str().unwrap(),
+            "--http",
+            &format!("127.0.0.1:{second_port}"),
+        ])
+        .output()
+        .unwrap();
+    assert!(!second.status.success());
+    assert!(tokio_connectable(&first.socket));
+    assert!(http_get(&format!("{}/status", first.http)).is_ok());
+}
+
+#[test]
+fn occupied_diagnostics_port_cleans_new_capture_socket() {
+    let dir = tempdir().unwrap();
+    let socket = dir.path().join("capture.sock");
+    let occupied = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let http = occupied.local_addr().unwrap().to_string();
+    let bin = env!("CARGO_BIN_EXE_moraine-service");
+    let output = Command::new(bin)
+        .args([
+            "--spool-dir",
+            dir.path().to_str().unwrap(),
+            "--unix-socket",
+            socket.to_str().unwrap(),
+            "--http",
+            &http,
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(!socket.exists(), "new socket survived HTTP bind failure");
+}
+
+#[test]
+fn listener_failure_cannot_leave_ready_diagnostics_running() {
+    let dir = tempdir().unwrap();
+    let spool = dir.path().join("spool");
+    fs::create_dir_all(&spool).unwrap();
+    fs::write(spool.join("processed"), b"blocks listener initialization").unwrap();
+    let socket = dir.path().join("capture.sock");
+    let port = free_port();
+    let http = format!("127.0.0.1:{port}");
+    let bin = env!("CARGO_BIN_EXE_moraine-service");
+    let mut child = Command::new(bin)
+        .args([
+            "--spool-dir",
+            spool.to_str().unwrap(),
+            "--unix-socket",
+            socket.to_str().unwrap(),
+            "--http",
+            &http,
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline && child.try_wait().unwrap().is_none() {
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(child.try_wait().unwrap().is_some());
+    assert!(http_get(&format!("http://{http}/status")).is_err());
+    assert!(!socket.exists());
+}
+
+fn tokio_connectable(socket: &Path) -> bool {
+    std::os::unix::net::UnixStream::connect(socket).is_ok()
 }

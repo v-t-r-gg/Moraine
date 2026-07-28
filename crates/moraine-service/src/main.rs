@@ -10,7 +10,14 @@ use clap::Parser;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::time::Duration;
-use std::{net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{
+    net::SocketAddr,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 use tokio::{net::TcpListener, sync::Notify};
 use tracing::{error, info};
 
@@ -20,6 +27,7 @@ const MAX_SPOOL_FILES: usize = moraine_service::MAX_PENDING_EVENTS;
 struct AppState {
     spool_dir: PathBuf,
     capture_endpoint: moraine_platform::CaptureEndpoint,
+    capture_ready: Arc<AtomicBool>,
     http_addr: String,
     started_at_unix: u64,
 }
@@ -89,9 +97,11 @@ async fn main() -> Result<()> {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let shutdown = Arc::new(Notify::new());
+    let capture_ready = Arc::new(AtomicBool::new(true));
     let state = AppState {
         spool_dir: spool_dir.clone(),
         capture_endpoint: capture_endpoint.clone(),
+        capture_ready: capture_ready.clone(),
         http_addr: http,
         started_at_unix,
     };
@@ -111,17 +121,6 @@ async fn main() -> Result<()> {
         spool_dir = %spool_dir.display(),
         "starting moraine-service (hooks=unix-socket, diagnostics=loopback-http)"
     );
-
-    // Unix domain socket: primary hook/adapter intake (not TCP).
-    {
-        let spool = spool_dir.clone();
-        let shutdown_clone = shutdown.clone();
-        tokio::spawn(async move {
-            if let Err(e) = capture_listener.run(spool, shutdown_clone).await {
-                error!(error = %e, "capture listener failed");
-            }
-        });
-    }
 
     // Spool processing task: periodically scan spool dir and process events
     {
@@ -159,13 +158,41 @@ async fn main() -> Result<()> {
         notify.notify_waiters();
     });
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            shutdown.notified().await;
-        })
-        .await?;
+    let http_shutdown = shutdown.clone();
+    let http = async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                http_shutdown.notified().await;
+            })
+            .await
+    };
+    let capture_shutdown = shutdown.clone();
+    let capture = capture_listener.run(spool_dir, capture_shutdown);
+    tokio::pin!(http);
+    tokio::pin!(capture);
 
-    Ok(())
+    tokio::select! {
+        result = &mut capture => {
+            capture_ready.store(false, Ordering::Release);
+            shutdown.notify_waiters();
+            match result {
+                Ok(()) => {
+                    http.await?;
+                    Ok(())
+                }
+                Err(error) => {
+                    error!(%error, "capture listener failed; stopping runtime");
+                    Err(error)
+                }
+            }
+        }
+        result = &mut http => {
+            shutdown.notify_waiters();
+            result?;
+            capture.await?;
+            Ok(())
+        }
+    }
 }
 
 fn resolve_capture_endpoint(
@@ -212,7 +239,7 @@ async fn handle_status(State(state): State<AppState>) -> Json<Value> {
         "serviceProtocolVersion": build.service_protocol_version,
         "schema": build.schema,
         "executablePath": executable,
-        "captureReady": true,
+        "captureReady": state.capture_ready.load(Ordering::Acquire),
         "captureEndpoint": state.capture_endpoint,
         "socketPath": match &state.capture_endpoint {
             moraine_platform::CaptureEndpoint::UnixSocket(path) => {

@@ -1,4 +1,8 @@
 use std::{
+    os::unix::{
+        fs::{FileTypeExt, MetadataExt},
+        net::UnixStream as StdUnixStream,
+    },
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -7,16 +11,31 @@ use anyhow::Result;
 use tokio::{io::AsyncReadExt, net::UnixListener, sync::Notify};
 use tracing::{error, info};
 
+#[derive(Debug)]
 pub(crate) struct UnixCaptureListener {
     listener: UnixListener,
     socket_path: PathBuf,
+    _cleanup: SocketCleanup,
 }
 
-struct SocketCleanup(PathBuf);
+#[derive(Debug)]
+struct SocketCleanup {
+    path: PathBuf,
+    device: u64,
+    inode: u64,
+}
 
 impl Drop for SocketCleanup {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        let Ok(metadata) = std::fs::symlink_metadata(&self.path) else {
+            return;
+        };
+        if metadata.file_type().is_socket()
+            && metadata.dev() == self.device
+            && metadata.ino() == self.inode
+        {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
 }
 
@@ -25,21 +44,49 @@ impl UnixCaptureListener {
         if let Some(parent) = socket_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        match std::fs::remove_file(socket_path) {
-            Ok(()) => {}
+        match std::fs::symlink_metadata(socket_path) {
+            Ok(metadata) if !metadata.file_type().is_socket() => {
+                anyhow::bail!(
+                    "refusing to replace non-socket capture endpoint {}",
+                    socket_path.display()
+                );
+            }
+            Ok(_) => match StdUnixStream::connect(socket_path) {
+                Ok(_) => {
+                    anyhow::bail!(
+                        "capture endpoint already active at {}",
+                        socket_path.display()
+                    );
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
+                    std::fs::remove_file(socket_path)?;
+                }
+                Err(error) => {
+                    return Err(anyhow::anyhow!(
+                        "could not confirm stale capture endpoint {}: {error}",
+                        socket_path.display()
+                    ));
+                }
+            },
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
         let listener = UnixListener::bind(socket_path)?;
+        let metadata = std::fs::symlink_metadata(socket_path)?;
+        let cleanup = SocketCleanup {
+            path: socket_path.to_path_buf(),
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        };
         info!(socket=%socket_path.display(), "unix socket bound");
         Ok(Self {
             listener,
             socket_path: socket_path.to_path_buf(),
+            _cleanup: cleanup,
         })
     }
 
     pub(super) async fn run(self, spool_dir: PathBuf, shutdown: Arc<Notify>) -> Result<()> {
-        let _cleanup = SocketCleanup(self.socket_path.clone());
         tokio::fs::create_dir_all(spool_dir.join("processed")).await?;
         tokio::fs::create_dir_all(spool_dir.join("failed")).await?;
 
@@ -98,6 +145,40 @@ mod tests {
 
         shutdown.notify_one();
         task.await.unwrap().unwrap();
+        assert!(!socket.exists());
+    }
+
+    #[tokio::test]
+    async fn active_socket_is_preserved() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket = temp.path().join("capture.sock");
+        let first = UnixCaptureListener::bind(&socket).await.unwrap();
+        let error = UnixCaptureListener::bind(&socket).await.unwrap_err();
+        assert!(error.to_string().contains("already active"));
+        assert!(tokio::net::UnixStream::connect(&socket).await.is_ok());
+        drop(first);
+        assert!(!socket.exists());
+    }
+
+    #[tokio::test]
+    async fn regular_file_is_preserved() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket = temp.path().join("capture.sock");
+        std::fs::write(&socket, b"do not remove").unwrap();
+        let error = UnixCaptureListener::bind(&socket).await.unwrap_err();
+        assert!(error.to_string().contains("non-socket"));
+        assert_eq!(std::fs::read(&socket).unwrap(), b"do not remove");
+    }
+
+    #[tokio::test]
+    async fn confirmed_stale_socket_is_replaced() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket = temp.path().join("capture.sock");
+        drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
+        assert!(socket.exists());
+        let replacement = UnixCaptureListener::bind(&socket).await.unwrap();
+        assert!(tokio::net::UnixStream::connect(&socket).await.is_ok());
+        drop(replacement);
         assert!(!socket.exists());
     }
 }

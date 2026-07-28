@@ -1,12 +1,37 @@
 //! Temp-prefix installer/uninstaller smoke (drives shipped packaging scripts).
 
+use std::collections::BTreeMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::tempdir;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn tree_snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    fn visit(root: &Path, current: &Path, out: &mut BTreeMap<PathBuf, Vec<u8>>) {
+        let Ok(entries) = fs::read_dir(current) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                visit(root, &path, out);
+            } else if path.is_file() {
+                out.insert(
+                    path.strip_prefix(root).unwrap().to_path_buf(),
+                    fs::read(path).unwrap(),
+                );
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    if root.is_dir() {
+        visit(root, root, &mut out);
+    }
+    out
 }
 
 fn stage_min_bundle(stage: &std::path::Path) {
@@ -182,4 +207,128 @@ fn install_rejects_incoherent_manifest() {
         .output()
         .unwrap();
     assert!(!out.status.success());
+}
+
+#[test]
+fn registration_failure_removes_fresh_partial_install() {
+    let bundle = tempdir().unwrap();
+    stage_min_bundle(bundle.path());
+    let parent = tempdir().unwrap();
+    let prefix = parent.path().join("fresh-prefix");
+    let blocked_config = parent.path().join("config-is-a-file");
+    fs::write(&blocked_config, b"block registration directory").unwrap();
+    let cache = tempdir().unwrap();
+    let runtime = tempdir().unwrap();
+
+    let output = Command::new(bundle.path().join("install.sh"))
+        .arg("--prefix")
+        .arg(&prefix)
+        .env("XDG_CONFIG_HOME", &blocked_config)
+        .env("XDG_CACHE_HOME", cache.path())
+        .env("XDG_RUNTIME_DIR", runtime.path())
+        .env("HOME", parent.path())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("background runtime registration"));
+    assert!(
+        !prefix.exists(),
+        "partial fresh prefix retained: {prefix:?}"
+    );
+    assert_eq!(
+        fs::read(&blocked_config).unwrap(),
+        b"block registration directory"
+    );
+}
+
+#[test]
+fn registration_failure_restores_existing_installation_exactly() {
+    let bundle = tempdir().unwrap();
+    stage_min_bundle(bundle.path());
+    let prefix = tempdir().unwrap();
+    let parent = tempdir().unwrap();
+    let blocked_config = parent.path().join("config-is-a-file");
+    fs::write(&blocked_config, b"block registration directory").unwrap();
+    let cache = tempdir().unwrap();
+    let runtime = tempdir().unwrap();
+
+    let seeded = [
+        ("bin/moraine", b"old cli".as_slice()),
+        ("libexec/moraine/moraine-service", b"old service".as_slice()),
+        ("libexec/moraine/keep", b"keep libexec".as_slice()),
+        ("lib/moraine/keep", b"keep desktop dir".as_slice()),
+        ("share/moraine/keep", b"keep share".as_slice()),
+        (
+            "share/applications/app.moraine.desktop",
+            b"old desktop entry".as_slice(),
+        ),
+        (
+            "share/icons/hicolor/128x128/apps/app.moraine.png",
+            b"old icon".as_slice(),
+        ),
+    ];
+    for (relative, bytes) in seeded {
+        let path = prefix.path().join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, bytes).unwrap();
+    }
+    let before = tree_snapshot(prefix.path());
+
+    let output = Command::new(bundle.path().join("install.sh"))
+        .arg("--prefix")
+        .arg(prefix.path())
+        .env("XDG_CONFIG_HOME", &blocked_config)
+        .env("XDG_CACHE_HOME", cache.path())
+        .env("XDG_RUNTIME_DIR", runtime.path())
+        .env("HOME", parent.path())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("background runtime registration"));
+    assert_eq!(tree_snapshot(prefix.path()), before);
+    assert_eq!(
+        fs::read(&blocked_config).unwrap(),
+        b"block registration directory"
+    );
+}
+
+#[test]
+fn registration_failure_restores_prior_unit_exactly() {
+    let bundle = tempdir().unwrap();
+    stage_min_bundle(bundle.path());
+    let prefix = tempdir().unwrap();
+    let config = tempdir().unwrap();
+    let cache = tempdir().unwrap();
+    let runtime = tempdir().unwrap();
+    let unit = config.path().join("systemd/user/moraine-service.service");
+    fs::create_dir_all(unit.parent().unwrap()).unwrap();
+    let prior = b"[Service]\nExecStart=/prior/moraine-service\n";
+    fs::write(&unit, prior).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&unit, fs::Permissions::from_mode(0o444)).unwrap();
+    }
+
+    let output = Command::new(bundle.path().join("install.sh"))
+        .arg("--prefix")
+        .arg(prefix.path())
+        .env("XDG_CONFIG_HOME", config.path())
+        .env("XDG_CACHE_HOME", cache.path())
+        .env("XDG_RUNTIME_DIR", runtime.path())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert_eq!(fs::read(&unit).unwrap(), prior);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(&unit).unwrap().permissions().mode() & 0o777,
+            0o444
+        );
+    }
 }

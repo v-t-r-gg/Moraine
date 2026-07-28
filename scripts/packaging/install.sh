@@ -77,6 +77,32 @@ ROLLBACK_ROOT="${TMPDIR:-/tmp}/moraine-install-rollback-$$"
 
 ACTIONS=()
 ACTIONS+=("prefix=$PREFIX version=$VERSION")
+MANAGED_PATHS=(
+  "$BIN_DIR/moraine"
+  "$LIBEXEC"
+  "$LIB"
+  "$SHARE"
+  "$APP_SHARE/app.moraine.desktop"
+  "$ICON_DIR/app.moraine.png"
+  "$UNIT"
+)
+ROLLBACK_DIRS=(
+  "$ICON_DIR"
+  "$PREFIX/share/icons/hicolor/128x128"
+  "$PREFIX/share/icons/hicolor"
+  "$PREFIX/share/icons"
+  "$APP_SHARE"
+  "$SHARE"
+  "$PREFIX/share"
+  "$LIB"
+  "$PREFIX/lib"
+  "$LIBEXEC"
+  "$PREFIX/libexec"
+  "$BIN_DIR"
+  "$PREFIX"
+)
+PREEXISTED=()
+DIR_PREEXISTED=()
 
 cleanup_stage() {
   rm -rf "$STAGE_ROOT" "$ROLLBACK_ROOT" 2>/dev/null || true
@@ -121,61 +147,70 @@ stage_tree() {
 }
 
 backup_existing() {
-  mkdir -p "$ROLLBACK_ROOT"
-  for p in \
-    "$BIN_DIR/moraine" \
-    "$LIBEXEC" \
-    "$LIB" \
-    "$SHARE" \
-    "$APP_SHARE/app.moraine.desktop" \
-    "$ICON_DIR/app.moraine.png" \
-    "$UNIT"
-  do
+  mkdir -p "$ROLLBACK_ROOT" || return 1
+  local i p
+  for i in "${!MANAGED_PATHS[@]}"; do
+    p="${MANAGED_PATHS[$i]}"
     if [ -e "$p" ]; then
-      rel=$(printf '%s' "$p" | sed 's|^/||')
-      mkdir -p "$ROLLBACK_ROOT/$(dirname "$rel")"
-      cp -a "$p" "$ROLLBACK_ROOT/$rel"
+      PREEXISTED[$i]=1
+      cp -a "$p" "$ROLLBACK_ROOT/$i" || return 1
+    else
+      PREEXISTED[$i]=0
+    fi
+  done
+  for i in "${!ROLLBACK_DIRS[@]}"; do
+    if [ -d "${ROLLBACK_DIRS[$i]}" ]; then
+      DIR_PREEXISTED[$i]=1
+    else
+      DIR_PREEXISTED[$i]=0
     fi
   done
 }
 
 rollback_install() {
   echo "error: install failed; rolling back previous suite files if present" >&2
-  if [ -d "$ROLLBACK_ROOT" ]; then
-    (
-      cd "$ROLLBACK_ROOT"
-      find . -type f -print0 2>/dev/null | while IFS= read -r -d '' f; do
-        dest="/${f#./}"
-        mkdir -p "$(dirname "$dest")"
-        cp -a "$f" "$dest" 2>/dev/null || true
-      done
-    )
-  fi
+  local i p
+  for i in "${!MANAGED_PATHS[@]}"; do
+    p="${MANAGED_PATHS[$i]}"
+    rm -rf -- "$p" 2>/dev/null || true
+    if [ "${PREEXISTED[$i]:-0}" = 1 ] && [ -e "$ROLLBACK_ROOT/$i" ]; then
+      mkdir -p "$(dirname "$p")" 2>/dev/null || true
+      cp -a "$ROLLBACK_ROOT/$i" "$p" 2>/dev/null || true
+    fi
+  done
+  # Registration restoration is not visible to systemd until its cache reloads.
+  systemctl --user daemon-reload 2>/dev/null || true
+  for i in "${!ROLLBACK_DIRS[@]}"; do
+    if [ "${DIR_PREEXISTED[$i]:-0}" = 0 ]; then
+      rmdir -- "${ROLLBACK_DIRS[$i]}" 2>/dev/null || true
+    fi
+  done
 }
 
 commit_stage() {
-  mkdir -p "$BIN_DIR" "$LIBEXEC" "$LIB" "$SHARE" "$APP_SHARE" "$ICON_DIR"
-  install -m 755 "$STAGE_ROOT/bin/moraine" "$BIN_DIR/moraine"
+  mkdir -p "$BIN_DIR" "$LIBEXEC" "$LIB" "$SHARE" "$APP_SHARE" "$ICON_DIR" || return 1
+  install -m 755 "$STAGE_ROOT/bin/moraine" "$BIN_DIR/moraine" || return 1
   ACTIONS+=("installed $BIN_DIR/moraine")
-  install -m 755 "$STAGE_ROOT/libexec/moraine/moraine-service" "$LIBEXEC/moraine-service"
+  install -m 755 "$STAGE_ROOT/libexec/moraine/moraine-service" "$LIBEXEC/moraine-service" \
+    || return 1
   ACTIONS+=("installed $LIBEXEC/moraine-service")
   if [ -x "$STAGE_ROOT/lib/moraine/moraine-app" ]; then
-    install -m 755 "$STAGE_ROOT/lib/moraine/moraine-app" "$LIB/moraine-app"
+    install -m 755 "$STAGE_ROOT/lib/moraine/moraine-app" "$LIB/moraine-app" || return 1
     ACTIONS+=("installed $LIB/moraine-app")
   fi
-  mkdir -p "$SHARE"
-  cp -a "$STAGE_ROOT/share/moraine/." "$SHARE/"
+  mkdir -p "$SHARE" || return 1
+  cp -a "$STAGE_ROOT/share/moraine/." "$SHARE/" || return 1
   ACTIONS+=("installed $SHARE")
   if [ -f "$STAGE_ROOT/share/applications/app.moraine.desktop" ]; then
     install -m 644 "$STAGE_ROOT/share/applications/app.moraine.desktop" \
-      "$APP_SHARE/app.moraine.desktop"
+      "$APP_SHARE/app.moraine.desktop" || return 1
     ACTIONS+=("desktop entry")
   fi
   if [ -f "$STAGE_ROOT/share/icons/hicolor/128x128/apps/app.moraine.png" ]; then
     install -m 644 "$STAGE_ROOT/share/icons/hicolor/128x128/apps/app.moraine.png" \
-      "$ICON_DIR/app.moraine.png"
+      "$ICON_DIR/app.moraine.png" || return 1
   fi
-  MORAINE_PREFIX="$PREFIX" "$BIN_DIR/moraine" service install --json >/dev/null
+  MORAINE_PREFIX="$PREFIX" "$BIN_DIR/moraine" service install --json >/dev/null || return 1
   ACTIONS+=("background runtime registration")
 }
 

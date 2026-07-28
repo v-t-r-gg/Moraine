@@ -14,7 +14,10 @@ Early-stage / **beta**. Useful for local dogfood. Not a production multi-tenant 
 
 ## Install (Linux)
 
-No Rust, Node, or source checkout required for normal use. Full detail: **[docs/INSTALL.md](./docs/INSTALL.md)**.
+No Rust, Node, or source checkout is required for normal use. The current Linux
+distribution is still a downloaded archive: extract it and run `install.sh`,
+then use desktop onboarding for project setup. Full detail:
+**[docs/INSTALL.md](./docs/INSTALL.md)**.
 
 ```bash
 tar -xzf moraine-<version>-linux-x86_64.tar.gz
@@ -73,7 +76,7 @@ _Placeholder:_ installed desktop showing **Projects → Runs → Ledger** for a 
 | Append-only correction | **Implemented** (observations, amend, supersede) |
 | Redaction | **Target-scoped ordinary-view withholding** |
 | Discovery desktop | **Implemented** |
-| Stranger-safe Linux install | **C2 candidate** (this PR / pack) |
+| Stranger-safe Linux install | **Implemented (C2)**; archive + install script |
 | Live collaboration | **Legacy/secondary**; unsupported for untrusted networks |
 | Windows | **Planned** |
 | macOS | **Planned** |

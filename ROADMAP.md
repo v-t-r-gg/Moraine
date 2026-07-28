@@ -18,14 +18,23 @@ High-level direction. Product model: [VISION.md](./VISION.md), [ARCHITECTURE.md]
 ## Now
 
 * **C3 — Beta hardening and product-surface freeze** (this branch)  
-  * Complete residual C2 acceptance evidence where environment allows  
-  * Align VISION / ARCHITECTURE / ROADMAP  
-  * Remove leftover Svelte assets; explicit CSP + test  
-  * Eliminate reachable service panics  
-  * Freeze/hide non-ledger surfaces; ledger-first App shell  
-  * Lifecycle smoke (restart, spool, reinstall, uninstall)  
-  * Demo/screenshot path; outside-user install report template  
-  * Decompose App; legacy document route separate from coordinator  
+  * Transactional provisioning, write-ahead service repair, and exact rollback
+  * Desktop ProductCapture onboarding with full `ApplyOutcome` state
+  * Durable canonical-root registry feeding rebuildable discovery
+  * Self-test capture lifecycle without ordinary-run pollution
+  * Complete local/CI-equivalent source gate and Linux package smoke
+  * Reconcile product/install/development documentation
+
+### Validation language
+
+* **Implemented:** present in this branch.
+* **Tested locally:** covered by hermetic Rust/Tauri/frontend tests and the
+  authoritative source gate.
+* **Tested in CI:** only after the corresponding PR checks report success.
+* **Graphical Linux session:** not claimed by headless tests; a real
+  WebKit/systemd user-session lifecycle remains manual acceptance evidence.
+* **Planned:** W1–W3 below.
+* **Deferred:** the explicitly listed capabilities below.
 
 ## Next (ordered)
 

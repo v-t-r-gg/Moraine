@@ -55,6 +55,9 @@ moraine-core
 * Project identity = Moraine project UUID (paths canonicalized and deduplicated).
 * Run summaries and ledger timelines are built in `moraine-core` (single classification path).
 * Service `index.json` is a **cache**: safe to delete and rebuild; never the source of truth for run bytes.
+* The user-data `projects.json` registry stores canonical known project roots
+  only. It survives service/desktop restart and seeds index rebuilds; missing
+  roots remain diagnostic entries. It is not a second run database.
 * Desktop discovery goes through Tauri commands + `src/shared/api` (no direct service URLs from React).
 * Browsing is nonmutating: no schema promotion, no Markdown rewrite, no sidecar mutation.
 
@@ -174,7 +177,10 @@ Desktop CSP is explicit in `src-tauri/tauri.conf.json` (loopback service access 
 
 ## Future direction
 
-Sequence: **C3** surface freeze → **W1** platform abstraction → **W2/W3** Windows portfolio. Second agent adapter is subordinate to that sequence. Blueprint: [docs/DEVELOPMENT_BLUEPRINT_ALIGNED.md](./docs/DEVELOPMENT_BLUEPRINT_ALIGNED.md).
+Sequence: **C3** beta stabilization/surface freeze → **W1** platform
+abstraction → **W2** native Windows 11 → **W3** signed installer and WinGet.
+The second agent adapter follows that sequence. Blueprint:
+[docs/DEVELOPMENT_BLUEPRINT_ALIGNED.md](./docs/DEVELOPMENT_BLUEPRINT_ALIGNED.md).
 
 ## Quality preference
 

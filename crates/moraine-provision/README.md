@@ -9,7 +9,8 @@ CLI stdout for setup/repair.
 
 - `inspect()` → `SystemState`
 - `plan(intent)` → `SetupPlan`
-- `apply(plan)` → `SetupReceipt` (journaled, reverse-order rollback)
+- `apply(plan)` → `ApplyOutcome` (journaled; Ready, DirectVerified,
+  RolledBack, or RollbackRequired)
 - `rollback(receipt)` → restore backups / reverse completed ops
 - `verify(intent)` → end-to-end capture self-test
 - `health()` / `repair(action)` → structured doctor-class checks with Fix actions
@@ -18,3 +19,8 @@ CLI stdout for setup/repair.
 
 - `ServiceManager` — platform-abstracted background capture lifecycle
 - `AgentAdapter` — detect / plan / apply / verify / remove for integrations (Codex first)
+
+Service mutations use write-ahead prestate and attempt markers. Project-local
+ledgers are intentionally retained during rollback and reported as degraded
+retained state. ProductCapture verification proves the real hook/service/run
+path and removes its uniquely bound synthetic run before reporting Ready.

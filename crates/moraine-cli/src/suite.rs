@@ -6,13 +6,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use moraine_core::{BuildIdentity, SuiteManifest};
+use moraine_platform::{HostPlatform, RuntimeLayout, SuiteLayout, UserPaths, DIAGNOSTICS_PORT};
 use serde::Serialize;
 
 /// Default user-scoped install prefix.
 pub fn default_prefix() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".local")
+    moraine_platform::default_prefix(HostPlatform::current())
 }
 
 #[derive(Debug, Clone)]
@@ -30,19 +29,20 @@ pub struct SuitePaths {
 
 impl SuitePaths {
     pub fn from_prefix(prefix: impl AsRef<Path>) -> Self {
-        let prefix = prefix.as_ref().to_path_buf();
-        let share = prefix.join("share/moraine");
+        let layout = SuiteLayout::from_prefix(
+            HostPlatform::current(),
+            prefix.as_ref(),
+            &UserPaths::discover(),
+        );
         Self {
-            cli: prefix.join("bin/moraine"),
-            service: prefix.join("libexec/moraine/moraine-service"),
-            desktop: prefix.join("lib/moraine/moraine-app"),
-            manifest: share.join("manifest.json"),
-            share,
-            unit: dirs::config_dir()
-                .unwrap_or_else(|| PathBuf::from("~/.config"))
-                .join("systemd/user/moraine-service.service"),
-            desktop_entry: prefix.join("share/applications/app.moraine.desktop"),
-            prefix,
+            prefix: layout.prefix,
+            cli: layout.cli,
+            service: layout.service,
+            desktop: layout.desktop,
+            share: layout.share,
+            manifest: layout.manifest,
+            unit: layout.service_registration.unwrap_or_default(),
+            desktop_entry: layout.desktop_registration.unwrap_or_default(),
         }
     }
 
@@ -217,7 +217,7 @@ pub fn collect_version_report() -> VersionReport {
 
 fn probe_service_status() -> (bool, Option<String>, Option<String>) {
     // Loopback diagnostics only; bounded timeout via curl-free native TCP+HTTP/1.0.
-    match http_get_loopback(33111, "/status") {
+    match http_get_loopback(DIAGNOSTICS_PORT, "/status") {
         Ok(body) => {
             let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
             let ver = v
@@ -305,10 +305,10 @@ fn shell_escape_path(p: &Path) -> String {
 }
 
 pub fn default_socket_path() -> PathBuf {
-    env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(env::temp_dir)
-        .join("moraine-service.sock")
+    match RuntimeLayout::discover().capture_endpoint {
+        moraine_platform::CaptureEndpoint::UnixSocket(path) => path,
+        _ => PathBuf::new(),
+    }
 }
 
 pub fn default_http_addr() -> &'static str {

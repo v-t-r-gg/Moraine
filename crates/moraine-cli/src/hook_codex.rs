@@ -44,21 +44,18 @@ pub fn run_hook_codex(socket: Option<PathBuf>, spool_dir: Option<PathBuf>) -> Re
 fn default_socket_path() -> PathBuf {
     std::env::var_os("MORAINE_SOCKET")
         .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("XDG_RUNTIME_DIR")
-                .map(|d| PathBuf::from(d).join("moraine-service.sock"))
-        })
-        .unwrap_or_else(|| std::env::temp_dir().join("moraine-service.sock"))
+        .unwrap_or_else(
+            || match moraine_platform::RuntimeLayout::discover().capture_endpoint {
+                moraine_platform::CaptureEndpoint::UnixSocket(path) => path,
+                _ => PathBuf::new(),
+            },
+        )
 }
 
 fn default_spool_dir() -> PathBuf {
     std::env::var_os("MORAINE_SPOOL_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            dirs::cache_dir()
-                .unwrap_or_else(std::env::temp_dir)
-                .join("moraine-service/spool")
-        })
+        .unwrap_or_else(|| moraine_platform::RuntimeLayout::discover().spool_dir)
 }
 
 fn map_codex_hook(payload: &Value) -> Result<Option<Value>> {

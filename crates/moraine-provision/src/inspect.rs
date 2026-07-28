@@ -22,8 +22,11 @@ pub fn inspect(service: &dyn ServiceManager, scan_roots: &[PathBuf]) -> Result<S
     for root in scan_roots {
         projects.extend(scan_project_candidates(root, 3)?);
     }
-    let readiness = derive_readiness(&suite, &service_state, &agents, &projects);
+    let platform = moraine_platform::PlatformCapabilities::current();
+    let readiness =
+        derive_platform_readiness(&platform, &suite, &service_state, &agents, &projects);
     Ok(SystemState {
+        platform,
         suite,
         service: service_state,
         agents,
@@ -144,6 +147,19 @@ fn push_candidate(out: &mut Vec<ProjectCandidate>, path: &Path) {
     });
 }
 
+fn derive_platform_readiness(
+    platform: &moraine_platform::PlatformCapabilities,
+    suite: &SuiteState,
+    service: &ServiceState,
+    agents: &[DetectedAgent],
+    projects: &[ProjectCandidate],
+) -> Readiness {
+    if !platform.product_ready_supported() {
+        return Readiness::NotConfigured;
+    }
+    derive_readiness(suite, service, agents, projects)
+}
+
 fn derive_readiness(
     suite: &SuiteState,
     service: &ServiceState,
@@ -247,6 +263,27 @@ mod tests {
         assert_eq!(
             derive_readiness(&suite, &service, &agents, &projects),
             Readiness::Degraded
+        );
+    }
+
+    #[test]
+    fn unsupported_platform_cannot_report_ready() {
+        let (suite, service, agents) = ready_environment();
+        let projects = vec![ProjectCandidate {
+            path: "/tmp/project".into(),
+            name: "project".into(),
+            initialized: true,
+            is_git: true,
+            integration_configured: true,
+            integration_needs_repair: false,
+        }];
+        let platform = moraine_platform::PlatformCapabilities::for_host(
+            moraine_platform::HostPlatform::Windows,
+        );
+
+        assert_eq!(
+            derive_platform_readiness(&platform, &suite, &service, &agents, &projects),
+            Readiness::NotConfigured
         );
     }
 }

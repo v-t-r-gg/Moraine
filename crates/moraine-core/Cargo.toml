@@ -9,9 +9,9 @@ description = "Moraine domain library: run-record files, history, rooms, agent-r
 readme = "README.md"
 
 [dependencies]
+moraine-platform.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
-dirs.workspace = true
 notify.workspace = true
 parking_lot.workspace = true
 serde.workspace = true

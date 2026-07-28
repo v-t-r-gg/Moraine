@@ -59,7 +59,25 @@ export interface SuiteStateDto {
   componentsCoherent: boolean;
 }
 
+export type HostPlatformDto = "linux" | "windows" | "mac_os" | "other";
+export type CapabilityStatusDto =
+  | "supported"
+  | "unsupported"
+  | "unavailable"
+  | "degraded";
+
+export interface PlatformCapabilitiesDto {
+  host: HostPlatformDto;
+  userPaths: CapabilityStatusDto;
+  suiteLayout: CapabilityStatusDto;
+  captureTransport: CapabilityStatusDto;
+  backgroundRuntime: CapabilityStatusDto;
+  desktopHost: CapabilityStatusDto;
+  userInstallation: CapabilityStatusDto;
+}
+
 export interface SystemStateDto {
+  platform: PlatformCapabilitiesDto;
   suite: SuiteStateDto;
   service: ServiceStateDto;
   agents: DetectedAgentDto[];
@@ -276,6 +294,15 @@ function browserProvisionStub<T>(cmd: string, _args?: Record<string, unknown>): 
   switch (cmd) {
     case "provision_inspect":
       return {
+        platform: {
+          host: "other",
+          userPaths: "unsupported",
+          suiteLayout: "unsupported",
+          captureTransport: "unsupported",
+          backgroundRuntime: "unsupported",
+          desktopHost: "unsupported",
+          userInstallation: "unsupported",
+        },
         suite: {
           prefix: "",
           cliPath: "",

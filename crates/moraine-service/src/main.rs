@@ -136,11 +136,9 @@ async fn main() -> Result<()> {
         }
     }
 
-    let spool_dir = args.spool_dir.unwrap_or_else(|| {
-        dirs::cache_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("moraine-service/spool")
-    });
+    let spool_dir = args
+        .spool_dir
+        .unwrap_or_else(|| moraine_platform::RuntimeLayout::discover().spool_dir);
     std::fs::create_dir_all(&spool_dir)?;
     #[cfg(unix)]
     {
@@ -163,12 +161,8 @@ async fn main() -> Result<()> {
         );
     }
 
-    let socket_path = args.unix_socket.clone().unwrap_or_else(|| {
-        std::env::var_os("XDG_RUNTIME_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir)
-            .join("moraine-service.sock")
-    });
+    let runtime_layout = moraine_platform::RuntimeLayout::discover();
+    let socket_path = resolve_capture_socket(args.unix_socket.as_deref(), &runtime_layout)?;
     let started_at_unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -198,25 +192,12 @@ async fn main() -> Result<()> {
     );
 
     // Unix domain socket: primary hook/adapter intake (not TCP).
-    if let Some(socket_path) = args.unix_socket {
+    {
         let spool = spool_dir.clone();
         let shutdown_clone = shutdown.clone();
+        let listener_socket = socket_path.clone();
         tokio::spawn(async move {
-            if let Err(e) = unix_listener_loop(socket_path, spool, shutdown_clone).await {
-                error!(error = %e, "unix listener failed");
-            }
-        });
-    } else {
-        // Default to $XDG_RUNTIME_DIR/moraine-service.sock (matches systemd unit).
-        let default_sock = std::env::var_os("XDG_RUNTIME_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir)
-            .join("moraine-service.sock");
-        let spool = spool_dir.clone();
-        let shutdown_clone = shutdown.clone();
-        info!(socket=%default_sock.display(), "binding default unix hook socket");
-        tokio::spawn(async move {
-            if let Err(e) = unix_listener_loop(default_sock, spool, shutdown_clone).await {
+            if let Err(e) = unix_listener_loop(listener_socket, spool, shutdown_clone).await {
                 error!(error = %e, "unix listener failed");
             }
         });
@@ -265,6 +246,19 @@ async fn main() -> Result<()> {
         .await?;
 
     Ok(())
+}
+
+fn resolve_capture_socket(
+    explicit: Option<&std::path::Path>,
+    layout: &moraine_platform::RuntimeLayout,
+) -> Result<PathBuf> {
+    if let Some(path) = explicit {
+        return Ok(path.to_path_buf());
+    }
+    match &layout.capture_endpoint {
+        moraine_platform::CaptureEndpoint::UnixSocket(path) => Ok(path.clone()),
+        endpoint => anyhow::bail!("unsupported capture endpoint for moraine-service: {endpoint:?}"),
+    }
 }
 
 async fn handle_status(State(state): State<AppState>) -> Json<Value> {
@@ -560,4 +554,50 @@ Environment=RUST_LOG=info
 WantedBy=default.target
 "#
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn layout(endpoint: moraine_platform::CaptureEndpoint) -> moraine_platform::RuntimeLayout {
+        moraine_platform::RuntimeLayout {
+            spool_dir: "/tmp/spool".into(),
+            project_registry: "/tmp/projects.json".into(),
+            transaction_journals: "/tmp/journals".into(),
+            diagnostics_endpoint: "127.0.0.1:33111".parse().unwrap(),
+            capture_endpoint: endpoint,
+        }
+    }
+
+    #[test]
+    fn explicit_capture_socket_wins() {
+        let runtime = layout(moraine_platform::CaptureEndpoint::UnixSocket(
+            "/runtime/default.sock".into(),
+        ));
+        assert_eq!(
+            resolve_capture_socket(Some(std::path::Path::new("/explicit.sock")), &runtime).unwrap(),
+            PathBuf::from("/explicit.sock")
+        );
+    }
+
+    #[test]
+    fn layout_capture_socket_is_used_for_status_and_listener() {
+        let runtime = layout(moraine_platform::CaptureEndpoint::UnixSocket(
+            "/runtime/shared.sock".into(),
+        ));
+        assert_eq!(
+            resolve_capture_socket(None, &runtime).unwrap(),
+            PathBuf::from("/runtime/shared.sock")
+        );
+    }
+
+    #[test]
+    fn unsupported_capture_endpoint_fails_explicitly() {
+        let runtime = layout(moraine_platform::CaptureEndpoint::Unsupported);
+        assert!(resolve_capture_socket(None, &runtime)
+            .unwrap_err()
+            .to_string()
+            .contains("unsupported capture endpoint"));
+    }
 }

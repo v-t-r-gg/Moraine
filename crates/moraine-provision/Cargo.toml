@@ -10,6 +10,7 @@ readme = "README.md"
 
 [dependencies]
 moraine-core.workspace = true
+moraine-platform.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 dirs.workspace = true

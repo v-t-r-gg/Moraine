@@ -203,13 +203,34 @@ pub fn verify_with_options(
     intent: &SetupIntent,
     opts: VerifyOptions,
 ) -> Result<VerificationReport> {
+    verify_with_options_and_capabilities(
+        intent,
+        opts,
+        &moraine_platform::PlatformCapabilities::current(),
+    )
+}
+
+#[doc(hidden)]
+pub fn verify_with_options_and_capabilities(
+    intent: &SetupIntent,
+    opts: VerifyOptions,
+    capabilities: &moraine_platform::PlatformCapabilities,
+) -> Result<VerificationReport> {
     match opts.mode {
-        VerificationMode::ProductCapture => verify_product(intent, opts),
+        VerificationMode::ProductCapture => verify_product(intent, opts, capabilities),
         VerificationMode::DirectCoreTest => verify_direct(intent),
     }
 }
 
-fn verify_product(intent: &SetupIntent, opts: VerifyOptions) -> Result<VerificationReport> {
+fn verify_product(
+    intent: &SetupIntent,
+    opts: VerifyOptions,
+    capabilities: &moraine_platform::PlatformCapabilities,
+) -> Result<VerificationReport> {
+    crate::platform_support::ensure_product_capture_supported(
+        capabilities,
+        "product_capture_verify",
+    )?;
     let mut steps = Vec::new();
     let project = &intent.project;
     let suite = SuitePaths::discover();

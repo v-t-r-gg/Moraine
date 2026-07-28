@@ -9,6 +9,7 @@ pub mod health;
 pub mod inspect;
 pub mod journal;
 pub mod plan;
+pub mod platform_support;
 pub mod service;
 pub mod service_ready;
 pub mod snapshot;
@@ -29,6 +30,7 @@ pub use error::{ProvisionError, Result};
 pub use health::{health, health_default, repair, repair_default};
 pub use inspect::{detect_agent, inspect, inspect_default, inspect_suite};
 pub use plan::plan;
+pub use platform_support::ensure_product_capture_supported;
 pub use service::{
     default_service_manager, LinuxSystemdUserService, MemoryServiceManager, ServiceManager,
 };

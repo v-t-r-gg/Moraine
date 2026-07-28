@@ -135,13 +135,15 @@ mod tests {
             .unwrap();
         drop(stream);
 
-        for _ in 0..50 {
-            if spool.join("event-id-capture-test.json").exists() {
-                break;
+        let spooled = spool.join("event-id-capture-test.json");
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !spooled.exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
-            tokio::task::yield_now().await;
-        }
-        assert!(spool.join("event-id-capture-test.json").exists());
+        })
+        .await
+        .expect("listener should materialize the payload before shutdown");
+        assert!(spooled.exists());
 
         shutdown.notify_one();
         task.await.unwrap().unwrap();

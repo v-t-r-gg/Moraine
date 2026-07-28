@@ -28,7 +28,8 @@ export RUSTFLAGS="${RUSTFLAGS:-}"
 
 echo "Building Moraine $VERSION ($COMMIT) for $TARGET"
 
-mkdir -p "$STAGE"/{bin,share/applications,share/icons/hicolor/128x128/apps,share/documentation,systemd,notices}
+rm -rf -- "$STAGE"
+mkdir -p "$STAGE"/{bin,share/applications,share/icons/hicolor/128x128/apps,share/documentation,notices}
 
 echo "==> cargo release binaries"
 cargo build --release -p moraine-cli -p moraine-service
@@ -63,7 +64,8 @@ else
   echo "==> headless package (MORAINE_HEADLESS=1): skipping desktop"
   STAGE="$OUT_DIR/moraine-${VERSION}-linux-x86_64-headless"
   ARCHIVE="$OUT_DIR/moraine-${VERSION}-linux-x86_64-headless.tar.gz"
-  mkdir -p "$STAGE"/{bin,share/applications,share/icons/hicolor/128x128/apps,share/documentation,systemd,notices}
+  rm -rf -- "$STAGE"
+  mkdir -p "$STAGE"/{bin,share/applications,share/icons/hicolor/128x128/apps,share/documentation,notices}
   cp -f "$ROOT/target/release/moraine" "$STAGE/bin/moraine"
   cp -f "$ROOT/target/release/moraine-service" "$STAGE/bin/moraine-service"
   chmod 755 "$STAGE/bin/moraine" "$STAGE/bin/moraine-service"
@@ -91,10 +93,10 @@ if [ -f "$ROOT/src-tauri/icons/128x128.png" ]; then
   cp -f "$ROOT/src-tauri/icons/128x128.png" "$STAGE/share/icons/hicolor/128x128/apps/app.moraine.png"
 fi
 
-cp -f "$ROOT/crates/moraine-service/systemd/moraine-service.service.in" \
-  "$STAGE/systemd/moraine-service.service.in"
 
 cp -f "$ROOT/LICENSE" "$STAGE/LICENSE" 2>/dev/null || true
+cp -f "$ROOT/LICENSE" "$STAGE/share/documentation/LICENSE" 2>/dev/null || true
+cp -f "$ROOT/docs/INSTALL.md" "$STAGE/share/documentation/INSTALL.md" 2>/dev/null || true
 cp -f "$ROOT/SECURITY.md" "$STAGE/share/documentation/SECURITY.md" 2>/dev/null || true
 cp -f "$ROOT/docs/REDACTION.md" "$STAGE/share/documentation/REDACTION.md" 2>/dev/null || true
 cp -f "$ROOT/docs/integrations/CODEX.md" "$STAGE/share/documentation/CODEX.md" 2>/dev/null || true

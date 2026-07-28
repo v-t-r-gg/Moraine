@@ -71,7 +71,7 @@ LIB="$PREFIX/lib/moraine"
 SHARE="$PREFIX/share/moraine"
 APP_SHARE="$PREFIX/share/applications"
 ICON_DIR="$PREFIX/share/icons/hicolor/128x128/apps"
-UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+UNIT="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/moraine-service.service"
 STAGE_ROOT="${TMPDIR:-/tmp}/moraine-install-stage-$$"
 ROLLBACK_ROOT="${TMPDIR:-/tmp}/moraine-install-rollback-$$"
 
@@ -118,12 +118,6 @@ stage_tree() {
     cp -f "$BUNDLE_ROOT/share/icons/hicolor/128x128/apps/app.moraine.png" \
       "$STAGE_ROOT/share/icons/hicolor/128x128/apps/app.moraine.png"
   fi
-  if [ -f "$BUNDLE_ROOT/systemd/moraine-service.service.in" ]; then
-    mkdir -p "$STAGE_ROOT/systemd"
-    sed "s|__MORAINE_SERVICE_BIN__|$LIBEXEC/moraine-service|g" \
-      "$BUNDLE_ROOT/systemd/moraine-service.service.in" \
-      > "$STAGE_ROOT/systemd/moraine-service.service"
-  fi
 }
 
 backup_existing() {
@@ -135,7 +129,7 @@ backup_existing() {
     "$SHARE" \
     "$APP_SHARE/app.moraine.desktop" \
     "$ICON_DIR/app.moraine.png" \
-    "$UNIT_DIR/moraine-service.service"
+    "$UNIT"
   do
     if [ -e "$p" ]; then
       rel=$(printf '%s' "$p" | sed 's|^/||')
@@ -160,7 +154,7 @@ rollback_install() {
 }
 
 commit_stage() {
-  mkdir -p "$BIN_DIR" "$LIBEXEC" "$LIB" "$SHARE" "$APP_SHARE" "$ICON_DIR" "$UNIT_DIR"
+  mkdir -p "$BIN_DIR" "$LIBEXEC" "$LIB" "$SHARE" "$APP_SHARE" "$ICON_DIR"
   install -m 755 "$STAGE_ROOT/bin/moraine" "$BIN_DIR/moraine"
   ACTIONS+=("installed $BIN_DIR/moraine")
   install -m 755 "$STAGE_ROOT/libexec/moraine/moraine-service" "$LIBEXEC/moraine-service"
@@ -181,17 +175,13 @@ commit_stage() {
     install -m 644 "$STAGE_ROOT/share/icons/hicolor/128x128/apps/app.moraine.png" \
       "$ICON_DIR/app.moraine.png"
   fi
-  if [ -f "$STAGE_ROOT/systemd/moraine-service.service" ]; then
-    install -m 644 "$STAGE_ROOT/systemd/moraine-service.service" \
-      "$UNIT_DIR/moraine-service.service"
-    systemctl --user daemon-reload 2>/dev/null || true
-    ACTIONS+=("systemd unit $UNIT_DIR/moraine-service.service")
-  fi
+  MORAINE_PREFIX="$PREFIX" "$BIN_DIR/moraine" service install --json >/dev/null
+  ACTIONS+=("background runtime registration")
 }
 
 if [ "$DRY_RUN" = 1 ]; then
   ACTIONS+=("would stage and install suite under $PREFIX")
-  ACTIONS+=("would write unit with ExecStart=$LIBEXEC/moraine-service")
+  ACTIONS+=("would register background runtime through $BIN_DIR/moraine")
 else
   stage_tree
   backup_existing

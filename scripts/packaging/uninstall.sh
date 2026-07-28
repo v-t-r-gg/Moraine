@@ -39,13 +39,19 @@ rm_path() {
   fi
 }
 
-if [ "$DRY_RUN" = 0 ]; then
+if [ "$DRY_RUN" = 1 ]; then
+  ACTIONS+=("would remove background runtime registration")
+elif [ -x "$PREFIX/bin/moraine" ] \
+  && MORAINE_PREFIX="$PREFIX" "$PREFIX/bin/moraine" service uninstall --json >/dev/null 2>&1
+then
+  ACTIONS+=("removed background runtime registration")
+else
+  # Recovery fallback for a damaged or legacy installation whose CLI cannot run.
   systemctl --user stop moraine-service.service 2>/dev/null || true
   systemctl --user disable moraine-service.service 2>/dev/null || true
-fi
-rm_path "$UNIT"
-if [ "$DRY_RUN" = 0 ]; then
+  rm_path "$UNIT"
   systemctl --user daemon-reload 2>/dev/null || true
+  ACTIONS+=("used legacy runtime-registration cleanup fallback")
 fi
 
 rm_path "$PREFIX/bin/moraine"

@@ -24,7 +24,6 @@ fn stage_min_bundle(stage: &std::path::Path) {
         assert!(st.success());
     }
     fs::create_dir_all(stage.join("bin")).unwrap();
-    fs::create_dir_all(stage.join("systemd")).unwrap();
     fs::create_dir_all(stage.join("share/documentation")).unwrap();
     fs::copy(&moraine, stage.join("bin/moraine")).unwrap();
     fs::copy(
@@ -43,11 +42,6 @@ fn stage_min_bundle(stage: &std::path::Path) {
             fs::set_permissions(&p, perms).unwrap();
         }
     }
-    fs::copy(
-        root.join("crates/moraine-service/systemd/moraine-service.service.in"),
-        stage.join("systemd/moraine-service.service.in"),
-    )
-    .unwrap();
     fs::copy(
         root.join("scripts/packaging/install.sh"),
         stage.join("install.sh"),
@@ -93,6 +87,8 @@ fn install_reinstall_uninstall_preserves_project_ledger() {
     stage_min_bundle(bundle.path());
     let prefix = tempdir().unwrap();
     let xdg = tempdir().unwrap();
+    let cache = tempdir().unwrap();
+    let runtime = tempdir().unwrap();
     let project = tempdir().unwrap();
     fs::create_dir_all(project.path().join(".moraine")).unwrap();
     fs::write(project.path().join(".moraine/keep.txt"), "ledger").unwrap();
@@ -101,6 +97,8 @@ fn install_reinstall_uninstall_preserves_project_ledger() {
         .arg("--prefix")
         .arg(prefix.path())
         .env("XDG_CONFIG_HOME", xdg.path())
+        .env("XDG_CACHE_HOME", cache.path())
+        .env("XDG_RUNTIME_DIR", runtime.path())
         .env("HOME", xdg.path().parent().unwrap()) // not used as prefix
         .output()
         .unwrap();
@@ -117,6 +115,15 @@ fn install_reinstall_uninstall_preserves_project_ledger() {
     assert!(unit.is_file());
     let unit_txt = fs::read_to_string(&unit).unwrap();
     assert!(unit_txt.contains("libexec/moraine/moraine-service"));
+    assert!(unit_txt.contains("--http 127.0.0.1:33111"));
+    assert!(unit_txt.contains(&format!(
+        "--unix-socket {}",
+        runtime.path().join("moraine-service.sock").display()
+    )));
+    assert!(unit_txt.contains(&format!(
+        "--spool-dir {}",
+        cache.path().join("moraine-service/spool").display()
+    )));
     assert!(!unit_txt.contains(".cargo/bin"));
 
     // same-version reinstall
@@ -124,6 +131,8 @@ fn install_reinstall_uninstall_preserves_project_ledger() {
         .arg("--prefix")
         .arg(prefix.path())
         .env("XDG_CONFIG_HOME", xdg.path())
+        .env("XDG_CACHE_HOME", cache.path())
+        .env("XDG_RUNTIME_DIR", runtime.path())
         .output()
         .unwrap();
     assert!(re.status.success());
@@ -132,10 +141,17 @@ fn install_reinstall_uninstall_preserves_project_ledger() {
         .arg("--prefix")
         .arg(prefix.path())
         .env("XDG_CONFIG_HOME", xdg.path())
+        .env("XDG_CACHE_HOME", cache.path())
+        .env("XDG_RUNTIME_DIR", runtime.path())
         .output()
         .unwrap();
     assert!(un.status.success());
+    assert!(
+        !String::from_utf8_lossy(&un.stdout).contains("legacy runtime-registration"),
+        "normal uninstall unexpectedly used legacy fallback"
+    );
     assert!(!cli.exists());
+    assert!(!unit.exists());
     assert!(project.path().join(".moraine/keep.txt").is_file());
 }
 

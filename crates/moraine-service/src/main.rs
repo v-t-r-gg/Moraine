@@ -6,7 +6,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::time::Duration;
@@ -27,9 +27,6 @@ struct AppState {
 #[derive(Parser)]
 #[command(author, version, about = "Moraine local integration runtime")]
 struct Args {
-    #[command(subcommand)]
-    command: Option<ServiceCmd>,
-
     /// Loopback HTTP listen address for diagnostics only (e.g. 127.0.0.1:33111).
     /// Must not bind to non-loopback interfaces. Hook delivery uses the Unix socket.
     #[arg(long, default_value = "127.0.0.1:33111")]
@@ -44,20 +41,6 @@ struct Args {
     spool_dir: Option<PathBuf>,
 }
 
-#[derive(Subcommand)]
-enum ServiceCmd {
-    /// Install a systemd --user unit (Linux)
-    Install,
-    /// Start the service via systemd --user (Linux)
-    Start,
-    /// Stop the service via systemd --user (Linux)
-    Stop,
-    /// Show service status via systemd --user (Linux)
-    Status,
-    /// Print the unit file to stdout
-    UnitFile,
-}
-
 #[derive(Serialize)]
 struct Health {
     status: &'static str,
@@ -68,71 +51,6 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     let args = Args::parse();
-
-    if let Some(cmd) = args.command.as_ref() {
-        // Handle cli-only commands and exit
-        match cmd {
-            ServiceCmd::UnitFile => {
-                println!("{}", systemd_unit());
-                return Ok(());
-            }
-            ServiceCmd::Install => {
-                if cfg!(target_os = "linux") {
-                    let home_unit = dirs::config_dir()
-                        .unwrap_or_else(|| std::path::PathBuf::from("~/.config"))
-                        .join("systemd/user/moraine-service.service");
-                    if let Some(parent) = home_unit.parent() {
-                        std::fs::create_dir_all(parent).ok();
-                    }
-                    std::fs::write(&home_unit, systemd_unit())?;
-                    let _ = std::process::Command::new("systemctl")
-                        .args(["--user", "daemon-reload"])
-                        .status();
-                    println!("wrote unit to {}", home_unit.display());
-                    return Ok(());
-                } else {
-                    println!("install is only supported on Linux/systemd");
-                    return Ok(());
-                }
-            }
-            ServiceCmd::Start => {
-                if cfg!(target_os = "linux") {
-                    let s = std::process::Command::new("systemctl")
-                        .args(["--user", "start", "moraine-service.service"])
-                        .status()?;
-                    println!("systemctl start returned: {}", s);
-                    return Ok(());
-                } else {
-                    println!("start is only supported on Linux/systemd");
-                    return Ok(());
-                }
-            }
-            ServiceCmd::Stop => {
-                if cfg!(target_os = "linux") {
-                    let s = std::process::Command::new("systemctl")
-                        .args(["--user", "stop", "moraine-service.service"])
-                        .status()?;
-                    println!("systemctl stop returned: {}", s);
-                    return Ok(());
-                } else {
-                    println!("stop is only supported on Linux/systemd");
-                    return Ok(());
-                }
-            }
-            ServiceCmd::Status => {
-                if cfg!(target_os = "linux") {
-                    let s = std::process::Command::new("systemctl")
-                        .args(["--user", "status", "moraine-service.service"])
-                        .status()?;
-                    println!("systemctl status returned: {}", s);
-                    return Ok(());
-                } else {
-                    println!("status is only supported on Linux/systemd");
-                    return Ok(());
-                }
-            }
-        }
-    }
 
     let spool_dir = args
         .spool_dir
@@ -488,37 +406,6 @@ async fn spool_processor_loop(spool_dir: PathBuf, shutdown: Arc<Notify>) -> Resu
         }
     }
     Ok(())
-}
-
-/// Render a user unit with an absolute ExecStart for the running binary.
-/// Prefer `moraine service install` from the installed suite CLI.
-fn systemd_unit() -> String {
-    let exec = std::env::current_exe()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|_| "/usr/bin/moraine-service".into());
-    // Refuse to embed private build paths that would pin a checkout target/.
-    let exec = if exec.contains("/target/") {
-        // Fall back to suite layout; installers rewrite absolute paths.
-        "%h/.local/libexec/moraine/moraine-service".into()
-    } else {
-        exec
-    };
-    format!(
-        r#"[Unit]
-Description=Moraine local integration runtime (per-user)
-After=network.target
-
-[Service]
-Type=simple
-ExecStart={exec} --http 127.0.0.1:33111 --unix-socket %t/moraine-service.sock
-Restart=on-failure
-RestartSec=2
-Environment=RUST_LOG=info
-
-[Install]
-WantedBy=default.target
-"#
-    )
 }
 
 #[cfg(test)]

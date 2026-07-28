@@ -27,6 +27,12 @@ pub enum ProvisionError {
     #[error("unsupported agent: {0}")]
     UnsupportedAgent(String),
 
+    #[error("unsupported_platform: {operation} is unsupported on {platform:?}")]
+    UnsupportedPlatform {
+        platform: moraine_platform::HostPlatform,
+        operation: &'static str,
+    },
+
     #[error("service manager: {0}")]
     Service(String),
 

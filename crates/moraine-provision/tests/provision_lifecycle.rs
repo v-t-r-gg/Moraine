@@ -184,6 +184,100 @@ fn direct_verify_never_product_ready() {
 }
 
 #[test]
+fn windows_capabilities_fail_closed_across_product_capture_boundaries() {
+    let dir = tempdir().unwrap();
+    let project = dir.path().join("unsupported-product");
+    fs::create_dir_all(&project).unwrap();
+    moraine_core::init_project(Some(&project)).unwrap();
+    let service = MemoryServiceManager::new();
+    let capabilities =
+        moraine_platform::PlatformCapabilities::for_host(moraine_platform::HostPlatform::Windows);
+
+    let plan_error = moraine_provision::plan::plan_with_capabilities(
+        product_intent(project.clone()),
+        &service,
+        &capabilities,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        plan_error,
+        moraine_provision::ProvisionError::UnsupportedPlatform {
+            operation: "product_capture_plan",
+            ..
+        }
+    ));
+
+    let fake_cli = dir.path().join("moraine");
+    fs::write(&fake_cli, b"fake").unwrap();
+    let approved = plan_with_operations(
+        product_intent(project.clone()),
+        &service,
+        &fake_cli,
+        &[ProvisionOpKind::InitializeProject],
+    );
+    let journal_dir = dir.path().join("journals");
+    let apply_error =
+        moraine_provision::journal::with_journal_dir_override(journal_dir.clone(), || {
+            moraine_provision::apply::apply_with_options_and_capabilities(
+                approved,
+                &service,
+                None,
+                None,
+                &capabilities,
+            )
+            .unwrap_err()
+        });
+    assert!(matches!(
+        apply_error,
+        moraine_provision::ProvisionError::UnsupportedPlatform {
+            operation: "product_capture_apply",
+            ..
+        }
+    ));
+    assert!(
+        !journal_dir.exists(),
+        "unsupported apply must fail before transaction creation"
+    );
+
+    let verify_error = moraine_provision::verify::verify_with_options_and_capabilities(
+        &product_intent(project.clone()),
+        VerifyOptions {
+            mode: VerificationMode::ProductCapture,
+            capture: None,
+            service_probe: None,
+        },
+        &capabilities,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        verify_error,
+        moraine_provision::ProvisionError::UnsupportedPlatform {
+            operation: "product_capture_verify",
+            ..
+        }
+    ));
+
+    let direct = moraine_provision::verify::verify_with_options_and_capabilities(
+        &direct_intent(project),
+        VerifyOptions {
+            mode: VerificationMode::DirectCoreTest,
+            capture: None,
+            service_probe: None,
+        },
+        &capabilities,
+    )
+    .unwrap();
+    assert_ne!(direct.readiness, Readiness::Ready);
+    assert!(
+        matches!(
+            direct.readiness,
+            Readiness::DirectVerified | Readiness::Failed
+        ),
+        "DirectCoreTest remains callable but never becomes Product Ready: {direct:?}"
+    );
+}
+
+#[test]
 fn existing_initialized_project_is_registered_by_successful_apply() {
     let _lock = ENV_LOCK.lock().unwrap();
     let _suite = HermeticSuite::install();

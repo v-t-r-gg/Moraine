@@ -50,6 +50,29 @@ pub fn apply_with_options(
     verify_opts: Option<VerifyOptions>,
     service_probe: Option<std::sync::Arc<dyn ServiceProbe>>,
 ) -> Result<ApplyOutcome> {
+    apply_with_options_and_capabilities(
+        plan,
+        service,
+        verify_opts,
+        service_probe,
+        &moraine_platform::PlatformCapabilities::current(),
+    )
+}
+
+#[doc(hidden)]
+pub fn apply_with_options_and_capabilities(
+    plan: SetupPlan,
+    service: &dyn ServiceManager,
+    verify_opts: Option<VerifyOptions>,
+    service_probe: Option<std::sync::Arc<dyn ServiceProbe>>,
+    capabilities: &moraine_platform::PlatformCapabilities,
+) -> Result<ApplyOutcome> {
+    if !plan.intent.skip_service {
+        crate::platform_support::ensure_product_capture_supported(
+            capabilities,
+            "product_capture_apply",
+        )?;
+    }
     let current = compute_witness(&plan.intent, service, &plan.absolute_cli)?;
     if current != plan.state_witness {
         return Err(ProvisionError::msg(

@@ -13,6 +13,25 @@ use crate::suite::SuitePaths;
 use crate::types::{ProvisionOpKind, ProvisionOperation, ProvisionWarning, SetupIntent, SetupPlan};
 
 pub fn plan(intent: SetupIntent, service: &dyn ServiceManager) -> Result<SetupPlan> {
+    plan_with_capabilities(
+        intent,
+        service,
+        &moraine_platform::PlatformCapabilities::current(),
+    )
+}
+
+#[doc(hidden)]
+pub fn plan_with_capabilities(
+    intent: SetupIntent,
+    service: &dyn ServiceManager,
+    capabilities: &moraine_platform::PlatformCapabilities,
+) -> Result<SetupPlan> {
+    if !intent.skip_service {
+        crate::platform_support::ensure_product_capture_supported(
+            capabilities,
+            "product_capture_plan",
+        )?;
+    }
     let suite = SuitePaths::discover();
     let absolute_cli = suite.absolute_cli();
     if !absolute_cli.is_absolute() {

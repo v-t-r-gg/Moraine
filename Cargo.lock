@@ -2315,7 +2315,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
- "dirs",
  "fs4",
  "hex",
  "moraine-platform",

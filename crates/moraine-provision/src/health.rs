@@ -221,7 +221,10 @@ pub fn repair(action: &RepairAction, service: &dyn ServiceManager) -> Result<Rep
         },
         RepairKind::InitProject => {
             let path = action.project.clone().unwrap_or_else(|| PathBuf::from("."));
-            match moraine_core::init_project(Some(&path)) {
+            match moraine_core::init_project(Some(&path)).and_then(|result| {
+                moraine_core::register_project_root(&result.project_root)?;
+                Ok(result)
+            }) {
                 Ok(_) => Ok(RepairResult {
                     ok: true,
                     action_id: action.id.clone(),
@@ -258,6 +261,7 @@ pub fn repair(action: &RepairAction, service: &dyn ServiceManager) -> Result<Rep
                                 matches!(
                                     o.kind,
                                     crate::types::ProvisionOpKind::InitializeProject
+                                        | crate::types::ProvisionOpKind::RegisterProject
                                         | crate::types::ProvisionOpKind::ConfigureAgent
                                 )
                             })

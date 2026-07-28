@@ -436,7 +436,8 @@ fn verify_product(intent: &SetupIntent, opts: VerifyOptions) -> Result<Verificat
             Readiness::Failed
         },
         steps,
-        run_id: Some(run_id.to_string()),
+        // The synthetic run was intentionally removed after proving discovery.
+        run_id: None,
         project_path: Some(resolved.project_root.display().to_string()),
         user_message: if all_passed {
             "Moraine is ready — capture works end-to-end".into()

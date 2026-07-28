@@ -26,6 +26,8 @@ export interface ProjectCandidateDto {
   name: string;
   initialized: boolean;
   isGit: boolean;
+  integrationConfigured: boolean;
+  integrationNeedsRepair: boolean;
 }
 
 export interface ServiceStateDto {
@@ -133,6 +135,7 @@ export interface SetupReceiptDto {
   transactionStartedService: boolean;
   transactionWroteUnit: boolean;
   transactionInitializedProject: boolean;
+  transactionRegisteredProject: boolean;
   readiness: string;
   failedOperation?: string | null;
   error?: string | null;

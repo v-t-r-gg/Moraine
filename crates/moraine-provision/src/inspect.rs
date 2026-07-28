@@ -120,6 +120,14 @@ fn push_candidate(out: &mut Vec<ProjectCandidate>, path: &Path) {
         .unwrap_or("project")
         .to_string();
     let initialized = resolve_existing_project(Some(path)).is_ok();
+    let integration = initialized
+        .then(|| crate::agent::adapter_for(AgentKind::Codex).inspect(path))
+        .transpose();
+    let (integration_configured, integration_needs_repair) = match integration {
+        Ok(Some(state)) => (state.configured, state.needs_repair),
+        Ok(None) => (false, false),
+        Err(_) => (false, true),
+    };
     let is_git = path.join(".git").exists();
     // Avoid duplicates
     let s = path.display().to_string();
@@ -131,6 +139,8 @@ fn push_candidate(out: &mut Vec<ProjectCandidate>, path: &Path) {
         name,
         initialized,
         is_git,
+        integration_configured,
+        integration_needs_repair,
     });
 }
 
@@ -147,7 +157,11 @@ fn derive_readiness(
         && service.running
         && service.endpoint_ready
         && agents.iter().any(|a| a.detected)
-        && projects.iter().any(|project| project.initialized)
+        && projects.iter().any(|project| {
+            project.initialized
+                && project.integration_configured
+                && !project.integration_needs_repair
+        })
     {
         return Readiness::Ready;
     }
@@ -171,4 +185,68 @@ pub fn detect_agent(kind: AgentKind) -> Result<DetectedAgent> {
         status: d.status,
         status_message: d.status_message,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ready_environment() -> (SuiteState, ServiceState, Vec<DetectedAgent>) {
+        (
+            SuiteState {
+                prefix: "/tmp".into(),
+                cli_path: "/tmp/moraine".into(),
+                cli_present: true,
+                service_path: "/tmp/moraine-service".into(),
+                service_present: true,
+                desktop_path: "/tmp/moraine-app".into(),
+                desktop_present: true,
+                manifest_path: "/tmp/manifest.json".into(),
+                manifest_present: true,
+                version: Some("0.1.0".into()),
+                components_coherent: true,
+            },
+            ServiceState {
+                installed: true,
+                binary_present: true,
+                registration_present: true,
+                registration_valid: true,
+                running: true,
+                autostart_enabled: true,
+                endpoint_ready: true,
+                binary_path: Some("/tmp/moraine-service".into()),
+                unit_path: Some("/tmp/moraine-service.service".into()),
+                version: Some("0.1.0".into()),
+                status_message: "ready".into(),
+                platform: "test".into(),
+            },
+            vec![DetectedAgent {
+                kind: AgentKind::Codex,
+                id: "codex".into(),
+                display_name: "Codex".into(),
+                detected: true,
+                executable: Some("/tmp/codex".into()),
+                version: Some("test".into()),
+                status: "readyToConnect".into(),
+                status_message: "detected".into(),
+            }],
+        )
+    }
+
+    #[test]
+    fn initialized_registered_project_without_codex_config_is_not_ready() {
+        let dir = tempfile::tempdir().unwrap();
+        moraine_core::init_project(Some(dir.path())).unwrap();
+        let mut projects = Vec::new();
+        push_candidate(&mut projects, dir.path());
+        assert_eq!(projects.len(), 1);
+        assert!(projects[0].initialized);
+        assert!(!projects[0].integration_configured);
+
+        let (suite, service, agents) = ready_environment();
+        assert_eq!(
+            derive_readiness(&suite, &service, &agents, &projects),
+            Readiness::Degraded
+        );
+    }
 }

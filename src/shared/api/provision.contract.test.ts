@@ -13,6 +13,7 @@ function checkedOutcome(value: typeof fixture): ApplyOutcomeDto {
   expect(value.receipt.transactionStartedService).toBe(true);
   expect(value.receipt.transactionWroteUnit).toBe(true);
   expect(value.receipt.transactionInitializedProject).toBe(true);
+  expect(value.receipt.transactionRegisteredProject).toBe(true);
   expect(value.receipt.retainedChanges).toHaveLength(1);
   return value as ApplyOutcomeDto;
 }

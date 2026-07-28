@@ -116,6 +116,10 @@ pub struct ProjectCandidate {
     pub name: String,
     pub initialized: bool,
     pub is_git: bool,
+    #[serde(default)]
+    pub integration_configured: bool,
+    #[serde(default)]
+    pub integration_needs_repair: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,6 +137,7 @@ pub struct SetupIntent {
 #[serde(rename_all = "camelCase")]
 pub enum ProvisionOpKind {
     InitializeProject,
+    RegisterProject,
     ConfigureAgent,
     InstallService,
     EnableAutostart,
@@ -144,6 +149,7 @@ impl ProvisionOpKind {
     pub fn id(self) -> &'static str {
         match self {
             Self::InitializeProject => "initialize_project",
+            Self::RegisterProject => "register_project",
             Self::ConfigureAgent => "configure_agent",
             Self::InstallService => "install_service",
             Self::EnableAutostart => "enable_autostart",
@@ -156,6 +162,7 @@ impl ProvisionOpKind {
     pub fn product_label(self) -> &'static str {
         match self {
             Self::InitializeProject => "Preparing project records",
+            Self::RegisterProject => "Remembering project",
             Self::ConfigureAgent => "Connecting coding agent",
             Self::InstallService => "Enabling background capture",
             Self::EnableAutostart => "Keeping capture available after restart",
@@ -353,6 +360,9 @@ pub struct SetupReceipt {
     /// Rollback intentionally retains ledgers rather than deleting user records.
     #[serde(default)]
     pub transaction_initialized_project: bool,
+    /// True when this transaction added the root to the rebuildable project registry.
+    #[serde(default)]
+    pub transaction_registered_project: bool,
     pub readiness: Readiness,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failed_operation: Option<String>,

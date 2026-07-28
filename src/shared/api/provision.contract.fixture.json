@@ -47,6 +47,7 @@
     "transactionStartedService": true,
     "transactionWroteUnit": true,
     "transactionInitializedProject": true,
+    "transactionRegisteredProject": true,
     "readiness": "rollbackRequired",
     "failedOperation": "install_service",
     "error": "rollback failed",

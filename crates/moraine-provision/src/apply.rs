@@ -69,6 +69,7 @@ pub fn apply_with_options(
         transaction_started_service: false,
         transaction_wrote_unit: false,
         transaction_initialized_project: false,
+        transaction_registered_project: false,
         readiness: Readiness::NotConfigured,
         failed_operation: None,
         error: None,
@@ -88,12 +89,27 @@ pub fn apply_with_options(
                     let r = init_project(Some(&plan.intent.project))
                         .map_err(|e| ProvisionError::msg(e.to_string()))?;
                     receipt.transaction_initialized_project = r.created;
-                    moraine_core::register_project_root(&r.project_root)
-                        .map_err(|e| ProvisionError::msg(e.to_string()))?;
                     Ok(format!(
                         "project ready at {} (created={})",
                         r.project_root.display(),
                         r.created
+                    ))
+                }
+                ProvisionOpKind::RegisterProject => {
+                    let resolved =
+                        moraine_core::resolve_existing_project(Some(&plan.intent.project))
+                            .map_err(|e| ProvisionError::msg(e.to_string()))?;
+                    let canonical = std::fs::canonicalize(&resolved.project_root)?;
+                    let was_registered = moraine_core::registered_project_roots()
+                        .map_err(|e| ProvisionError::msg(e.to_string()))?
+                        .iter()
+                        .any(|root| root == &canonical);
+                    moraine_core::register_project_root(&resolved.project_root)
+                        .map_err(|e| ProvisionError::msg(e.to_string()))?;
+                    receipt.transaction_registered_project = !was_registered;
+                    Ok(format!(
+                        "registered project at {}",
+                        resolved.project_root.display()
                     ))
                 }
                 ProvisionOpKind::ConfigureAgent => {
@@ -357,6 +373,11 @@ pub fn rollback_completed_operations(
     let mut retained = Vec::new();
     if receipt.transaction_initialized_project {
         retained.push("Project records were retained to avoid deleting ledger data.".into());
+    }
+    if receipt.transaction_registered_project {
+        retained.push(
+            "Project discovery registration was retained so the ledger remains findable.".into(),
+        );
     }
     let pre = receipt.service_prestate.as_ref();
 

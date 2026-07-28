@@ -41,6 +41,11 @@ pub fn plan(intent: SetupIntent, service: &dyn ServiceManager) -> Result<SetupPl
             display_name(&intent.project)
         ));
     }
+    operations.push(op(
+        ProvisionOpKind::RegisterProject,
+        format!("Remember {}", intent.project.display()),
+        false,
+    ));
 
     let adapter = adapter_for(intent.agent);
     let det = adapter.detect()?;

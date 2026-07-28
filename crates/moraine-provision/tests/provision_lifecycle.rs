@@ -184,6 +184,57 @@ fn direct_verify_never_product_ready() {
 }
 
 #[test]
+fn existing_initialized_project_is_registered_by_successful_apply() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let _suite = HermeticSuite::install();
+    let dir = tempdir().unwrap();
+    let data_home = dir.path().join("data");
+    let previous_data_home = std::env::var_os("XDG_DATA_HOME");
+    std::env::set_var("XDG_DATA_HOME", &data_home);
+    let project = dir.path().join("existing");
+    fs::create_dir_all(&project).unwrap();
+    moraine_core::init_project(Some(&project)).unwrap();
+    assert!(!data_home.join("moraine/projects.json").exists());
+    let service = MemoryServiceManager::new();
+
+    let approved = plan(direct_intent(project.clone()), &service).unwrap();
+    assert!(approved
+        .operations
+        .iter()
+        .any(|operation| operation.kind == ProvisionOpKind::RegisterProject));
+    assert!(!approved
+        .operations
+        .iter()
+        .any(|operation| operation.kind == ProvisionOpKind::InitializeProject));
+    let outcome = apply(approved, &service).unwrap();
+
+    if let Some(value) = previous_data_home {
+        std::env::set_var("XDG_DATA_HOME", value);
+    } else {
+        std::env::remove_var("XDG_DATA_HOME");
+    }
+    assert!(
+        matches!(outcome, ApplyOutcome::DirectVerified { .. }),
+        "{outcome:?}"
+    );
+    let registry =
+        moraine_core::read_project_registry_at(&data_home.join("moraine/projects.json")).unwrap();
+    assert_eq!(registry.projects.len(), 1);
+    assert_eq!(
+        PathBuf::from(&registry.projects[0].root),
+        fs::canonicalize(&project).unwrap()
+    );
+    let reloaded =
+        moraine_core::read_project_registry_at(&data_home.join("moraine/projects.json")).unwrap();
+    assert_eq!(reloaded.projects[0].root, registry.projects[0].root);
+    let summary = moraine_core::summarize_project(Path::new(&reloaded.projects[0].root)).unwrap();
+    assert_eq!(
+        summary.root_path,
+        fs::canonicalize(project).unwrap().display().to_string()
+    );
+}
+
+#[test]
 fn product_happy_path_ready_with_injected_service_and_capture() {
     let _lock = ENV_LOCK.lock().unwrap();
     let _suite = HermeticSuite::install();
@@ -751,6 +802,7 @@ fn rollback_restores_exact_snapshot_without_semantic_remove_after() {
         transaction_started_service: false,
         transaction_wrote_unit: false,
         transaction_initialized_project: false,
+        transaction_registered_project: false,
         readiness: Readiness::RollbackRequired,
         failed_operation: Some("configure_agent".into()),
         error: Some("test".into()),
@@ -1172,6 +1224,40 @@ fn service_lifecycle_and_health_repair() {
 }
 
 #[test]
+fn project_init_health_repair_registers_project() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let dir = tempdir().unwrap();
+    let data_home = dir.path().join("data");
+    let previous_data_home = std::env::var_os("XDG_DATA_HOME");
+    std::env::set_var("XDG_DATA_HOME", &data_home);
+    let project = dir.path().join("health-init");
+    fs::create_dir_all(&project).unwrap();
+    let action = RepairAction {
+        id: "repair.init_project".into(),
+        label: "Fix".into(),
+        kind: RepairKind::InitProject,
+        project: Some(project.clone()),
+        agent: None,
+    };
+
+    let result = moraine_provision::repair(&action, &MemoryServiceManager::new()).unwrap();
+
+    if let Some(value) = previous_data_home {
+        std::env::set_var("XDG_DATA_HOME", value);
+    } else {
+        std::env::remove_var("XDG_DATA_HOME");
+    }
+    assert!(result.ok, "{result:?}");
+    let registry =
+        moraine_core::read_project_registry_at(&data_home.join("moraine/projects.json")).unwrap();
+    assert_eq!(registry.projects.len(), 1);
+    assert_eq!(
+        PathBuf::from(&registry.projects[0].root),
+        fs::canonicalize(project).unwrap()
+    );
+}
+
+#[test]
 fn plan_installs_when_not_registered() {
     let svc = MemoryServiceManager::new();
     let dir = tempdir().unwrap();
@@ -1188,6 +1274,7 @@ fn plan_installs_when_not_registered() {
 fn product_progress_labels_have_no_infra_jargon() {
     for kind in [
         ProvisionOpKind::InitializeProject,
+        ProvisionOpKind::RegisterProject,
         ProvisionOpKind::ConfigureAgent,
         ProvisionOpKind::InstallService,
         ProvisionOpKind::EnableAutostart,

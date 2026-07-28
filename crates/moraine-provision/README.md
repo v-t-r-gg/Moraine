@@ -24,3 +24,6 @@ Service mutations use write-ahead prestate and attempt markers. Project-local
 ledgers are intentionally retained during rollback and reported as degraded
 retained state. ProductCapture verification proves the real hook/service/run
 path and removes its uniquely bound synthetic run before reporting Ready.
+New project-discovery registrations are also retained after a later setup
+failure so an existing ledger does not disappear; the receipt reports that
+retained rebuildable metadata explicitly.

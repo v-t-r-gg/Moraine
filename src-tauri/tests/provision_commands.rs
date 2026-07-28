@@ -132,6 +132,7 @@ fn rust_and_typescript_apply_outcome_fixture_round_trips() {
         "transactionStartedService",
         "transactionWroteUnit",
         "transactionInitializedProject",
+        "transactionRegisteredProject",
         "retainedChanges",
     ] {
         assert!(

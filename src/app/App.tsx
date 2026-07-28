@@ -40,7 +40,12 @@ export function App() {
           typeof sessionStorage !== "undefined" &&
           sessionStorage.getItem(ONBOARDING_DISMISSED_KEY) === "1";
         // Product readiness requires a configured project, not merely a running service.
-        const hasConfiguredProject = st.projects.some((project) => project.initialized);
+        const hasConfiguredProject = st.projects.some(
+          (project) =>
+            project.initialized &&
+            project.integrationConfigured &&
+            !project.integrationNeedsRepair,
+        );
         const needs =
           !hasConfiguredProject ||
           st.readiness !== "ready" ||

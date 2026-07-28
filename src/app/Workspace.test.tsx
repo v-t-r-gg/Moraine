@@ -221,7 +221,7 @@ describe("Workspace discovery shell", () => {
     projectsMock.mockResolvedValue([]);
     render(<Workspace />);
     await waitFor(() => {
-      expect(screen.getByText(/No Moraine projects found/i)).toBeInTheDocument();
+      expect(screen.getByText(/No projects yet/i)).toBeInTheDocument();
     });
   });
 
@@ -326,7 +326,7 @@ describe("ProjectList empty + offline", () => {
       />,
     );
     expect(screen.getByText(/Service offline/i)).toBeInTheDocument();
-    expect(screen.getByText(/No Moraine projects found/i)).toBeInTheDocument();
+    expect(screen.getByText(/No projects yet/i)).toBeInTheDocument();
   });
 });
 

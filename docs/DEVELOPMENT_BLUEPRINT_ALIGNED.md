@@ -11,15 +11,15 @@ This document supersedes earlier blueprint versions where they conflict.
 
 ## 1. Current implementation status
 
-At the time of this revision:
+At the time of this revision, M0–M5, C1, and C2 are implemented. The active
+work is **C3 — beta hardening and product-surface freeze**: transactional
+provisioning, truthful ProductCapture onboarding, durable root discovery,
+service/package hardening, and closure of the frozen ledger-first surface.
 
-- **Milestone 0 — Vision realignment and decision de-centering** is merged on `main`.
-- **Milestone 1 — Local MCP transport and Codex integration** is merged on `main`.
-- **Milestone 2 — Local integration runtime and deterministic session capture** is **in progress** on `main`:
-  - local service with Unix-socket intake, bounded spool, dedupe, index rebuild, and systemd `--user` helpers;
-  - core provisional-run create/confirm with capture coverage and session envelopes;
-  - Codex hook adapter (`moraine hook-codex`) for SessionStart / UserPromptSubmit / Stop.
-- Remaining M2 work includes desktop notifications, fuller diagnostics/`doctor`, and dogfood hardening against live Codex hook payloads.
+Local hermetic tests and CI checks are distinct from a real graphical Linux
+session. The archive/install-script package is implemented; an actual
+WebKit desktop plus interactive systemd user-session lifecycle remains manual
+acceptance evidence and must not be inferred from headless tests.
 
 The architectural requirement remains an always-available **local integration runtime** that allows deterministic capture while the desktop is closed.
 
@@ -1334,10 +1334,14 @@ Before merge:
 
 ## 21. Immediate next action
 
-1. Continue **Milestone 2** dogfood: run `moraine-service` with the desktop closed, configure Codex hooks, confirm provisional → MCP `run_start` reconciliation on a real task.
-2. Add desktop notification queue and richer `doctor`/diagnostics once the capture path is stable in daily use.
-3. Do not jump directly to a standalone `moraine exec` milestone before the capture runtime is dogfooded; evidence capture (M3) should build on the runtime and hook event model.
-4. Keep live collaboration, hosted web, approval semantics, and broad observability out of scope.
+1. Close **C3** through full source checks, release-package smoke, PR CI, and
+   clearly labeled manual graphical/systemd acceptance evidence.
+2. Begin **W1 — platform abstraction** only after C3 closes.
+3. Continue in order with **W2 — native Windows 11**, then **W3 — signed
+   installer and WinGet**.
+4. Start a second agent adapter only after W1–W3. Keep live collaboration,
+   hosted web, approval semantics, broad evidence expansion, and semantic search
+   deferred.
 
 The guiding sequence is:
 
@@ -1354,7 +1358,15 @@ Human findings and agent amendments
         ↓
 Ledger-focused desktop discovery and UX
         ↓
-Second agent integration, packaging, and external beta
+C3 beta stabilization and surface freeze
+        ↓
+W1 platform abstraction
+        ↓
+W2 native Windows 11
+        ↓
+W3 signed installer and WinGet
+        ↓
+Second agent integration
 ```
 
 ---

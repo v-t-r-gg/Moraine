@@ -66,10 +66,12 @@ Implemented:
 * Agent run protocol + MCP (including findings tools)  
 * Mechanical Codex hooks + spool  
 * Discovery desktop + offline direct inspection  
-* Stranger-safe Linux install (C2 candidate → on main)  
+* Stranger-safe Linux install suite (C2, on `main`)
 * Append-only correction and target-scoped redaction  
 
-C3 focus: **surface freeze**, CSP, service hardening, lifecycle validation, App decomposition.
+C3 focus: **beta stabilization and closure**: transactional provisioning,
+truthful desktop onboarding, durable project discovery, service/package hardening,
+and the frozen ledger-first surface.
 
 ## Explicit non-goals (near term)
 

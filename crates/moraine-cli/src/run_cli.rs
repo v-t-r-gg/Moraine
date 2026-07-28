@@ -116,7 +116,12 @@ pub fn dispatch_project(cmd: ProjectCmd) -> Result<i32> {
         ProjectCmd::Init { path, json } => {
             // Project commands always use JSON envelope when --json; default json true for agents
             let result = match init_project(path.as_deref()) {
-                Ok(r) => r,
+                Ok(r) => {
+                    if let Err(e) = moraine_core::register_project_root(&r.project_root) {
+                        return Ok(emit_core(json, &e));
+                    }
+                    r
+                }
                 Err(e) => return Ok(emit_core(json, &e)),
             };
             if json {

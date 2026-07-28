@@ -1,10 +1,13 @@
-import { lazy, Suspense, useCallback, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { Workspace } from "@/app/Workspace";
 import { ServiceHealthBanner } from "@/app/ServiceHealthBanner";
 import { useProductBootstrap } from "@/app/useProductBootstrap";
 import { SURFACE_LEGACY_DOCUMENT } from "@/app/surfaceFreeze";
 import { StatusBar } from "@/features/shell/StatusBar";
+import { OnboardingWizard } from "@/features/onboarding/OnboardingWizard";
+import { HealthPanel } from "@/features/onboarding/HealthPanel";
 import { pickMarkdownFile, isTauri } from "@/shared/api";
+import { provisionInspect } from "@/shared/api/provision";
 
 /** Lazy: keeps Yjs/editor out of the main ledger coordinator bundle path. */
 const LegacyDocumentApp = lazy(async () => {
@@ -12,15 +15,55 @@ const LegacyDocumentApp = lazy(async () => {
   return { default: m.LegacyDocumentApp };
 });
 
+const ONBOARDING_DISMISSED_KEY = "moraine.onboarding.dismissed.this-session";
+
 /**
  * C3 installed-product shell:
- *   bootstrap → service health → ledger workspace
+ *   bootstrap → first-run wizard (if needed) → service health → ledger workspace
  *   optional legacy document route (collab frozen; secondary only)
  */
 export function App() {
   const bootstrap = useProductBootstrap();
-  const [route, setRoute] = useState<"ledger" | "legacy">("ledger");
+  const [route, setRoute] = useState<"ledger" | "legacy" | "onboarding">("ledger");
   const [legacyPath, setLegacyPath] = useState<string | null>(null);
+  const [showHealth, setShowHealth] = useState(false);
+  const [enabledProject, setEnabledProject] = useState<string | null>(null);
+  const [onboardingChecked, setOnboardingChecked] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const st = await provisionInspect();
+        if (cancelled) return;
+        const dismissed =
+          typeof sessionStorage !== "undefined" &&
+          sessionStorage.getItem(ONBOARDING_DISMISSED_KEY) === "1";
+        // Product readiness requires a configured project, not merely a running service.
+        const hasConfiguredProject = st.projects.some(
+          (project) =>
+            project.initialized &&
+            project.integrationConfigured &&
+            !project.integrationNeedsRepair,
+        );
+        const needs =
+          !hasConfiguredProject ||
+          st.readiness !== "ready" ||
+          !st.service.registrationValid ||
+          !st.service.endpointReady;
+        if (needs && !dismissed) {
+          setRoute("onboarding");
+        }
+      } catch {
+        // stay on ledger
+      } finally {
+        if (!cancelled) setOnboardingChecked(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const openLegacyDocument = useCallback(async () => {
     if (!SURFACE_LEGACY_DOCUMENT) return;
@@ -35,6 +78,32 @@ export function App() {
       setRoute("legacy");
     }
   }, []);
+
+  if (route === "onboarding") {
+    return (
+      <div className="h-screen" data-testid="product-shell">
+        <OnboardingWizard
+          onComplete={(projectPath) => {
+            try {
+              sessionStorage.removeItem(ONBOARDING_DISMISSED_KEY);
+            } catch {
+              /* ignore */
+            }
+            setEnabledProject(projectPath);
+            setRoute("ledger");
+          }}
+          onDismiss={() => {
+            try {
+              sessionStorage.setItem(ONBOARDING_DISMISSED_KEY, "1");
+            } catch {
+              /* ignore */
+            }
+            setRoute("ledger");
+          }}
+        />
+      </div>
+    );
+  }
 
   if (route === "legacy" && SURFACE_LEGACY_DOCUMENT) {
     return (
@@ -72,6 +141,32 @@ export function App() {
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="rounded px-2 py-1 text-[11px] font-medium"
+            style={{
+              border: "1px solid var(--border)",
+              background: "var(--bg)",
+              color: "var(--fg)",
+            }}
+            onClick={() => setRoute("onboarding")}
+            data-testid="enable-moraine-btn"
+          >
+            Enable Moraine…
+          </button>
+          <button
+            type="button"
+            className="rounded px-2 py-1 text-[11px] font-medium"
+            style={{
+              border: "1px solid var(--border)",
+              background: showHealth ? "var(--accent-soft)" : "var(--bg)",
+              color: "var(--muted)",
+            }}
+            onClick={() => setShowHealth((v) => !v)}
+            data-testid="health-toggle"
+          >
+            Health
+          </button>
           {SURFACE_LEGACY_DOCUMENT ? (
             <button
               type="button"
@@ -102,8 +197,18 @@ export function App() {
         </div>
       ) : null}
 
-      <div className="min-h-0 flex-1">
-        <Workspace />
+      <div className="flex min-h-0 flex-1">
+        <div className="min-w-0 flex-1">
+          <Workspace focusProjectPath={enabledProject} />
+        </div>
+        {showHealth ? (
+          <aside
+            className="w-72 shrink-0 overflow-auto border-l p-3"
+            style={{ borderColor: "var(--border)", background: "var(--panel)" }}
+          >
+            <HealthPanel projectPath={enabledProject} />
+          </aside>
+        ) : null}
       </div>
 
       <StatusBar
@@ -117,11 +222,13 @@ export function App() {
         pendingSuggestions={0}
         orphanedMarks={0}
         message={
-          bootstrap.ready
-            ? bootstrap.service?.online
-              ? "Ledger workspace · capture may continue with desktop closed"
-              : "Ledger workspace · service offline (direct discovery)"
-            : "Starting…"
+          !onboardingChecked
+            ? "Starting…"
+            : bootstrap.ready
+              ? bootstrap.service?.online
+                ? "Ledger workspace · capture may continue with desktop closed"
+                : "Ledger workspace · service offline (direct discovery)"
+              : "Starting…"
         }
       />
     </div>

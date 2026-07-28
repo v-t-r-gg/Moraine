@@ -1,0 +1,61 @@
+{
+  "outcome": "rollbackRequired",
+  "receipt": {
+    "transactionId": "00000000-0000-0000-0000-000000000017",
+    "intent": {
+      "project": "/tmp/moraine-contract-project",
+      "agent": "codex",
+      "enableAutostart": true,
+      "skipService": false
+    },
+    "completed": [
+      {
+        "id": "install_service",
+        "kind": "installService",
+        "productLabel": "Enabling background capture",
+        "success": false,
+        "message": "injected failure",
+        "technicalDetail": "injected failure"
+      }
+    ],
+    "snapshots": [
+      {
+        "kind": "existing",
+        "path": "/tmp/config.toml",
+        "backupPath": "/tmp/config.toml.bak",
+        "originalHash": "abc123",
+        "createdAt": "2026-07-27T00:00:00Z"
+      },
+      {
+        "kind": "absent",
+        "path": "/tmp/hooks.json",
+        "createdAt": "2026-07-27T00:00:00Z"
+      }
+    ],
+    "servicePrestate": {
+      "registration": {
+        "kind": "existing",
+        "path": "/tmp/moraine-service.service",
+        "backupPath": "/tmp/moraine-service.service.bak",
+        "originalHash": "def456",
+        "createdAt": "2026-07-27T00:00:00Z"
+      },
+      "wasRunning": true,
+      "autostartWasEnabled": true
+    },
+    "transactionEnabledAutostart": true,
+    "transactionStartedService": true,
+    "transactionWroteUnit": true,
+    "transactionInitializedProject": true,
+    "transactionRegisteredProject": true,
+    "readiness": "rollbackRequired",
+    "failedOperation": "install_service",
+    "error": "rollback failed",
+    "retainedChanges": [
+      "Project records were retained to avoid deleting ledger data."
+    ],
+    "journalPath": "/tmp/transaction.json"
+  },
+  "originalError": "install failed",
+  "rollbackError": "prior service restart failed"
+}

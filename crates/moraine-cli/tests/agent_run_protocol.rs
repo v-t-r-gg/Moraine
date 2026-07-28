@@ -25,6 +25,33 @@ fn run_json(args: &[&str]) -> (i32, serde_json::Value, String) {
 }
 
 #[test]
+fn project_init_registers_canonical_root() {
+    let dir = tempdir().unwrap();
+    let project = dir.path().join("project");
+    let data_home = dir.path().join("data");
+    fs::create_dir_all(&project).unwrap();
+
+    let output = Command::new(cli_bin())
+        .args(["project", "init", project.to_str().unwrap(), "--json"])
+        .env("XDG_DATA_HOME", &data_home)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let registry =
+        moraine_core::read_project_registry_at(&data_home.join("moraine/projects.json")).unwrap();
+    assert_eq!(registry.projects.len(), 1);
+    assert_eq!(
+        PathBuf::from(&registry.projects[0].root),
+        fs::canonicalize(project).unwrap()
+    );
+}
+
+#[test]
 fn project_init_and_run_lifecycle_cli() {
     let dir = tempdir().unwrap();
     let root = dir.path().to_str().unwrap();

@@ -559,12 +559,38 @@ pub async fn rebuild_index(
     out_file: std::path::PathBuf,
     max_depth: usize,
 ) -> Result<()> {
+    let roots = moraine_core::scan_project_roots(&base, max_depth);
+    rebuild_index_for_roots(roots, out_file).await
+}
+
+/// Rebuild from the durable user-level project registry. Missing roots are
+/// retained as diagnostic entries; project-local bundles remain canonical.
+pub async fn rebuild_registered_index(out_file: std::path::PathBuf) -> Result<()> {
+    let roots = moraine_core::registered_project_roots()?;
+    rebuild_index_for_roots(roots, out_file).await
+}
+
+pub async fn rebuild_index_from_registry(
+    registry_path: std::path::PathBuf,
+    out_file: std::path::PathBuf,
+) -> Result<()> {
+    let roots = moraine_core::read_project_registry_at(&registry_path)?
+        .projects
+        .into_iter()
+        .map(|entry| std::path::PathBuf::from(entry.root))
+        .collect();
+    rebuild_index_for_roots(roots, out_file).await
+}
+
+pub async fn rebuild_index_for_roots(
+    roots: Vec<std::path::PathBuf>,
+    out_file: std::path::PathBuf,
+) -> Result<()> {
     use serde_json::json;
     use std::fs;
 
     // Preserve monotonic revision when rewriting the rebuildable cache only.
     let prev_revision = read_index_revision_from_file(&out_file);
-    let roots = moraine_core::scan_project_roots(&base, max_depth);
     let mut projects = vec![];
     for root in roots {
         match moraine_core::summarize_project(&root) {

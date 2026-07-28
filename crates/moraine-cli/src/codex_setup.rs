@@ -125,6 +125,7 @@ fn apply_codex(project: &Path, dry_run: bool, check_only: bool) -> Result<Value>
     let codex_dir = project.join(".codex");
     let cfg_path = codex_dir.join("config.toml");
     let hooks_path = codex_dir.join("hooks.json");
+    // Prefer suite-owned absolute path so capture does not depend on shell PATH.
     let cli = which_moraine();
     let cli_s = cli.display().to_string();
     let project_s = project.display().to_string();
@@ -414,6 +415,12 @@ fn canonicalize_project(project: &Path) -> Result<PathBuf> {
 }
 
 fn which_moraine() -> PathBuf {
+    // Suite absolute path first (product contract: never depend on PATH resolution).
+    let suite = moraine_provision::SuitePaths::discover();
+    let abs = suite.absolute_cli();
+    if abs.is_file() {
+        return abs;
+    }
     std::env::current_exe().unwrap_or_else(|_| PathBuf::from("moraine"))
 }
 

@@ -237,11 +237,10 @@ async fn main() -> Result<()> {
     {
         let spool = spool_dir.clone();
         let shutdown_clone = shutdown.clone();
-        let base = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         tokio::spawn(async move {
             let out = spool.join("index.json");
             loop {
-                if let Err(e) = moraine_service::rebuild_index(base.clone(), out.clone(), 6).await {
+                if let Err(e) = moraine_service::rebuild_registered_index(out.clone()).await {
                     error!(error=%e, "index rebuild failed");
                 }
                 tokio::select! {
@@ -315,30 +314,17 @@ async fn handle_projects(State(state): State<AppState>) -> Json<Value> {
     if let Some(doc) = moraine_service::read_index_projects(&state.spool_dir) {
         return Json(doc);
     }
-    // Fallback one-shot scan (does not write a second durable index here).
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let roots = moraine_core::scan_project_roots(&cwd, 4);
-    let mut projects = vec![];
-    for d in roots {
-        if let Ok(s) = moraine_core::summarize_project(&d) {
-            projects.push(json!({
-                "projectId": s.project_id.to_string(),
-                "name": s.name,
-                "root": s.root_path,
-                "rootPath": s.root_path,
-                "available": s.available,
-                "run_count": s.run_counts.recent,
-                "runCounts": s.run_counts,
-                "openFindingCount": s.open_finding_count,
-                "lastActivityAt": s.last_activity_at,
-                "warning": s.warning,
-            }));
+    let out = state.spool_dir.join("index.json");
+    if moraine_service::rebuild_registered_index(out).await.is_ok() {
+        if let Some(doc) = moraine_service::read_index_projects(&state.spool_dir) {
+            return Json(doc);
         }
     }
     Json(json!({
-        "projects": projects,
+        "projects": [],
         "revision": 0,
         "fallback": true,
+        "warning": "project registry unavailable",
     }))
 }
 
@@ -348,9 +334,8 @@ async fn handle_project_runs(
 ) -> Json<Value> {
     let root =
         moraine_service::find_project_root_in_index(&state.spool_dir, &project_id).or_else(|| {
-            // Fallback: scan cwd
-            let cwd = std::env::current_dir().ok()?;
-            moraine_core::scan_project_roots(&cwd, 4)
+            moraine_core::registered_project_roots()
+                .ok()?
                 .into_iter()
                 .find(|p| {
                     moraine_core::resolve_existing_project(Some(p))
@@ -413,10 +398,9 @@ async fn handle_run_detail(
 }
 
 async fn handle_rebuild(State(state): State<AppState>) -> Json<Value> {
-    let base = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let out = state.spool_dir.join("index.json");
     let before = moraine_service::index_revision(&state.spool_dir);
-    match moraine_service::rebuild_index(base, out, 6).await {
+    match moraine_service::rebuild_registered_index(out).await {
         Ok(()) => {
             let after = moraine_service::index_revision(&state.spool_dir);
             let doc = moraine_service::read_index_projects(&state.spool_dir);

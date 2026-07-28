@@ -13,6 +13,7 @@ pub mod document;
 pub mod error;
 pub mod history;
 pub mod paths;
+pub mod project_registry;
 pub mod room;
 pub mod run_meta;
 pub mod share;
@@ -73,6 +74,11 @@ pub use document::{Document, DocumentId, DocumentMeta, DocumentSnapshot};
 pub use error::{Error, Result};
 pub use history::{HistoryEntry, HistoryStore};
 pub use paths::MorainePaths;
+pub use project_registry::{
+    default_project_registry_path, read_project_registry, read_project_registry_at,
+    register_project_root, register_project_root_at, registered_project_roots, ProjectRegistry,
+    RegisteredProject,
+};
 pub use room::{room_id_for_path, room_id_for_str};
 pub use run_meta::{
     assert_disk_revision, comments_migrated_path, content_hash, content_hash_file, ensure_run_meta,

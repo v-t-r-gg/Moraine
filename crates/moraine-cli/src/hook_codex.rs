@@ -164,7 +164,15 @@ fn map_codex_hook(payload: &Value) -> Result<Option<Value>> {
         inner["prompt"] = json!(bounded.trim());
     }
 
-    let event_id = stable_event_id(hook_event, &session_id, payload);
+    // Prefer structured event_id / eventId from the hook payload when provided
+    // (product self-test injects a unique ID for acknowledgement).
+    let event_id = payload
+        .get("event_id")
+        .or_else(|| payload.get("eventId"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| stable_event_id(hook_event, &session_id, payload));
 
     Ok(Some(json!({
         "schemaVersion": 1,

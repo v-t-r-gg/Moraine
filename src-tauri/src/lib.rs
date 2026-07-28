@@ -1,6 +1,7 @@
 mod commands;
 mod state;
 
+pub use commands::apply_approved_plan_with_service;
 use state::AppState;
 use tracing_subscriber::EnvFilter;
 
@@ -66,6 +67,18 @@ pub fn run() {
             commands::discovery_rebuild_index,
             commands::discovery_rescan_project,
             commands::discovery_add_existing_project,
+            // Provisioning control plane (shared moraine-provision crate)
+            commands::provision_inspect,
+            commands::provision_plan,
+            commands::provision_apply,
+            commands::provision_apply_plan,
+            commands::provision_apply_plan_outcome,
+            commands::provision_rollback,
+            commands::provision_verify,
+            commands::provision_health,
+            commands::provision_repair,
+            commands::provision_enable,
+            commands::provision_init_project,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Moraine");

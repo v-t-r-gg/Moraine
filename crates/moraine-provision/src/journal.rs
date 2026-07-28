@@ -16,9 +16,16 @@ pub fn journal_path(transaction_id: Uuid) -> PathBuf {
 
 /// Persist receipt with fsync. Failure aborts the transaction (not best-effort).
 pub fn write_journal(receipt: &SetupReceipt) -> Result<PathBuf> {
-    let dir = setup_transactions_dir();
+    let path = if receipt.journal_path.is_empty() {
+        journal_path(receipt.transaction_id)
+    } else {
+        PathBuf::from(&receipt.journal_path)
+    };
+    let dir = path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(setup_transactions_dir);
     fs::create_dir_all(&dir)?;
-    let path = journal_path(receipt.transaction_id);
     write_journal_at(&path, receipt)?;
     Ok(path)
 }

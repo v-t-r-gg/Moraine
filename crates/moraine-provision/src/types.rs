@@ -329,15 +329,22 @@ pub struct SetupReceipt {
     /// Service prestate captured on first Install/Start/EnableAutostart.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_prestate: Option<ServiceSnapshot>,
-    /// True if this transaction actually called enable_autostart (was previously off).
+    /// True once an enable-autostart mutation attempt was durably journaled.
+    /// The side effect may have completed even when the manager returned an error.
     #[serde(default)]
     pub transaction_enabled_autostart: bool,
-    /// True if this transaction actually started a previously-stopped service.
+    /// True once a start mutation attempt for a previously-stopped service was
+    /// durably journaled. Rollback must stop it even when `start` returned an error.
     #[serde(default)]
     pub transaction_started_service: bool,
-    /// True if this transaction wrote/replaced a unit file.
+    /// True once an install mutation attempt was durably journaled. The unit may
+    /// have been written even when `install` returned an error.
     #[serde(default)]
     pub transaction_wrote_unit: bool,
+    /// True when this transaction created project-local `.moraine/` state.
+    /// Rollback intentionally retains ledgers rather than deleting user records.
+    #[serde(default)]
+    pub transaction_initialized_project: bool,
     pub readiness: Readiness,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failed_operation: Option<String>,

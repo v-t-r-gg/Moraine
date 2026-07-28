@@ -6,9 +6,10 @@ use std::sync::{Arc, Mutex};
 
 use moraine_provision::{
     apply, apply_with_options, enable_project, health, plan, rollback, verify, verify_with_options,
-    AgentKind, AlwaysReadyProbe, ApplyOutcome, ControlledCapture, FileSnapshot,
-    MemoryServiceManager, ProvisionOpKind, Readiness, RepairAction, RepairKind, ServiceManager,
-    SetupIntent, VecBackupRecorder, VerificationMode, VerifyOptions,
+    AgentKind, AlwaysOfflineProbe, AlwaysReadyProbe, ApplyOutcome, ControlledCapture, FileSnapshot,
+    MemoryServiceManager, ProvisionOpKind, ProvisionOperation, Readiness, RepairAction, RepairKind,
+    ServiceLog, ServiceManager, ServiceState, SetupIntent, SetupPlan, VecBackupRecorder,
+    VerificationMode, VerifyOptions,
 };
 use tempfile::tempdir;
 
@@ -86,6 +87,88 @@ fn setup_agent(project: &Path) {
     adapter
         .apply(&adapter.plan_install(project, &cli).unwrap(), &mut rec)
         .unwrap();
+}
+
+fn plan_with_operations(
+    intent: SetupIntent,
+    service: &dyn ServiceManager,
+    absolute_cli: &Path,
+    kinds: &[ProvisionOpKind],
+) -> SetupPlan {
+    SetupPlan {
+        plan_id: uuid::Uuid::new_v4(),
+        state_witness: moraine_provision::compute_witness(
+            &intent,
+            service,
+            &absolute_cli.display().to_string(),
+        )
+        .unwrap(),
+        intent,
+        operations: kinds
+            .iter()
+            .enumerate()
+            .map(|(index, kind)| ProvisionOperation {
+                id: format!("test_{index}_{kind:?}"),
+                kind: *kind,
+                product_label: kind.product_label().into(),
+                detail: "hermetic lifecycle test".into(),
+                reversible: *kind != ProvisionOpKind::SelfTest,
+            })
+            .collect(),
+        warnings: vec![],
+        absolute_cli: absolute_cli.display().to_string(),
+        product_summary: vec![],
+    }
+}
+
+struct BreakJournalOnInstall {
+    inner: MemoryServiceManager,
+    journal_dir: PathBuf,
+}
+
+impl ServiceManager for BreakJournalOnInstall {
+    fn inspect(&self) -> moraine_provision::Result<ServiceState> {
+        self.inner.inspect()
+    }
+
+    fn install(&self, executable: &Path) -> moraine_provision::Result<()> {
+        self.inner.install(executable)?;
+        fs::remove_dir_all(&self.journal_dir)?;
+        fs::write(&self.journal_dir, b"blocks journal directory recreation")?;
+        Ok(())
+    }
+
+    fn uninstall(&self) -> moraine_provision::Result<()> {
+        self.inner.uninstall()
+    }
+
+    fn start(&self) -> moraine_provision::Result<()> {
+        self.inner.start()
+    }
+
+    fn stop(&self) -> moraine_provision::Result<()> {
+        self.inner.stop()
+    }
+
+    fn restart(&self) -> moraine_provision::Result<()> {
+        self.inner.restart()
+    }
+
+    fn enable_autostart(&self) -> moraine_provision::Result<()> {
+        self.inner.enable_autostart()
+    }
+
+    fn disable_autostart(&self) -> moraine_provision::Result<()> {
+        self.inner.disable_autostart()
+    }
+
+    fn reload_registration(&self) -> moraine_provision::Result<()> {
+        self.inner.reload_registration()
+    }
+
+    fn logs(&self, limit: usize) -> moraine_provision::Result<Vec<ServiceLog>> {
+        self.inner.logs(limit)
+    }
 }
 
 #[test]
@@ -655,6 +738,7 @@ fn rollback_restores_exact_snapshot_without_semantic_remove_after() {
         transaction_enabled_autostart: false,
         transaction_started_service: false,
         transaction_wrote_unit: false,
+        transaction_initialized_project: false,
         readiness: Readiness::RollbackRequired,
         failed_operation: Some("configure_agent".into()),
         error: Some("test".into()),
@@ -717,6 +801,324 @@ fn product_apply_self_test_ready_with_injectables() {
     )
     .unwrap();
     assert!(matches!(outcome, ApplyOutcome::Ready { .. }), "{outcome:?}");
+}
+
+#[test]
+fn start_success_readiness_failure_stops_service_during_rollback() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let suite = HermeticSuite::install();
+    let dir = tempdir().unwrap();
+    let project = dir.path().join("readiness-timeout");
+    fs::create_dir_all(&project).unwrap();
+    let svc = MemoryServiceManager::new();
+    let plan = plan_with_operations(
+        product_intent(project),
+        &svc,
+        &suite.cli,
+        &[
+            ProvisionOpKind::InstallService,
+            ProvisionOpKind::StartService,
+        ],
+    );
+
+    let outcome = apply_with_options(plan, &svc, None, Some(Arc::new(AlwaysOfflineProbe))).unwrap();
+
+    assert!(
+        matches!(outcome, ApplyOutcome::RolledBack { .. }),
+        "{outcome:?}"
+    );
+    let (installs, starts, stops) = svc.operation_counts();
+    assert_eq!(installs, 1, "install mutation must occur before rollback");
+    assert_eq!(
+        starts, 1,
+        "start mutation must occur before readiness fails"
+    );
+    assert!(stops >= 1, "rollback must stop the newly started service");
+    assert!(!svc.inspect().unwrap().running);
+    assert!(outcome.receipt().transaction_started_service);
+}
+
+#[test]
+fn partial_install_error_restores_prestate() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let suite = HermeticSuite::install();
+    let dir = tempdir().unwrap();
+    let project = dir.path().join("partial-install");
+    fs::create_dir_all(&project).unwrap();
+    let unit = dir.path().join("unit/moraine-service.service");
+    let svc = MemoryServiceManager::with_unit_path(unit.clone());
+    svc.fail_after_install("install mutated registration then failed");
+    let plan = plan_with_operations(
+        product_intent(project),
+        &svc,
+        &suite.cli,
+        &[ProvisionOpKind::InstallService],
+    );
+
+    let outcome = apply(plan, &svc).unwrap();
+
+    assert!(
+        matches!(outcome, ApplyOutcome::RolledBack { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(svc.operation_counts().0, 1, "install mutation was reached");
+    assert!(!unit.exists(), "previously absent unit must be removed");
+    assert!(!svc.inspect().unwrap().registration_present);
+    assert!(outcome.receipt().transaction_wrote_unit);
+}
+
+#[test]
+fn journal_failure_after_completed_mutation_enters_rollback() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let suite = HermeticSuite::install();
+    let dir = tempdir().unwrap();
+    let previous_data_home = std::env::var_os("XDG_DATA_HOME");
+    let data_home = dir.path().join("data");
+    std::env::set_var("XDG_DATA_HOME", &data_home);
+    let project = dir.path().join("journal-failure");
+    fs::create_dir_all(&project).unwrap();
+    let service = BreakJournalOnInstall {
+        inner: MemoryServiceManager::new(),
+        journal_dir: data_home.join("moraine/setup-transactions"),
+    };
+    let plan = plan_with_operations(
+        product_intent(project),
+        &service,
+        &suite.cli,
+        &[ProvisionOpKind::InstallService],
+    );
+
+    let outcome = apply(plan, &service).unwrap();
+
+    if let Some(value) = previous_data_home {
+        std::env::set_var("XDG_DATA_HOME", value);
+    } else {
+        std::env::remove_var("XDG_DATA_HOME");
+    }
+    assert!(
+        matches!(outcome, ApplyOutcome::RollbackRequired { .. }),
+        "journal remains unavailable after rollback, so recovery must be explicit: {outcome:?}"
+    );
+    assert_eq!(
+        service.inner.operation_counts().0,
+        1,
+        "install mutation must complete before journal failure"
+    );
+    assert!(
+        !service.inner.inspect().unwrap().registration_present,
+        "automatic rollback must still reverse the completed mutation"
+    );
+}
+
+#[test]
+fn service_prestate_failure_after_agent_mutation_rolls_back_files() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let suite = HermeticSuite::install();
+    let dir = tempdir().unwrap();
+    let project = dir.path().join("prestate-failure");
+    fs::create_dir_all(&project).unwrap();
+    let svc = MemoryServiceManager::new();
+    let plan = plan_with_operations(
+        product_intent(project.clone()),
+        &svc,
+        &suite.cli,
+        &[
+            ProvisionOpKind::InitializeProject,
+            ProvisionOpKind::ConfigureAgent,
+            ProvisionOpKind::InstallService,
+        ],
+    );
+    // apply's stale-plan witness inspect succeeds; InstallService prestate inspect fails.
+    svc.fail_inspect_after(1, "injected prestate capture failure");
+
+    let outcome = apply(plan, &svc).unwrap();
+
+    assert!(
+        matches!(outcome, ApplyOutcome::RolledBack { .. }),
+        "{outcome:?}"
+    );
+    assert!(
+        outcome
+            .receipt()
+            .completed
+            .iter()
+            .any(|op| op.kind == ProvisionOpKind::ConfigureAgent && op.success),
+        "agent mutation must complete before prestate failure: {outcome:?}"
+    );
+    assert!(!project.join(".codex/config.toml").exists());
+    assert!(!project.join(".codex/hooks.json").exists());
+}
+
+#[test]
+fn prior_running_service_is_restored_after_failed_repair() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let suite = HermeticSuite::install();
+    let dir = tempdir().unwrap();
+    let project = dir.path().join("restore-running");
+    fs::create_dir_all(&project).unwrap();
+    setup_agent(&project);
+    let unit = dir.path().join("unit/moraine-service.service");
+    fs::create_dir_all(unit.parent().unwrap()).unwrap();
+    fs::write(&unit, b"prior exact unit bytes\n").unwrap();
+    let svc = MemoryServiceManager::with_unit_path(unit.clone());
+    svc.install(&suite.service).unwrap();
+    fs::write(&unit, b"prior exact unit bytes\n").unwrap();
+    svc.start().unwrap();
+    let starts_before = svc.operation_counts().1;
+    let plan = plan_with_operations(
+        product_intent(project),
+        &svc,
+        &suite.cli,
+        &[ProvisionOpKind::InstallService, ProvisionOpKind::SelfTest],
+    );
+
+    let outcome = apply_with_options(
+        plan,
+        &svc,
+        Some(VerifyOptions {
+            mode: VerificationMode::ProductCapture,
+            capture: Some(Arc::new(ControlledCapture {
+                fail_delivery: true,
+                materialize_run: false,
+            })),
+            service_probe: Some(Arc::new(AlwaysReadyProbe { version: None })),
+        }),
+        Some(Arc::new(AlwaysReadyProbe { version: None })),
+    )
+    .unwrap();
+
+    assert!(
+        matches!(outcome, ApplyOutcome::RolledBack { .. }),
+        "{outcome:?}"
+    );
+    assert!(svc.inspect().unwrap().running);
+    assert!(
+        svc.operation_counts().1 > starts_before,
+        "rollback must restart the prior service"
+    );
+    assert_eq!(fs::read(&unit).unwrap(), b"prior exact unit bytes\n");
+}
+
+#[test]
+fn prior_running_restart_failure_requires_manual_rollback() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let suite = HermeticSuite::install();
+    let dir = tempdir().unwrap();
+    let project = dir.path().join("restart-failure");
+    fs::create_dir_all(&project).unwrap();
+    setup_agent(&project);
+    let unit = dir.path().join("unit/moraine-service.service");
+    fs::create_dir_all(unit.parent().unwrap()).unwrap();
+    fs::write(&unit, b"prior unit\n").unwrap();
+    let svc = MemoryServiceManager::with_unit_path(unit);
+    svc.install(&suite.service).unwrap();
+    svc.start().unwrap();
+    let plan = plan_with_operations(
+        product_intent(project),
+        &svc,
+        &suite.cli,
+        &[ProvisionOpKind::InstallService, ProvisionOpKind::SelfTest],
+    );
+    svc.fail_next_start("prior service restart failed");
+
+    let outcome = apply_with_options(
+        plan,
+        &svc,
+        Some(VerifyOptions {
+            mode: VerificationMode::ProductCapture,
+            capture: Some(Arc::new(ControlledCapture {
+                fail_delivery: true,
+                materialize_run: false,
+            })),
+            service_probe: Some(Arc::new(AlwaysReadyProbe { version: None })),
+        }),
+        Some(Arc::new(AlwaysReadyProbe { version: None })),
+    )
+    .unwrap();
+
+    assert!(
+        matches!(outcome, ApplyOutcome::RollbackRequired { .. }),
+        "{outcome:?}"
+    );
+    assert!(!svc.inspect().unwrap().running);
+}
+
+#[test]
+fn transaction_enabled_autostart_is_reversed() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let suite = HermeticSuite::install();
+    let dir = tempdir().unwrap();
+    let project = dir.path().join("autostart-reverse");
+    fs::create_dir_all(&project).unwrap();
+    setup_agent(&project);
+    let svc = MemoryServiceManager::new();
+    svc.install(&suite.service).unwrap();
+    let intent = SetupIntent {
+        project,
+        agent: AgentKind::Codex,
+        enable_autostart: true,
+        skip_service: false,
+    };
+    let plan = plan_with_operations(
+        intent,
+        &svc,
+        &suite.cli,
+        &[ProvisionOpKind::EnableAutostart, ProvisionOpKind::SelfTest],
+    );
+
+    let outcome = apply_with_options(
+        plan,
+        &svc,
+        Some(VerifyOptions {
+            mode: VerificationMode::ProductCapture,
+            capture: Some(Arc::new(ControlledCapture {
+                fail_delivery: true,
+                materialize_run: false,
+            })),
+            service_probe: Some(Arc::new(AlwaysReadyProbe { version: None })),
+        }),
+        Some(Arc::new(AlwaysReadyProbe { version: None })),
+    )
+    .unwrap();
+
+    assert!(
+        matches!(outcome, ApplyOutcome::RolledBack { .. }),
+        "{outcome:?}"
+    );
+    assert!(outcome.receipt().transaction_enabled_autostart);
+    assert!(!svc.inspect().unwrap().autostart_enabled);
+}
+
+#[test]
+fn retained_project_initialization_is_reported_as_degraded() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let suite = HermeticSuite::install();
+    let dir = tempdir().unwrap();
+    let project = dir.path().join("retained-ledger");
+    fs::create_dir_all(&project).unwrap();
+    let svc = MemoryServiceManager::new();
+    svc.fail_after_install("fail after install mutation");
+    let plan = plan_with_operations(
+        product_intent(project.clone()),
+        &svc,
+        &suite.cli,
+        &[
+            ProvisionOpKind::InitializeProject,
+            ProvisionOpKind::InstallService,
+        ],
+    );
+
+    let outcome = apply(plan, &svc).unwrap();
+
+    assert!(
+        matches!(outcome, ApplyOutcome::RolledBack { .. }),
+        "{outcome:?}"
+    );
+    assert!(project.join(".moraine").is_dir());
+    assert_eq!(outcome.receipt().readiness, Readiness::Degraded);
+    assert!(outcome.receipt().retained_changes.iter().any(|message| {
+        message == "Project records were retained to avoid deleting ledger data."
+    }));
 }
 
 #[test]

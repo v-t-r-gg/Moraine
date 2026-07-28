@@ -14,6 +14,14 @@ struct Inner {
     binary: Option<PathBuf>,
     /// When set, the next start/install call fails with this message (test injection).
     fail_next: Option<String>,
+    fail_after_install: Option<String>,
+    fail_next_start: Option<String>,
+    fail_next_stop: Option<String>,
+    fail_inspect_after: Option<(u32, String)>,
+    inspect_count: u32,
+    install_count: u32,
+    start_count: u32,
+    stop_count: u32,
     /// Count of reload_registration calls (tests assert daemon-reload equivalent).
     reload_count: u32,
 }
@@ -42,6 +50,29 @@ impl MemoryServiceManager {
         self.inner.lock().unwrap().fail_next = Some(msg.into());
     }
 
+    /// Inject an install error after the registration mutation occurred.
+    pub fn fail_after_install(&self, msg: impl Into<String>) {
+        self.inner.lock().unwrap().fail_after_install = Some(msg.into());
+    }
+
+    pub fn fail_next_start(&self, msg: impl Into<String>) {
+        self.inner.lock().unwrap().fail_next_start = Some(msg.into());
+    }
+
+    pub fn fail_next_stop(&self, msg: impl Into<String>) {
+        self.inner.lock().unwrap().fail_next_stop = Some(msg.into());
+    }
+
+    /// Fail inspect after `successful_calls` further successful inspections.
+    pub fn fail_inspect_after(&self, successful_calls: u32, msg: impl Into<String>) {
+        self.inner.lock().unwrap().fail_inspect_after = Some((successful_calls, msg.into()));
+    }
+
+    pub fn operation_counts(&self) -> (u32, u32, u32) {
+        let inner = self.inner.lock().unwrap();
+        (inner.install_count, inner.start_count, inner.stop_count)
+    }
+
     pub fn reload_count(&self) -> u32 {
         self.inner.lock().unwrap().reload_count
     }
@@ -49,7 +80,16 @@ impl MemoryServiceManager {
 
 impl super::ServiceManager for MemoryServiceManager {
     fn inspect(&self) -> Result<ServiceState> {
-        let g = self.inner.lock().unwrap();
+        let mut g = self.inner.lock().unwrap();
+        if let Some((remaining, message)) = g.fail_inspect_after.as_mut() {
+            if *remaining == 0 {
+                let message = message.clone();
+                g.fail_inspect_after = None;
+                return Err(ProvisionError::Service(message));
+            }
+            *remaining -= 1;
+        }
+        g.inspect_count = g.inspect_count.saturating_add(1);
         let binary_present =
             g.binary.as_ref().map(|p| p.is_file()).unwrap_or(false) || g.binary.is_some();
         let unit_path = self.unit_path.as_ref().map(|p| p.display().to_string());
@@ -85,6 +125,7 @@ impl super::ServiceManager for MemoryServiceManager {
 
     fn install(&self, executable: &Path) -> Result<()> {
         let mut g = self.inner.lock().unwrap();
+        g.install_count = g.install_count.saturating_add(1);
         if let Some(msg) = g.fail_next.take() {
             return Err(ProvisionError::Service(msg));
         }
@@ -99,6 +140,9 @@ impl super::ServiceManager for MemoryServiceManager {
                 unit,
                 format!("# memory unit\nExecStart={}\n", executable.display()),
             )?;
+        }
+        if let Some(msg) = g.fail_after_install.take() {
+            return Err(ProvisionError::Service(msg));
         }
         Ok(())
     }
@@ -117,6 +161,10 @@ impl super::ServiceManager for MemoryServiceManager {
 
     fn start(&self) -> Result<()> {
         let mut g = self.inner.lock().unwrap();
+        g.start_count = g.start_count.saturating_add(1);
+        if let Some(msg) = g.fail_next_start.take() {
+            return Err(ProvisionError::Service(msg));
+        }
         if let Some(msg) = g.fail_next.take() {
             return Err(ProvisionError::Service(msg));
         }
@@ -131,6 +179,10 @@ impl super::ServiceManager for MemoryServiceManager {
 
     fn stop(&self) -> Result<()> {
         let mut g = self.inner.lock().unwrap();
+        g.stop_count = g.stop_count.saturating_add(1);
+        if let Some(msg) = g.fail_next_stop.take() {
+            return Err(ProvisionError::Service(msg));
+        }
         g.running = false;
         Ok(())
     }

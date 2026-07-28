@@ -68,6 +68,7 @@ pub fn apply_with_options(
         transaction_enabled_autostart: false,
         transaction_started_service: false,
         transaction_wrote_unit: false,
+        transaction_initialized_project: false,
         readiness: Readiness::NotConfigured,
         failed_operation: None,
         error: None,
@@ -81,145 +82,115 @@ pub fn apply_with_options(
     let probe = service_probe.unwrap_or_else(default_service_probe);
 
     for op in &plan.operations {
-        let result = match op.kind {
-            ProvisionOpKind::InitializeProject => match init_project(Some(&plan.intent.project)) {
-                Ok(r) => Ok(format!(
-                    "project ready at {} (created={})",
-                    r.project_root.display(),
-                    r.created
-                )),
-                Err(e) => Err(e.to_string()),
-            },
-            ProvisionOpKind::ConfigureAgent => {
-                let adapter = adapter_for(plan.intent.agent);
-                match adapter.plan_install(&plan.intent.project, &absolute_cli) {
-                    Ok(ip) => {
-                        let mut recorder = JournaledBackupRecorder::new(&mut receipt);
-                        match adapter.apply(&ip, &mut recorder) {
-                            Ok(ir) => Ok(ir.actions.join("; ")),
-                            Err(e) => Err(e.to_string()),
-                        }
-                    }
-                    Err(e) => Err(e.to_string()),
+        let result: Result<String> = (|| {
+            match op.kind {
+                ProvisionOpKind::InitializeProject => {
+                    let r = init_project(Some(&plan.intent.project))
+                        .map_err(|e| ProvisionError::msg(e.to_string()))?;
+                    receipt.transaction_initialized_project = r.created;
+                    Ok(format!(
+                        "project ready at {} (created={})",
+                        r.project_root.display(),
+                        r.created
+                    ))
                 }
-            }
-            ProvisionOpKind::InstallService => {
-                capture_service_prestate(&mut receipt, service, &suite)?;
-                let bin = suite.absolute_service().or_else(|| {
-                    absolute_cli
-                        .parent()
-                        .map(|p| p.join("moraine-service"))
-                        .filter(|p| p.is_file())
-                });
-                match bin {
-                    Some(bin) => {
-                        // Write-ahead snapshot of the registration path this manager uses
-                        // (Linux: suite unit; hermetic MemoryServiceManager: inject unit_path).
-                        let unit_path = registration_unit_path(service, &suite);
-                        if !receipt
-                            .snapshots
-                            .iter()
-                            .any(|s| s.path() == unit_path.to_string_lossy())
-                        {
-                            if unit_path.is_file() {
-                                receipt.snapshots.push(durable_backup(&unit_path)?);
-                            } else {
-                                receipt.snapshots.push(snapshot_absent(&unit_path));
-                            }
-                            journal::write_journal(&receipt)?;
-                        }
-                        match service.install(&bin) {
-                            Ok(()) => {
-                                receipt.transaction_wrote_unit = true;
-                                Ok(format!("installed service from {}", bin.display()))
-                            }
-                            Err(e) => Err(e.to_string()),
-                        }
-                    }
-                    None => Err("service binary not found in suite".into()),
+                ProvisionOpKind::ConfigureAgent => {
+                    let adapter = adapter_for(plan.intent.agent);
+                    let install_plan = adapter.plan_install(&plan.intent.project, &absolute_cli)?;
+                    let mut recorder = JournaledBackupRecorder::new(&mut receipt);
+                    let install_receipt = adapter.apply(&install_plan, &mut recorder)?;
+                    Ok(install_receipt.actions.join("; "))
                 }
-            }
-            ProvisionOpKind::EnableAutostart => {
-                capture_service_prestate(&mut receipt, service, &suite)?;
-                let already = receipt
-                    .service_prestate
-                    .as_ref()
-                    .map(|s| s.autostart_was_enabled)
-                    .unwrap_or(false);
-                if already {
-                    Ok("autostart already enabled (no-op)".into())
-                } else {
-                    match service.enable_autostart() {
-                        Ok(()) => {
-                            receipt.transaction_enabled_autostart = true;
-                            Ok("autostart enabled".into())
-                        }
-                        Err(e) => Err(e.to_string()),
+                ProvisionOpKind::InstallService => {
+                    capture_service_prestate(&mut receipt, service, &suite)?;
+                    let bin = suite
+                        .absolute_service()
+                        .or_else(|| {
+                            absolute_cli
+                                .parent()
+                                .map(|p| p.join("moraine-service"))
+                                .filter(|p| p.is_file())
+                        })
+                        .ok_or_else(|| ProvisionError::msg("service binary not found in suite"))?;
+
+                    // Write-ahead mutation marker: install may mutate the unit and
+                    // still return an error, so rollback must treat the attempt as real.
+                    receipt.transaction_wrote_unit = true;
+                    journal::write_journal(&receipt)?;
+                    service.install(&bin)?;
+                    Ok(format!("installed service from {}", bin.display()))
+                }
+                ProvisionOpKind::EnableAutostart => {
+                    capture_service_prestate(&mut receipt, service, &suite)?;
+                    let already = receipt
+                        .service_prestate
+                        .as_ref()
+                        .map(|s| s.autostart_was_enabled)
+                        .unwrap_or(false);
+                    if already {
+                        Ok("autostart already enabled (no-op)".into())
+                    } else {
+                        receipt.transaction_enabled_autostart = true;
+                        journal::write_journal(&receipt)?;
+                        service.enable_autostart()?;
+                        Ok("autostart enabled".into())
                     }
                 }
-            }
-            ProvisionOpKind::StartService => {
-                capture_service_prestate(&mut receipt, service, &suite)?;
-                let was_running = receipt
-                    .service_prestate
-                    .as_ref()
-                    .map(|s| s.was_running)
-                    .unwrap_or(false);
-                if was_running && !receipt.transaction_wrote_unit {
-                    // Already running and we did not rewrite the unit — leave it.
-                    Ok("service already running (no-op)".into())
-                } else {
-                    match service.start() {
-                        Ok(()) => {
-                            let ready = probe.wait_ready(
-                                crate::service_ready::default_service_ready_timeout_ms(),
-                            );
-                            if ready.ready
-                                || service
-                                    .inspect()
-                                    .map(|s| s.platform == "memory" && s.running)
-                                    .unwrap_or(false)
-                            {
-                                if !was_running {
-                                    receipt.transaction_started_service = true;
-                                }
-                                Ok(format!("service started ({})", ready.message))
-                            } else {
-                                Err(ready.message)
-                            }
+                ProvisionOpKind::StartService => {
+                    capture_service_prestate(&mut receipt, service, &suite)?;
+                    let was_running = receipt
+                        .service_prestate
+                        .as_ref()
+                        .map(|s| s.was_running)
+                        .unwrap_or(false);
+                    if was_running && !receipt.transaction_wrote_unit {
+                        // Already running and we did not rewrite the unit — leave it.
+                        Ok("service already running (no-op)".into())
+                    } else {
+                        if !was_running {
+                            receipt.transaction_started_service = true;
                         }
-                        Err(e) => Err(e.to_string()),
+                        journal::write_journal(&receipt)?;
+                        service.start()?;
+
+                        // `start` succeeded. The write-ahead flag above must remain
+                        // set while readiness is probed so a timeout stops the service.
+                        let ready = probe
+                            .wait_ready(crate::service_ready::default_service_ready_timeout_ms());
+                        if ready.ready {
+                            Ok(format!("service started ({})", ready.message))
+                        } else {
+                            Err(ProvisionError::msg(ready.message))
+                        }
                     }
                 }
-            }
-            ProvisionOpKind::SelfTest => {
-                let mode = if plan.intent.skip_service {
-                    VerificationMode::DirectCoreTest
-                } else {
-                    VerificationMode::ProductCapture
-                };
-                let opts = verify_opts.clone().unwrap_or_else(|| VerifyOptions {
-                    mode,
-                    capture: None,
-                    service_probe: Some(probe.clone()),
-                });
-                let opts = VerifyOptions {
-                    mode,
-                    capture: opts.capture,
-                    service_probe: opts.service_probe.or(Some(probe.clone())),
-                };
-                match verify::verify_with_options(&plan.intent, opts) {
-                    Ok(report)
-                        if report.readiness == Readiness::Ready
-                            || report.readiness == Readiness::DirectVerified =>
+                ProvisionOpKind::SelfTest => {
+                    let mode = if plan.intent.skip_service {
+                        VerificationMode::DirectCoreTest
+                    } else {
+                        VerificationMode::ProductCapture
+                    };
+                    let opts = verify_opts.clone().unwrap_or_else(|| VerifyOptions {
+                        mode,
+                        capture: None,
+                        service_probe: Some(probe.clone()),
+                    });
+                    let opts = VerifyOptions {
+                        mode,
+                        capture: opts.capture,
+                        service_probe: opts.service_probe.or(Some(probe.clone())),
+                    };
+                    let report = verify::verify_with_options(&plan.intent, opts)?;
+                    if report.readiness == Readiness::Ready
+                        || report.readiness == Readiness::DirectVerified
                     {
                         Ok(report.user_message)
+                    } else {
+                        Err(ProvisionError::msg(report.user_message))
                     }
-                    Ok(report) => Err(report.user_message),
-                    Err(e) => Err(e.to_string()),
                 }
             }
-        };
+        })();
 
         match result {
             Ok(msg) => {
@@ -231,9 +202,16 @@ pub fn apply_with_options(
                     message: Some(msg),
                     technical_detail: None,
                 });
-                journal::write_journal(&receipt)?;
+                if let Err(error) = journal::write_journal(&receipt) {
+                    let error = format!("failed to journal completed operation {}: {error}", op.id);
+                    receipt.failed_operation = Some(op.id.clone());
+                    receipt.error = Some(error.clone());
+                    receipt.readiness = Readiness::RollbackRequired;
+                    return Ok(auto_rollback(receipt, service, error));
+                }
             }
-            Err(err) => {
+            Err(error) => {
+                let err = error.to_string();
                 receipt.completed.push(CompletedOperation {
                     id: op.id.clone(),
                     kind: op.kind,
@@ -270,7 +248,13 @@ pub fn apply_with_options(
     } else {
         Readiness::Ready
     };
-    journal::write_journal(&receipt)?;
+    if let Err(error) = journal::write_journal(&receipt) {
+        let error = format!("failed to journal completed setup: {error}");
+        receipt.failed_operation = Some("finalize".into());
+        receipt.error = Some(error.clone());
+        receipt.readiness = Readiness::RollbackRequired;
+        return Ok(auto_rollback(receipt, service, error));
+    }
 
     if plan.intent.skip_service {
         Ok(ApplyOutcome::DirectVerified { receipt })
@@ -282,14 +266,6 @@ pub fn apply_with_options(
 /// Unit/registration path the active ServiceManager will install or restore.
 /// Prefers `inspect().unit_path` so hermetic managers (temp unit) and Linux
 /// (suite unit) stay consistent with what `install` actually writes.
-fn registration_unit_path(service: &dyn ServiceManager, suite: &SuitePaths) -> PathBuf {
-    service
-        .inspect()
-        .ok()
-        .and_then(|st| st.unit_path.map(PathBuf::from))
-        .unwrap_or_else(|| suite.unit.clone())
-}
-
 fn capture_service_prestate(
     receipt: &mut SetupReceipt,
     service: &dyn ServiceManager,
@@ -376,11 +352,25 @@ pub fn rollback_completed_operations(
     receipt: &SetupReceipt,
     service: &dyn ServiceManager,
 ) -> Result<Vec<String>> {
-    let retained = Vec::new();
+    let mut retained = Vec::new();
+    if receipt.transaction_initialized_project {
+        retained.push("Project records were retained to avoid deleting ledger data.".into());
+    }
     let pre = receipt.service_prestate.as_ref();
 
-    // Phase 1: restore or remove registration *before* process lifecycle so start/stop
-    // operate on the restored unit definition (requires daemon-reload on Linux).
+    // Phase 1: reverse transaction-created autostart while registration still exists.
+    if receipt.transaction_enabled_autostart {
+        service.disable_autostart()?;
+    }
+
+    // Phase 2: stop any process that may use transaction-written registration.
+    if receipt.transaction_started_service
+        || (receipt.transaction_wrote_unit && pre.is_some_and(|p| p.was_running))
+    {
+        service.stop()?;
+    }
+
+    // Phase 3: restore/remove registration and reload the manager's cached definition.
     if receipt.transaction_wrote_unit {
         if let Some(pre) = pre {
             match &pre.registration {
@@ -398,21 +388,12 @@ pub fn rollback_completed_operations(
         }
     }
 
-    // Phase 2: process lifecycle from prestate flags (not reverse-order Start before Install).
-    if receipt.transaction_started_service {
-        service.stop()?;
-    }
+    // Phase 4: restore prior running state only after exact registration restoration.
     if pre.map(|p| p.was_running).unwrap_or(false) {
-        // Prior service was running — bring it back on the restored registration.
-        let _ = service.start();
+        service.start()?;
     }
 
-    // Phase 3: autostart — only undo what this transaction enabled.
-    if receipt.transaction_enabled_autostart {
-        service.disable_autostart()?;
-    }
-
-    // Phase 4: project file snapshots (Codex etc.) — skip unit path already restored.
+    // Phase 5: project file snapshots (Codex etc.) — skip unit path already restored.
     for snap in receipt.snapshots.iter().rev() {
         if let Some(pre) = pre {
             if snap.path() == pre.registration.path() {

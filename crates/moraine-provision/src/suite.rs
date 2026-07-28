@@ -202,38 +202,6 @@ pub fn http_get_loopback(port: u16, path: &str) -> std::result::Result<String, S
     }
 }
 
-/// Render systemd user unit with absolute ExecStart.
-pub fn render_systemd_unit(service_bin: &Path, http: &str, socket: &str) -> String {
-    format!(
-        r#"[Unit]
-Description=Moraine local integration runtime (per-user)
-After=network.target
-
-[Service]
-Type=simple
-ExecStart={exec} --http {http} --unix-socket {socket}
-Restart=on-failure
-RestartSec=2
-Environment=RUST_LOG=info
-
-[Install]
-WantedBy=default.target
-"#,
-        exec = shell_escape_path(service_bin),
-        http = http,
-        socket = socket,
-    )
-}
-
-fn shell_escape_path(p: &Path) -> String {
-    let s = p.display().to_string();
-    if s.contains(' ') || s.contains('\\') {
-        format!("\"{}\"", s.replace('"', "\\\""))
-    } else {
-        s
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SuiteState {

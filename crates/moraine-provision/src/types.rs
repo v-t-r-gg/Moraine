@@ -65,7 +65,11 @@ pub struct SystemState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ServiceState {
+pub struct BackgroundRuntimeState {
+    #[serde(default)]
+    pub backend: BackgroundRuntimeBackend,
+    #[serde(default = "default_true")]
+    pub supported: bool,
     /// True when a service **registration** exists (unit/task), not merely a binary on disk.
     pub installed: bool,
     /// Suite service binary is present.
@@ -83,6 +87,10 @@ pub struct ServiceState {
     /// Loopback endpoint answered (when probed).
     #[serde(default)]
     pub endpoint_ready: bool,
+    #[serde(default)]
+    pub diagnostics_ready: bool,
+    #[serde(default)]
+    pub capture_ready: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub binary_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -92,6 +100,39 @@ pub struct ServiceState {
     /// Product-level status, never OS jargon in the normal UI.
     pub status_message: String,
     pub platform: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registration: Option<RuntimeRegistrationState>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+pub type ServiceState = BackgroundRuntimeState;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundRuntimeBackend {
+    LinuxSystemdUser,
+    Unsupported,
+    #[default]
+    MemoryTest,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeRegistrationKind {
+    SystemdUserUnit,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeRegistrationState {
+    pub kind: RuntimeRegistrationKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

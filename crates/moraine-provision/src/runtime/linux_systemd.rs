@@ -1,20 +1,62 @@
-//! Linux systemd --user implementation of ServiceManager.
+//! Linux systemd --user background runtime backend.
 
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 
 use crate::error::{ProvisionError, Result};
-use crate::suite::{
-    default_http_addr, default_socket_path, http_get_loopback, render_systemd_unit, SuitePaths,
+use crate::runtime::RuntimeInstallSpec;
+use crate::suite::{http_get_loopback, SuitePaths};
+use crate::types::{
+    BackgroundRuntimeBackend, BackgroundRuntimeState, RuntimeRegistrationKind,
+    RuntimeRegistrationState, ServiceLog,
 };
-use crate::types::{ServiceLog, ServiceState};
 
-pub struct LinuxSystemdUserService {
+pub struct LinuxSystemdUserRuntime {
     suite: SuitePaths,
 }
 
-impl LinuxSystemdUserService {
+pub fn render_systemd_unit(spec: &RuntimeInstallSpec) -> Result<String> {
+    let socket = match &spec.capture_endpoint {
+        moraine_platform::CaptureEndpoint::UnixSocket(path) => path,
+        endpoint => {
+            return Err(ProvisionError::Service(format!(
+                "Linux runtime requires a Unix socket endpoint, got {endpoint:?}"
+            )))
+        }
+    };
+    let exec = shell_escape_path(&spec.executable);
+    Ok(format!(
+        r#"[Unit]
+Description=Moraine local integration runtime (per-user)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart={exec} --http {http} --unix-socket {socket} --spool-dir {spool}
+Restart=on-failure
+RestartSec=2
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=default.target
+"#,
+        http = spec.diagnostics_endpoint,
+        socket = socket.display(),
+        spool = shell_escape_path(&spec.spool_dir),
+    ))
+}
+
+fn shell_escape_path(path: &Path) -> String {
+    let value = path.display().to_string();
+    if value.contains(' ') || value.contains('\\') {
+        format!("\"{}\"", value.replace('"', "\\\""))
+    } else {
+        value
+    }
+}
+
+impl LinuxSystemdUserRuntime {
     pub fn new() -> Self {
         Self {
             suite: SuitePaths::discover(),
@@ -52,14 +94,14 @@ impl LinuxSystemdUserService {
     }
 }
 
-impl Default for LinuxSystemdUserService {
+impl Default for LinuxSystemdUserRuntime {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl super::ServiceManager for LinuxSystemdUserService {
-    fn inspect(&self) -> Result<ServiceState> {
+impl super::BackgroundRuntimeManager for LinuxSystemdUserRuntime {
+    fn inspect(&self) -> Result<BackgroundRuntimeState> {
         let binary = self.suite.absolute_service();
         let binary_present = binary.as_ref().map(|p| p.is_file()).unwrap_or(false);
         let registration_present = self.suite.unit.is_file();
@@ -92,7 +134,9 @@ impl super::ServiceManager for LinuxSystemdUserService {
             "Background capture is not set up".into()
         };
         let autostart_enabled = Self::unit_enabled().as_deref() == Some("enabled");
-        Ok(ServiceState {
+        Ok(BackgroundRuntimeState {
+            backend: BackgroundRuntimeBackend::LinuxSystemdUser,
+            supported: true,
             // "Installed" means registered for start — not binary-only.
             installed: registration_present,
             binary_present,
@@ -101,32 +145,44 @@ impl super::ServiceManager for LinuxSystemdUserService {
             running,
             autostart_enabled,
             endpoint_ready: http_online,
+            diagnostics_ready: http_online,
+            capture_ready: http_online,
             binary_path: binary.map(|p| p.display().to_string()),
             unit_path: Some(self.suite.unit.display().to_string()),
             version,
             status_message,
             platform: "linux".into(),
+            registration: registration_present.then(|| RuntimeRegistrationState {
+                kind: RuntimeRegistrationKind::SystemdUserUnit,
+                location: Some(self.suite.unit.display().to_string()),
+                fingerprint: crate::snapshot::file_sha256(&self.suite.unit).ok(),
+            }),
         })
     }
 
     fn install(&self, executable: &Path) -> Result<()> {
+        let layout = moraine_platform::RuntimeLayout::discover();
+        self.install_runtime(&RuntimeInstallSpec {
+            executable: executable.to_path_buf(),
+            capture_endpoint: layout.capture_endpoint,
+            diagnostics_endpoint: layout.diagnostics_endpoint,
+            spool_dir: layout.spool_dir,
+        })
+    }
+
+    fn install_runtime(&self, spec: &RuntimeInstallSpec) -> Result<()> {
         if !cfg!(target_os = "linux") {
             return Err(ProvisionError::Service(
                 "Linux service install is only supported on Linux".into(),
             ));
         }
-        if !executable.is_file() {
+        if !spec.executable.is_file() {
             return Err(ProvisionError::Service(format!(
                 "service binary not found at {}",
-                executable.display()
+                spec.executable.display()
             )));
         }
-        let socket = default_socket_path();
-        let unit = render_systemd_unit(
-            executable,
-            default_http_addr(),
-            &socket.display().to_string(),
-        );
+        let unit = render_systemd_unit(spec)?;
         if let Some(parent) = self.suite.unit.parent() {
             fs::create_dir_all(parent)?;
         }

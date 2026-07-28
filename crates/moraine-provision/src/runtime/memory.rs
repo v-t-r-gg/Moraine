@@ -4,7 +4,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::error::{ProvisionError, Result};
-use crate::types::{ServiceLog, ServiceState};
+use crate::types::{
+    BackgroundRuntimeBackend, BackgroundRuntimeState, RuntimeRegistrationKind,
+    RuntimeRegistrationState, ServiceLog,
+};
 
 #[derive(Debug, Default)]
 struct Inner {
@@ -28,13 +31,13 @@ struct Inner {
 
 /// Deterministic service manager for unit tests and non-Linux stubs.
 #[derive(Debug, Default)]
-pub struct MemoryServiceManager {
+pub struct MemoryRuntimeManager {
     inner: Mutex<Inner>,
     /// When set, install() writes a unit file here (hermetic registration tests).
     unit_path: Option<PathBuf>,
 }
 
-impl MemoryServiceManager {
+impl MemoryRuntimeManager {
     pub fn new() -> Self {
         Self::default()
     }
@@ -78,8 +81,8 @@ impl MemoryServiceManager {
     }
 }
 
-impl super::ServiceManager for MemoryServiceManager {
-    fn inspect(&self) -> Result<ServiceState> {
+impl super::BackgroundRuntimeManager for MemoryRuntimeManager {
+    fn inspect(&self) -> Result<BackgroundRuntimeState> {
         let mut g = self.inner.lock().unwrap();
         if let Some((remaining, message)) = g.fail_inspect_after.as_mut() {
             if *remaining == 0 {
@@ -99,7 +102,9 @@ impl super::ServiceManager for MemoryServiceManager {
         } else {
             g.installed
         };
-        Ok(ServiceState {
+        Ok(BackgroundRuntimeState {
+            backend: BackgroundRuntimeBackend::MemoryTest,
+            supported: true,
             installed: registration_present,
             running: g.running,
             binary_present,
@@ -107,6 +112,8 @@ impl super::ServiceManager for MemoryServiceManager {
             registration_valid: registration_present && binary_present,
             autostart_enabled: g.autostart,
             endpoint_ready: g.running,
+            diagnostics_ready: g.running,
+            capture_ready: g.running,
             binary_path: g.binary.as_ref().map(|p| p.display().to_string()),
             unit_path,
             version: None,
@@ -120,6 +127,17 @@ impl super::ServiceManager for MemoryServiceManager {
                 "Background capture is not set up".into()
             },
             platform: "memory".into(),
+            registration: registration_present.then(|| RuntimeRegistrationState {
+                kind: RuntimeRegistrationKind::SystemdUserUnit,
+                location: self
+                    .unit_path
+                    .as_ref()
+                    .map(|path| path.display().to_string()),
+                fingerprint: self
+                    .unit_path
+                    .as_ref()
+                    .and_then(|path| crate::snapshot::file_sha256(path).ok()),
+            }),
         })
     }
 

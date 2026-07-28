@@ -183,7 +183,10 @@ pub fn repair(action: &RepairAction, service: &dyn ServiceManager) -> Result<Rep
                 })
             });
             match bin {
-                Some(b) => match service.install(&b).and_then(|_| service.start()) {
+                Some(b) => match service
+                    .install_runtime(&crate::runtime::RuntimeInstallSpec::discover(b))
+                    .and_then(|_| service.start())
+                {
                     Ok(()) => Ok(RepairResult {
                         ok: true,
                         action_id: action.id.clone(),

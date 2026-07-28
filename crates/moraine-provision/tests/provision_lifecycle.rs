@@ -189,25 +189,30 @@ fn existing_initialized_project_is_registered_by_successful_apply() {
     let _suite = HermeticSuite::install();
     let dir = tempdir().unwrap();
     let data_home = dir.path().join("data");
+    let registry_path = data_home.join("moraine/projects.json");
     let previous_data_home = std::env::var_os("XDG_DATA_HOME");
     std::env::set_var("XDG_DATA_HOME", &data_home);
     let project = dir.path().join("existing");
     fs::create_dir_all(&project).unwrap();
     moraine_core::init_project(Some(&project)).unwrap();
-    assert!(!data_home.join("moraine/projects.json").exists());
+    assert!(!registry_path.exists());
     let service = MemoryServiceManager::new();
 
-    let approved = plan(direct_intent(project.clone()), &service).unwrap();
-    assert!(approved
-        .operations
-        .iter()
-        .any(|operation| operation.kind == ProvisionOpKind::RegisterProject));
-    assert!(!approved
-        .operations
-        .iter()
-        .any(|operation| operation.kind == ProvisionOpKind::InitializeProject));
-    let outcome = apply(approved, &service).unwrap();
-
+    let outcome = moraine_core::project_registry::with_project_registry_path_override(
+        registry_path.clone(),
+        || {
+            let approved = plan(direct_intent(project.clone()), &service).unwrap();
+            assert!(approved
+                .operations
+                .iter()
+                .any(|operation| operation.kind == ProvisionOpKind::RegisterProject));
+            assert!(!approved
+                .operations
+                .iter()
+                .any(|operation| operation.kind == ProvisionOpKind::InitializeProject));
+            apply(approved, &service).unwrap()
+        },
+    );
     if let Some(value) = previous_data_home {
         std::env::set_var("XDG_DATA_HOME", value);
     } else {
@@ -217,15 +222,13 @@ fn existing_initialized_project_is_registered_by_successful_apply() {
         matches!(outcome, ApplyOutcome::DirectVerified { .. }),
         "{outcome:?}"
     );
-    let registry =
-        moraine_core::read_project_registry_at(&data_home.join("moraine/projects.json")).unwrap();
+    let registry = moraine_core::read_project_registry_at(&registry_path).unwrap();
     assert_eq!(registry.projects.len(), 1);
     assert_eq!(
         PathBuf::from(&registry.projects[0].root),
         fs::canonicalize(&project).unwrap()
     );
-    let reloaded =
-        moraine_core::read_project_registry_at(&data_home.join("moraine/projects.json")).unwrap();
+    let reloaded = moraine_core::read_project_registry_at(&registry_path).unwrap();
     assert_eq!(reloaded.projects[0].root, registry.projects[0].root);
     let summary = moraine_core::summarize_project(Path::new(&reloaded.projects[0].root)).unwrap();
     assert_eq!(
@@ -847,7 +850,12 @@ fn product_apply_self_test_ready_with_injectables() {
     setup_agent(&project);
     let intent = product_intent(project.clone());
     let mut p = plan(intent, &svc).unwrap();
-    p.operations.retain(|o| o.kind == ProvisionOpKind::SelfTest);
+    p.operations.retain(|o| {
+        matches!(
+            o.kind,
+            ProvisionOpKind::RegisterProject | ProvisionOpKind::SelfTest
+        )
+    });
     p.state_witness = moraine_provision::compute_witness(&p.intent, &svc, &p.absolute_cli).unwrap();
     let opts = VerifyOptions {
         mode: VerificationMode::ProductCapture,
@@ -1227,9 +1235,7 @@ fn service_lifecycle_and_health_repair() {
 fn project_init_health_repair_registers_project() {
     let _lock = ENV_LOCK.lock().unwrap();
     let dir = tempdir().unwrap();
-    let data_home = dir.path().join("data");
-    let previous_data_home = std::env::var_os("XDG_DATA_HOME");
-    std::env::set_var("XDG_DATA_HOME", &data_home);
+    let registry_path = dir.path().join("data/moraine/projects.json");
     let project = dir.path().join("health-init");
     fs::create_dir_all(&project).unwrap();
     let action = RepairAction {
@@ -1240,16 +1246,12 @@ fn project_init_health_repair_registers_project() {
         agent: None,
     };
 
-    let result = moraine_provision::repair(&action, &MemoryServiceManager::new()).unwrap();
-
-    if let Some(value) = previous_data_home {
-        std::env::set_var("XDG_DATA_HOME", value);
-    } else {
-        std::env::remove_var("XDG_DATA_HOME");
-    }
+    let result = moraine_core::project_registry::with_project_registry_path_override(
+        registry_path.clone(),
+        || moraine_provision::repair(&action, &MemoryServiceManager::new()).unwrap(),
+    );
     assert!(result.ok, "{result:?}");
-    let registry =
-        moraine_core::read_project_registry_at(&data_home.join("moraine/projects.json")).unwrap();
+    let registry = moraine_core::read_project_registry_at(&registry_path).unwrap();
     assert_eq!(registry.projects.len(), 1);
     assert_eq!(
         PathBuf::from(&registry.projects[0].root),

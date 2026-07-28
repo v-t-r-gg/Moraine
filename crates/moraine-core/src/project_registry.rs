@@ -12,6 +12,11 @@ use crate::atomic::write_atomic;
 use crate::error::{Error, Result};
 use crate::paths::MorainePaths;
 
+thread_local! {
+    static REGISTRY_PATH_OVERRIDE: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectRegistry {
@@ -36,9 +41,33 @@ impl Default for ProjectRegistry {
 }
 
 pub fn default_project_registry_path() -> Result<PathBuf> {
+    if let Some(path) = REGISTRY_PATH_OVERRIDE.with(|slot| slot.borrow().clone()) {
+        return Ok(path);
+    }
     Ok(MorainePaths::default_ensure()?
         .data_dir
         .join("projects.json"))
+}
+
+/// Runs a synchronous operation with an isolated project-registry path.
+///
+/// This is primarily useful for hermetic embedding and integration tests that
+/// cannot safely mutate process-wide user-data environment variables.
+#[doc(hidden)]
+pub fn with_project_registry_path_override<T>(path: PathBuf, operation: impl FnOnce() -> T) -> T {
+    struct Reset(Option<PathBuf>);
+
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            REGISTRY_PATH_OVERRIDE.with(|slot| {
+                *slot.borrow_mut() = self.0.take();
+            });
+        }
+    }
+
+    let previous = REGISTRY_PATH_OVERRIDE.with(|slot| slot.replace(Some(path)));
+    let _reset = Reset(previous);
+    operation()
 }
 
 pub fn register_project_root(root: &Path) -> Result<PathBuf> {

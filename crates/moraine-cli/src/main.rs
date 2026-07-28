@@ -1,5 +1,6 @@
 //! CLI for agent run records and review helpers. Fail-fast share unless `--start`.
 
+mod capture;
 mod codex_setup;
 mod doctor;
 mod hook_codex;

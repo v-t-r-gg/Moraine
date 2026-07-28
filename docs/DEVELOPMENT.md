@@ -53,10 +53,15 @@ Requires the Rust toolchain (and Node for desktop packaging). The **artifact** i
 ### Checks
 
 ```bash
+# Authoritative source-tree gate:
 ./scripts/check.sh
-cargo fmt --all -- --check
-cargo clippy -p moraine-core -p moraine-cli -p moraine-mcp -p moraine-server -p moraine-service -- -D warnings
 ```
+
+The gate covers formatting, Clippy for every production Rust crate, Rust tests
+for core/CLI/MCP/service/provision (and a server build), Tauri checking and
+provisioning command tests, frontend typechecking/tests, and the production
+frontend build. GitHub Actions splits the same coverage across parallel jobs;
+it does not invoke this script as a single job.
 
 ## Branch model
 
@@ -71,7 +76,8 @@ Prefer several logical commits on the milestone branch over one giant agent comm
 
 1. Implement on a feature or release branch (never push multi-commit work only as direct `main` history without review when avoidable).
 2. Open a pull request into `main`.
-3. CI must run `./scripts/check.sh` (see `.github/workflows/ci.yml`).
+3. CI must cover the authoritative `./scripts/check.sh` gate (see the parallel
+   jobs in `.github/workflows/ci.yml`).
 4. Update the Moraine run record under `.moraine/runs/` with validation results, meaningful checkpoints, evidence, risks, and unresolved questions.
 5. Human inspects code and run record (comments, notes, challenges as needed). **No Moraine approval/decision is required** as a merge gate.
 6. Merge with a **merge commit** when preserving reviewed commit identities matters (for example when local `main` already contains some of the same commits). Prefer squash only when history rewrite is intentional.
@@ -140,7 +146,7 @@ Dogfood for several real runs before starting the next major milestone. Classify
 | M4.6 append-only ledger semantics | complete |
 | M5 local run discovery and ledger-focused UX | complete |
 | C1 redaction ordinary projections | complete |
-| C2 stranger-safe Linux install + Codex pack | candidate (see ROADMAP) |
-| C3 beta hardening / surface freeze | next |
+| C2 stranger-safe Linux install + Codex pack | complete |
+| C3 beta hardening / surface freeze | in progress |
 
 See [ROADMAP.md](../ROADMAP.md) and [DEVELOPMENT_BLUEPRINT_ALIGNED.md](./DEVELOPMENT_BLUEPRINT_ALIGNED.md).

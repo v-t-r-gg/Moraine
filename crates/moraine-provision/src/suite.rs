@@ -44,10 +44,6 @@ impl SuitePaths {
         }
     }
 
-    pub fn default() -> Self {
-        Self::from_prefix(default_prefix())
-    }
-
     /// Resolve suite from env `MORAINE_PREFIX` or default XDG layout.
     pub fn discover() -> Self {
         if let Ok(p) = env::var("MORAINE_PREFIX") {
@@ -150,6 +146,12 @@ impl SuitePaths {
             }
         }
         None
+    }
+}
+
+impl Default for SuitePaths {
+    fn default() -> Self {
+        Self::from_prefix(default_prefix())
     }
 }
 

@@ -80,30 +80,27 @@ pub fn wait_for_service_ready(max_wait_ms: u64) -> ServiceReadyResult {
     let mut attempts = 0u32;
     loop {
         attempts += 1;
-        match http_get_loopback(33111, "/status") {
-            Ok(body) => {
-                let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
-                let online = v
-                    .get("online")
-                    .and_then(|x| x.as_bool())
-                    .or_else(|| v.get("status").and_then(|s| s.as_str()).map(|s| s == "ok"))
-                    .unwrap_or(true);
-                let version = v
-                    .get("version")
-                    .or_else(|| v.get("productVersion"))
-                    .and_then(|x| x.as_str())
-                    .map(|s| s.to_string());
-                if online {
-                    return ServiceReadyResult {
-                        ready: true,
-                        attempts,
-                        waited_ms: waited,
-                        version,
-                        message: "background capture is ready".into(),
-                    };
-                }
+        if let Ok(body) = http_get_loopback(33111, "/status") {
+            let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+            let online = v
+                .get("online")
+                .and_then(|x| x.as_bool())
+                .or_else(|| v.get("status").and_then(|s| s.as_str()).map(|s| s == "ok"))
+                .unwrap_or(true);
+            let version = v
+                .get("version")
+                .or_else(|| v.get("productVersion"))
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string());
+            if online {
+                return ServiceReadyResult {
+                    ready: true,
+                    attempts,
+                    waited_ms: waited,
+                    version,
+                    message: "background capture is ready".into(),
+                };
             }
-            Err(_) => {}
         }
         if waited >= max_wait_ms {
             return ServiceReadyResult {

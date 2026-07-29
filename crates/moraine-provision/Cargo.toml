@@ -6,7 +6,6 @@ license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
 description = "Shared installation-state inspection and onboarding for Moraine CLI and desktop"
-readme = "README.md"
 
 [dependencies]
 moraine-core.workspace = true

@@ -36,4 +36,5 @@ Automated tests and manual scenarios required.
 
 ## Run record
 
-`.moraine/runs/<record>.md`
+Local Moraine run records remain untracked unless deliberately published as a
+curated example.

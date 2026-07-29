@@ -1,4 +1,0 @@
-# Transient Moraine files (do not ignore durable runs)
-*.lock
-*.tmp
-.*.tmp

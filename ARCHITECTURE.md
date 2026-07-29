@@ -1,199 +1,223 @@
 # Architecture
 
-## Conceptual center
+This document describes the implemented system. Future work belongs in
+[ROADMAP.md](ROADMAP.md); historical decisions belong in [docs/adr](docs/adr/).
 
-The central object is an **agent run**, represented by a durable **run bundle**:
+## Core invariants
 
-* Markdown narrative (human-readable projection)
-* Structured sidecar `*.md.moraine.json` (run id, agent protocol state, annotations; historical decisions retained for compatibility)
-* Optional evidence references or captured artifacts
-* Append-only human observations (protocol runs); Legacy free-form document mode for non-protocol Markdown only
-* Comments / suggestions / findings
+* The agent run is the primary domain object.
+* Project-local run bundles are canonical.
+* User-level indexes, registries, spool data & journals are rebuildable support
+  state.
+* The desktop is not required for capture.
+* Review activity is recorded; Moraine does not authorize outcomes.
+* Ordinary views respect redaction; raw local files remain forensic data.
 
-Moraine is a **ledger**, not an approval gate. Live collaboration is optional infrastructure around that record. See [VISION.md](./VISION.md) and the canonical blueprint [docs/DEVELOPMENT_BLUEPRINT_ALIGNED.md](./docs/DEVELOPMENT_BLUEPRINT_ALIGNED.md).
-
-## Interaction surfaces
-
-```
-  Agents / scripts                      Humans
-        |                                  |
-   moraine CLI / MCP                  GUI (Tauri + React)
-   project/run protocol,              ledger workspace:
-   status, share                      projects → runs → timeline
-        |                                  |
-        +---------- moraine-core ----------+
-                    |            |         |
-                run record    ledger    discovery
-                 (.md)   (.md.moraine.json) read models
-                    |
-             moraine-service (capture + rebuildable index cache)
-                    |
-             moraine-server (optional live relay)
-```
-
-Long-term surfaces over the same core:
+## Dependency direction
 
 ```text
+moraine-platform
+      ↑
 moraine-core
-    ├── JSON CLI (`moraine run …`)
-    ├── local STDIO MCP (`moraine mcp`, crate moraine-mcp)
-    ├── local service discovery queries (via moraine-service)
-    └── desktop human ledger workspace
+moraine-cli
+moraine-service
+moraine-provision
+src-tauri
 ```
 
-| Surface | Audience | Role |
-|---------|----------|------|
-| CLI | Agents, scripts | Project/run protocol, share room URL, status, local history helpers; `decide` is legacy/compatibility-only (CLI only) |
-| MCP | Coding agents | Same core operations over local STDIO; no decision tools |
-| `moraine-service` | Hooks / desktop | Capture spool + **noncanonical** rebuildable project/run index; loopback discovery HTTP; Unix socket for hooks |
-| GUI | Humans | Default **ledger workspace** (discover projects/runs, structured timeline, findings, append-only ops). Legacy free-form edit only for non-protocol documents. No decision IPC |
-| `moraine-core` | Shared | Domain library: documents, history, rooms, share URLs, run ledger, agent protocol, **discovery read models** |
-| `moraine-server` | Optional | In-memory Yjs WebSocket relay; no auth; no disk persistence |
+`moraine-platform` is foundational & does not depend on Moraine domain,
+provisioning, service, IPC implementation or Tauri types. `moraine-core` owns
+the domain & does not depend on runtime control.
 
-### Local discovery (M5)
+## Crate authorities
 
-* Project identity = Moraine project UUID (paths canonicalized and deduplicated).
-* Run summaries and ledger timelines are built in `moraine-core` (single classification path).
-* Service `index.json` is a **cache**: safe to delete and rebuild; never the source of truth for run bytes.
-* The user-data `projects.json` registry stores canonical known project roots
-  only. It survives service/desktop restart and seeds index rebuilds; missing
-  roots remain diagnostic entries. It is not a second run database.
-* Desktop discovery goes through Tauri commands + `src/shared/api` (no direct service URLs from React).
-* Browsing is nonmutating: no schema promotion, no Markdown rewrite, no sidecar mutation.
+### `moraine-platform`
 
-Business logic belongs in `moraine-core`. CLI, MCP, and Tauri commands call the same core operations. Core has no Tauri or Axum dependency.
+Owns host identity, capability descriptions, user directories, suite layout,
+runtime-layout defaults, executable names & capture endpoint descriptions.
 
-## Crates
+It describes Windows paths & unsupported capabilities; it does not implement
+named pipes, background registration or product readiness.
 
-| Piece | Role |
-|-------|------|
-| `moraine-core` | Run-record files, local history store, FS watcher, room ids, share helpers, run ledger, agent protocol |
-| `moraine-cli` | Terminal API for agents and humans |
-| `moraine-mcp` | Local STDIO MCP server over core protocol operations |
-| `moraine-server` | Live Yjs relay only |
-| `src-tauri` | Desktop host shell (IPC, dialogs, watcher bridge) |
-| `src/` | React + TypeScript + Vite review UI (Tiptap + Yjs); Tauri desktop host |
+### `moraine-core`
 
-## Flows
+Owns projects, runs, Markdown projection, schema-v6 sidecars, checkpoints,
+evidence metadata, findings, append-only operations, redaction projection,
+idempotency, recovery & read-only discovery models.
 
-### Agent write flow
+It also owns registry serialization because registered project roots are
+domain-adjacent rebuildable metadata. Registry file placement comes from the
+platform layout.
+
+`moraine-core` does not install services, bind IPC, derive product setup plans
+or depend on the desktop.
+
+### `moraine-provision`
+
+Owns system inspection, setup plans, approved-plan application, transaction
+journals, rollback, health, repair, agent integration & background-runtime
+lifecycle.
+
+The transaction engine is platform-neutral. Runtime backends capture &
+restore their own registration state. Linux uses a systemd user backend;
+unsupported production hosts use an explicit unsupported backend. The memory
+runtime is available only through test injection.
+
+Provisioning guards ProductCapture before planning, witness calculation,
+journal creation or mutation. A serialized plan is validated from both its
+intent & its actual operations.
+
+### `moraine-cli`
+
+Owns command-line presentation, Codex hook mapping & capture delivery.
+
+The hook parses Codex input, creates stable event identifiers & decides whether
+to spool. The Linux capture backend delivers bytes to a Unix socket. Unsupported
+endpoints fail explicitly; they do not use a fake transport.
+
+Service lifecycle commands call the provisioning runtime manager. The CLI does
+not contain a second systemd implementation.
+
+### `moraine-service`
+
+Owns capture listener backends, spool intake, event processing, loopback
+diagnostics & the rebuildable discovery index.
+
+Startup binds capture before publishing diagnostics readiness. Unexpected
+listener failure stops truthful readiness. Linux Unix-socket behavior is
+isolated in its backend; the service executable does not install or control
+its operating-system registration.
+
+### `moraine-mcp`
+
+Maps local STDIO JSON-RPC calls onto `moraine-core` run operations. The project
+root is fixed for the process lifetime. Tool inventory comes from code; clients
+should discover it with `tools/list`.
+
+### `moraine-server`
+
+Hosts the legacy collaboration relay. It is compatibility infrastructure, not
+canonical persistence & not part of ProductCapture readiness.
+
+### Tauri & React
+
+Tauri commands are a typed boundary over core, provisioning & discovery
+operations. Product-mutating commands repeat capability guards for early,
+predictable failure; the underlying library remains authoritative.
+
+React owns presentation, routing & temporary UI state. Native routing waits for
+inspection, derives desktop support from explicit capabilities & never treats
+local storage, executable presence or diagnostics alone as product readiness.
+
+The ledger workspace is the primary surface. The free-form editor & live
+collaboration code remain compatibility-only.
+
+## Canonical project data
 
 ```text
-Agent (CLI or MCP)
-    -> run start / checkpoint / ready / resume
-    -> durable Markdown projection + sidecar agent state
-    -> optional human later opens path or moraine run open --run-id
-    -> human comments / notes / suggestions (not a Moraine verdict)
+<project>/.moraine/
+├── project.json
+├── runs/
+│   ├── <run>.md
+│   └── <run>.md.moraine.json
+├── sessions/
+└── evidence/
 ```
 
-Details: [docs/AGENT_RUN_PROTOCOL.md](./docs/AGENT_RUN_PROTOCOL.md), [docs/MCP.md](./docs/MCP.md).
+The sidecar is the structured authority for a run. Markdown is a deterministic,
+human-readable projection with preserved human-notes bytes. Optional evidence
+artifacts are separate files referenced by the ledger.
 
-### Live review flow
+Mutation paths use per-document locks, re-read after locking & replace through
+unique temporary files. Supported older sidecars load through compatibility
+paths; writes promote to the current writable schema. Exact schema constants &
+types live in `moraine-core`.
+
+## Rebuildable user state
+
+The runtime layout provides:
+
+* a registry of canonical project roots;
+* setup transaction journals;
+* capture spool directories;
+* diagnostics & capture endpoints.
+
+The registry is not a second run database. The service rebuilds discovery by
+scanning registered roots. Missing projects remain diagnosable. Registry or
+index loss does not change canonical project records.
+
+## Capture path
 
 ```text
-Agent or human edits (file and/or GUI)
-    -> optional moraine share -> join URL
-    -> moraine-server (WS) + Yjs in GUI
-    -> human Review (comment / suggest / accept / reject suggestion)
-    -> host desktop Save -> .md + .md.moraine.json
+Codex hook
+  → CLI event mapping
+  → platform capture endpoint
+  → service listener
+  → durable spool
+  → event validation & deduplication
+  → session binding
+  → project run materialization
+  → rebuildable discovery index
 ```
 
-Relay state is not durable. When the process exits, live rooms are gone; files remain.
+If the Linux socket is temporarily unavailable, valid hook payloads spool
+without disrupting the agent. Product verification still requires a real,
+session-bound run to materialize & remain readable; direct core tests cannot
+produce product `Ready`.
 
-### Hindsight review flow
+Mechanical hooks establish activity coverage. MCP checkpoints add semantic
+intent, evidence & findings. Moraine reports the distinction.
 
-```text
-Markdown + .moraine.json on disk
-    -> open in GUI as host (or re-share later)
-    -> load ledger (run id, annotations, optional historical decisions) into UI / Yjs map
-    -> rehydrate marks by quote search (best effort)
-    -> human inspects, comments, and adds notes without the original agent session
-```
+## Setup & rollback
 
-## Feature and audience
+The desktop or CLI creates an exact setup plan with a state witness. Apply
+checks the witness, writes a transaction journal before mutation & records
+runtime mutation attempts before external side effects.
 
-| Capability | Primary audience | Current role |
-|------------|------------------|--------------|
-| CLI / MCP operations | Agents and scripts | Create, inspect, share, status using supported commands |
-| Desktop / web editor | Humans | Inspect and annotate run records |
-| Comments and suggestions | Humans | Structured review feedback; accept/reject text suggestions |
-| Markdown persistence | Agents and humans | Durable portable run narrative |
-| Sidecar metadata | Review tooling + humans | Run ID, agent protocol state, operation-based annotations |
-| Historical run-level decisions | Compatibility | Preserved in sidecars; not extended; not primary UI |
-| Live collaboration | Agents and humans | Optional concurrent review via relay (secondary) |
-| Local history | Humans | Revisit local snapshots under data dir (not Git) |
+Rollback restores agent configuration bytes, runtime registration, reload
+state, prior running state & prior autostart state. Restoration errors return a
+manual-recovery outcome. Newly initialized project ledgers are retained to
+avoid deleting records; the receipt reports that retained state.
 
-## Persistence details
+## Readiness
 
-| Store | What | Notes |
-|-------|------|--------|
-| `.md` file | Narrative | Source of truth for prose |
-| `.md.moraine.json` | Run ledger | schema through v4: run id, agent state, annotations; `decisions[]` retained for compatibility |
-| `.md.comments.json` | Legacy annotations | Migrated into `.moraine.json` on load |
-| `~/.local/share/moraine/history` (typical) | Local edit snapshots | Separate from Git |
-| Yjs (memory / live) | Session collab state | Not a server-side durable store |
+Product readiness requires:
 
-Content hash: SHA-256 of exact UTF-8 Markdown bytes (no line-ending normalization).
+* supported capture, background-runtime & installation capabilities;
+* supported desktop capability for native desktop setup;
+* valid runtime registration;
+* live diagnostics & capture intake;
+* a detected agent;
+* an initialized registered project;
+* configured agent integration that does not need repair;
+* successful ProductCapture verification where setup is applied.
 
-Ledger mutations (init, legacy decide, annotation operations, migration) take a per-document lock file (`*.moraine.json.lock`), re-read after lock, then write via unique temp file + replace. There is no direct truncate-and-rewrite fallback.
+Unsupported hosts remain inspectable but cannot plan, apply, repair or verify
+ProductCapture.
 
-Annotations use explicit operations with a per-annotation monotonic `revision` concurrency token (checked increment; overflow errors). Suggestions store a durable disposition: `pending`, `accepting`, `accepted`, `rejected`, or `resolved_legacy` (schema v3). Acceptance is two-phase: begin (reserve + bind content hash), apply and Save Markdown, then complete. Cancel is allowed only while the disk Markdown hash still equals the acceptance base hash; if the document changed, cancel fails with `acceptance_document_changed` and the human may explicitly finalize against the current saved hash. Host Save reconciles the live session by stable ID without deletes; new session IDs always start at revision 1.
+## Trust & projection
 
-`moraine status` is read-only. `moraine init` (or desktop open / legacy decide) creates the ledger.
+Moraine assumes one trusted local user. Loopback diagnostics are not a remote
+API; capture uses local IPC. Sidecar hashes & expected-revision checks detect
+stale or conflicting work but do not make files tamper-proof.
 
-Legacy migration: copy comments into `.moraine.json`, then rename `.comments.json` to `.comments.json.migrated`.
+Target redaction withholds a claim from ordinary list, show, timeline, Markdown
+& MCP projections. The append-only redaction operation remains visible. Raw
+sidecars, Git history, backups & independent evidence artifacts are forensic
+access paths; see [SECURITY.md](SECURITY.md).
 
-Durability boundary: temp payload is `sync_all`'d before replace; directory fsync is best-effort on Unix. Not a full durability certification.
+## Platform status
 
-One Markdown path maps to one live room id (stable hash of absolute path).
+Linux is the supported runtime: Unix capture, systemd user registration &
+archive installation.
 
-## Host save policy (desktop)
+The full Rust workspace compiles on Windows in required CI. Windows paths &
+capabilities are modeled, but capture, background registration, desktop product
+operation, installation & ProductCapture readiness are unsupported.
 
-When remote peers are present, autosave pauses; explicit Save still writes. Browser-only mode uses stubs and does not provide real host disk for arbitrary paths the same way.
+## Protocol & operations
 
-Desktop file I/O uses **Rust Tauri commands** (trusted local host), not the webview `fs` plugin. Capabilities deliberately omit broad `fs:**` scopes. MCP remains project-confined at process start.
-
-## Current non-goals and limitations
-
-Moraine is **not** currently:
-
-* an approval or rejection system (product center)
-* a merge gate or CI/deployment authorizer
-* a general knowledge-management workspace
-* a complete agent observability platform
-* a replacement for Git or pull requests
-* a compliance-grade, immutable, authenticated audit trail
-* a production-ready hosted collaboration service
-* a guarantee that an agent narrative is truthful or complete
-* a system with secure multi-user auth on the relay
-
-Also: limited automatic evidence capture; no automatic Git commits; relay has no durable state; reviewer names are not authenticated identities.
-
-## Product surface (C3)
-
-Default desktop shell is **ledger workspace** (projects → runs → timeline / findings / append-only ops). Live collab and free-form document editing are **secondary/frozen** for beta defaults. Installed suite layout and service discovery: [docs/INSTALL.md](./docs/INSTALL.md), [docs/C3_SURFACE_FREEZE.md](./docs/C3_SURFACE_FREEZE.md).
-
-Desktop CSP is explicit in `src-tauri/tauri.conf.json` (loopback service access only; no open `https:` default-src).
-
-## Future direction
-
-Sequence: **C3** beta stabilization/surface freeze → **W1** platform
-abstraction → **W2** native Windows 11 → **W3** signed installer and WinGet.
-The second agent adapter follows that sequence. Blueprint:
-[docs/DEVELOPMENT_BLUEPRINT_ALIGNED.md](./docs/DEVELOPMENT_BLUEPRINT_ALIGNED.md).
-
-## Quality preference
-
-Prefer improvements that strengthen **run records**, **evidence provenance**, and **human inspection/hindsight** over general editor features or approval workflow.
-
-## Tests
-
-```bash
-./scripts/check.sh
-cargo test -p moraine-core
-cargo test -p moraine-cli
-cargo test -p moraine-mcp
-npm test
-```
-
-MSRV is declared in the workspace `Cargo.toml` (`rust-version = "1.88"`) and checked in CI.
+The durable run contract is documented in
+[docs/AGENT_RUN_PROTOCOL.md](docs/AGENT_RUN_PROTOCOL.md). Installation is in
+[docs/INSTALL.md](docs/INSTALL.md). Exact commands, serialized variants, schema
+fields & tool names remain code authorities.

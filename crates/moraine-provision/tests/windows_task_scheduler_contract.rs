@@ -195,8 +195,14 @@ fn current_user_task_can_run_restore_and_preserve_demand_start() -> windows::cor
     let (original_xml, original_sddl) = read_registration(&original)?;
     assert!(original_xml.contains("<LogonType>InteractiveToken</LogonType>"));
     assert!(original_xml.contains("<Enabled>false</Enabled>"));
-    assert!(original_sddl.contains(&sid));
-    assert!(original_sddl.contains("SY"));
+    assert!(
+        original_sddl.contains(&sid),
+        "current SID {sid} is absent from returned task SDDL {original_sddl}"
+    );
+    assert!(
+        original_sddl.contains("SY"),
+        "LocalSystem is absent from returned task SDDL {original_sddl}"
+    );
     unsafe {
         let principal = original.Definition()?.Principal()?;
         let mut run_level = TASK_RUNLEVEL_LUA;

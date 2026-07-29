@@ -409,7 +409,7 @@ console window.
 
 Windows CI must prove, with UUID-qualified disposable resources:
 
-* current-user interactive-token task registration through COM;
+* current-account interactive-token task registration through COM;
 * low run level & no stored password;
 * explicit task ACL readback;
 * demand start & stop;
@@ -423,9 +423,11 @@ Windows CI must prove, with UUID-qualified disposable resources:
 * byte-preserving, one-connection framing;
 * size enforcement & concurrent listener continuity.
 
-Cleanup guards must remove test resources. CI evidence is not real Windows 11
-graphical acceptance. A separate standard-user VM must prove cross-account
-denial before runtime support is claimed.
+Cleanup guards must remove test resources. GitHub's hosted Windows runner uses
+an administrator account; it cannot prove the no-admin user experience. CI
+evidence is not real Windows 11 graphical acceptance. A separate standard-user
+VM must prove non-administrator registration & cross-account denial before
+runtime support is claimed.
 
 ## Consequences
 

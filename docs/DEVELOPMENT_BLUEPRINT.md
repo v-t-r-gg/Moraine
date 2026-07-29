@@ -79,7 +79,8 @@ W2 supplies concrete Windows backends without reopening shared orchestration.
 
 ### Validation
 
-* Required Windows unit & integration tests run on `windows-latest`.
+* Required Windows unit & integration tests run on `windows-latest`; hosted CI
+  proves current-account API mechanics, not a standard-user desktop session.
 * A real Windows 11 user session validates runtime registration, restart,
   onboarding, capture, repair, rollback & uninstall behavior.
 * Compile support is not reported as runtime support.

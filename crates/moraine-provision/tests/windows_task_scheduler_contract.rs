@@ -173,6 +173,14 @@ fn read_registration(
     }
 }
 
+fn sddl_names_current_account(sddl: &str, sid: &str) -> bool {
+    sddl.contains(sid)
+        // Task Scheduler canonicalizes the built-in local Administrator
+        // account SID (RID 500) to the well-known SDDL alias `LA`.
+        || (sid.ends_with("-500")
+            && (sddl.contains("O:LA") || sddl.contains(";;;LA)")))
+}
+
 #[test]
 fn current_user_task_can_run_restore_and_preserve_demand_start() -> windows::core::Result<()> {
     let _com = ComApartment::initialize()?;
@@ -196,7 +204,7 @@ fn current_user_task_can_run_restore_and_preserve_demand_start() -> windows::cor
     assert!(original_xml.contains("<LogonType>InteractiveToken</LogonType>"));
     assert!(original_xml.contains("<Enabled>false</Enabled>"));
     assert!(
-        original_sddl.contains(&sid),
+        sddl_names_current_account(&original_sddl, &sid),
         "current SID {sid} is absent from returned task SDDL {original_sddl}"
     );
     assert!(

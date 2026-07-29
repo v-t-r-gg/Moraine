@@ -2,39 +2,90 @@
 
 ## Trust model
 
-Moraine is designed for a **local trusted-user** environment:
+Moraine is a local product for one trusted operating-system user. It is not a
+multi-user security boundary, hosted audit service or tamper-proof archive.
 
-* The person who can run Moraine on a machine can also read and write the project files.
-* There is **no multi-tenant authentication** and **no cryptographic agent identity**.
-* Moraine aims for **tamper-evident structured history** in bounded ways (locks, hashes, append-only ops), not **tamper-proof** protection against a filesystem owner.
+Do not expose its capture endpoint, diagnostics server, collaboration relay or
+project files to untrusted networks or users.
 
-## Redaction is not secure erasure
+Linux ProductCapture uses a user-scoped Unix socket & loopback diagnostics.
+The Windows workspace compiles, but no supported Windows capture, runtime or
+installer exists yet. Windows security claims begin with the native backend.
 
-Redaction is an **append-only ordinary-view withholding** operation:
+## Data locations
 
-* A redaction remains **detectable** in the ledger.
-* Ordinary desktop, CLI, Tauri, service discovery, and MCP projections must not return the protected claim content **derived from the redacted target**.
-* The **canonical sidecar may retain prior content** for integrity.
-* Git history, backups, older clones, screenshots, and evidence artifact files are **outside** Moraine redaction.
+Canonical project data may include:
 
-### Target-scoped (not value-global)
+* `.moraine/project.json`;
+* `.moraine/runs/*.md`;
+* `.moraine/runs/*.md.moraine.json`;
+* `.moraine/evidence/`;
+* `.codex/config.toml` & `.codex/hooks.json`.
 
-Checkpoint redaction withholds content stored in **that checkpoint** and its amendment or supersession lineage. Moraine does **not** search for or automatically redact copies of the same text in independent findings, responses, observations, evidence artifacts, Git history, or other records. Those copies require separate remediation.
+User-level state includes the project registry, capture spool, setup journals,
+service registration & rebuildable discovery index. Exact paths come from the
+platform layout.
 
-The claim “a redacted checkpoint’s content cannot be recovered through ordinary interfaces” means **content derived from the targeted checkpoint record**, not arbitrary duplicate text elsewhere.
+Uninstall & setup rollback do not delete project ledgers.
 
-See [docs/REDACTION.md](./docs/REDACTION.md).
+## Integrity
 
-## If a secret appears in a ledger
+Moraine uses expected hashes, revisions, idempotency keys, file locks & atomic
+replacement to detect stale work & reduce partial writes. These controls do not
+prevent a local user or malicious process from changing files.
 
-1. **Rotate or revoke** the secret in the system that issued it.
-2. Remove it from **source history and backups** where policy requires.
-3. **Redact** the relevant Moraine checkpoint (or other target) so ordinary Moraine views withhold it.
-4. Inspect **independent copies** (finding bodies, responses, observations, evidence artifacts, external references) and remediate each as needed.
-5. Do **not** treat Moraine redaction alone as remediation or as global text scrubbing.
+Git history, filesystem permissions, backups & external signing remain separate
+integrity layers.
 
-## Reporting vulnerabilities
+## Redaction
 
-This repository does not currently define a private security reporting channel.
+Redaction is target-scoped. It records an append-only operation that withholds a
+claim from ordinary Moraine projections.
 
-If you discover a vulnerability, open a **private maintainer contact** if one is listed on the GitHub organization or profile; otherwise open a carefully minimized public issue **without** pasting secrets or exploit payloads.
+Ordinary list, show, timeline, Markdown, discovery, desktop & MCP views must not
+reveal the redacted claim text. The redaction event remains visible so the
+ledger does not pretend that history never changed.
+
+Redaction does not automatically erase:
+
+* raw sidecars opened directly;
+* Git history or older clones;
+* backups, logs or screenshots;
+* separately stored evidence artifacts;
+* content copied into another finding or observation.
+
+Raw project files are forensic access. Anyone who can read them may recover
+historical values. Evidence artifacts have their own lifecycle; redacting a
+claim does not silently delete an evidence file.
+
+## Secret response
+
+If a secret enters Moraine:
+
+1. Revoke or rotate it at the source.
+2. Redact affected claims from ordinary Moraine views.
+3. Remove or replace separate evidence artifacts when policy allows.
+4. Clean Git history, backups, logs & screenshots as required.
+5. Review spool & transaction-journal copies.
+6. Record a non-sensitive correction describing the response.
+
+Do not treat Moraine redaction as secret revocation or secure erasure.
+
+## Agent & evidence risk
+
+Agent-provided summaries, commands, paths, URLs & findings are untrusted input.
+Evidence references state what was recorded; they do not prove that a command
+was safe, a test was sufficient or a file was authentic.
+
+The desktop renders ordinary projections. Features that expose raw JSON or
+evidence bytes must label that forensic boundary.
+
+## Vulnerability reporting
+
+Do not open a public issue for a suspected vulnerability that would expose
+secrets or an exploitable path. Use GitHub’s private vulnerability reporting
+for the repository, or contact the maintainers privately when that feature is
+unavailable.
+
+Include the affected version, platform, reproduction, impact & whether project
+or user-state files were exposed. Never attach real secrets or private ledgers.

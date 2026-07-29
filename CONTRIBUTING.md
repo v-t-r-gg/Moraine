@@ -1,152 +1,119 @@
-# Development process
+# Contributing
 
-Contributor process and **source-tree** workflows. End users install from a release bundle—see [INSTALL.md](./INSTALL.md) and the top-level [README.md](../README.md). Do not present `cargo run` / `npm run dev` as the normal user path.
+Moraine is a Rust workspace with a React/Tauri desktop. Product purpose lives
+in [VISION.md](VISION.md); current boundaries live in
+[ARCHITECTURE.md](ARCHITECTURE.md).
 
-Product vision: [VISION.md](../VISION.md). Canonical blueprint: [DEVELOPMENT_BLUEPRINT_ALIGNED.md](./DEVELOPMENT_BLUEPRINT_ALIGNED.md) (stub: [DEVELOPMENT_BLUEPRINT.md](./DEVELOPMENT_BLUEPRINT.md)).
+## Source dependencies
 
-Desktop UI is **React + TypeScript + Vite** (Tauri host).
+Install:
 
-## Contributor setup (source checkout)
+* Rust stable plus the repository MSRV where compatibility work requires it;
+* Node.js 20+ & npm;
+* Linux Tauri/WebKit development packages;
+* Git;
+* systemd user tools for real Linux lifecycle tests.
+
+The Windows CI job compiles the workspace; Windows runtime testing begins with
+the native backend work.
+
+## Common commands
 
 ```bash
-# Arch example
-./scripts/setup-arch.sh   # rust, node; webkit for desktop
-npm install
-
-# CLI / service (no WebKit required)
-cargo build -p moraine-cli -p moraine-service
-cargo run -p moraine-cli -- version --json
-
-# Desktop (dev)
-npm run typecheck
+cargo fmt --all
+cargo check --workspace --all-targets
+cargo test -p moraine-core
+cargo test -p moraine-provision
+npm ci
+npm run check
 npm test
 npm run build
-npm run tauri:dev
-# optional: MORAINE_OPEN=/absolute/path/to/run.md npm run tauri:dev
-
-# Optional legacy live relay (in-memory; local only; not the primary product path)
-cargo run -p moraine-server
-cargo run -p moraine-cli -- share path/to/file.md --json
 ```
 
-**Rust MSRV:** workspace `rust-version` (currently `1.88`). CI includes an MSRV job.
-
-### Frontend scripts
-
-| Script | Purpose |
-|--------|---------|
-| `npm run typecheck` | `tsc --noEmit` |
-| `npm test` | Vitest |
-| `npm run build` | Production web assets for Tauri |
-| `npm run tauri:dev` | Dev desktop host |
-| `npm run tauri build -- --no-bundle` | Compile app without packaging |
-
-### Release bundle (developers)
+Run the authoritative local gate before pushing:
 
 ```bash
-./scripts/build-linux-release.sh
-# → dist/moraine-<version>-linux-x86_64.tar.gz
-```
-
-Requires the Rust toolchain (and Node for desktop packaging). The **artifact** installs without Rust/Node.
-
-### Checks
-
-```bash
-# Authoritative source-tree gate:
 ./scripts/check.sh
 ```
 
-The gate covers formatting, Clippy for every production Rust crate, Rust tests
-for core/CLI/MCP/service/provision (and a server build), Tauri checking and
-provisioning command tests, frontend typechecking/tests, and the production
-frontend build. GitHub Actions splits the same coverage across parallel jobs;
-it does not invoke this script as a single job.
+It covers formatting, strict Clippy, production Rust crates, Rust tests, Tauri
+checks & command tests, frontend typecheck, tests, build & documentation
+contracts.
 
-## Branch model
+Build the Linux release bundle separately when packaging changes:
 
-* **`main`**: releasable; no long multi-milestone work.
-* **`release/*`**: stabilize and review a cut before merge to `main`.
-* **`milestone/*`**: one integration branch per milestone (for example `milestone/v0.3-durable-annotations`).
-* Optional short `feature/*` branches merge into the milestone branch when a slice is large.
+```bash
+./scripts/build-linux-release.sh
+```
 
-Prefer several logical commits on the milestone branch over one giant agent commit.
+## Pull requests
 
-## Release gate
+* Branch from current `main`.
+* Keep changes bounded; avoid unrelated refactors.
+* Add regression coverage for behavior or compatibility changes.
+* Preserve user files, supported sidecars & persisted transaction shapes.
+* State which validation ran & what environment it used.
+* Keep generated build output out of commits.
+* Do not merge a failing required check.
 
-1. Implement on a feature or release branch (never push multi-commit work only as direct `main` history without review when avoidable).
-2. Open a pull request into `main`.
-3. CI must cover the authoritative `./scripts/check.sh` gate (see the parallel
-   jobs in `.github/workflows/ci.yml`).
-4. Update the Moraine run record under `.moraine/runs/` with validation results, meaningful checkpoints, evidence, risks, and unresolved questions.
-5. Human inspects code and run record (comments, notes, challenges as needed). **No Moraine approval/decision is required** as a merge gate.
-6. Merge with a **merge commit** when preserving reviewed commit identities matters (for example when local `main` already contains some of the same commits). Prefer squash only when history rewrite is intentional.
-7. Tag only when package versions match the product milestone, otherwise use a descriptive milestone tag.
+Local Moraine records under `.moraine/` are untracked by default. They may be
+published deliberately as a validated case study; they are never required as a
+merge authorization mechanism.
 
-### What Moraine enforces vs process
+## Validation language
 
-| Guarantee | Current status |
-| --------- | -------------- |
-| Run record is durable beside the work | Product behavior |
-| Run record names an implementation commit | Manually recorded when useful |
-| Implementation commit has not changed | Process / Git / PR review |
-| Moraine authorizes merge or deployment | **Not a product goal** |
+Use exact claims:
 
-GitHub pull requests and CI remain responsible for merge workflow. Moraine preserves the work record and human context around it.
+* **Implemented** means code is present.
+* **Tested locally** names the command & environment.
+* **Tested in CI** means the relevant required job passed.
+* **Compile-tested** does not mean runtime-supported.
+* **Headless-tested** does not mean a graphical lifecycle passed.
+* **Planned** means no implementation claim.
 
-### Run records and Git SHAs
+For Linux desktop or systemd behavior, state whether a real graphical/user
+session was available.
 
-A committed run record must **not** attempt to contain the SHA of the commit that contains that same record. Record implementation commits in the run record when useful; record the final PR head in pull-request metadata when needed for GitHub review.
+## Compatibility
 
-## Recommended branch protection (`main`)
+Changes to sidecars, run Markdown, events, findings, journals, receipts or
+public JSON require:
 
-Configure in GitHub settings (requires admin):
+* an explicit compatibility decision;
+* fixtures for the oldest supported readable form;
+* round-trip or migration coverage;
+* truthful writable-schema documentation;
+* rollback review when setup state is affected.
 
-* Require a pull request before merging.
-* Require status checks to pass (Rust, frontend, Tauri / `./scripts/check.sh`).
-* Require branch to be up to date with `main`.
-* Block force pushes.
-* Block deletion of `main`.
-* Do not require a separate human reviewer on a solo repository unless another reviewer is available.
+Do not rename serialized operation variants merely to improve internal naming.
+Prefer compatibility aliases when a public Rust name must move.
 
-Self-merge is fine when checks pass; the goal is a review boundary in GitHub/CI, not a Moraine verdict.
+## Documentation
 
-## Definition of done (dogfood runs)
+An implementation change must update the smallest authoritative document whose
+public contract changed. Do not create a new document when an existing
+authority can express the change.
 
-A milestone or feature PR is not done while its Moraine run remains stuck mid-checkpoint.
+Authority order:
 
-Before calling a change set ready for human inspection / merge consideration:
+* `README.md`; current public entry point;
+* `VISION.md`; stable purpose & non-goals;
+* `ARCHITECTURE.md`; implemented structure & ownership;
+* `ROADMAP.md`; current & later work;
+* `docs/DEVELOPMENT_BLUEPRINT.md`; forward acceptance plan;
+* focused user guides under `docs/`;
+* ADRs; historical architectural decisions.
 
-1. Meaningful checkpoints cover the actual work (typically 3–8).
-2. Validation evidence is linked or noted (commands, CI, dogfood findings).
-3. Open risks and questions are current.
-4. Lifecycle is `ready_for_review` (or an explicit later descriptive state when those exist).
-5. CI includes every new crate on the critical path (for example `moraine-mcp` must be clippy’d and tested).
+Code owns exact schemas, flags, error codes & tool inventories. Prefer generated
+or checked claims instead of copied lists.
 
-`ready_for_review` means ready for inspection—not approval.
+Public docs should be concise, casual & easy to scan. Use short paragraphs,
+plain language, `&` instead of “and” & semicolons instead of em dashes.
 
-## After each milestone
+## Security
 
-Dogfood for several real runs before starting the next major milestone. Classify findings:
+Do not add network exposure, secret capture or multi-user assumptions without a
+separate security review. Redaction changes require ordinary-view non-leak
+tests across CLI, MCP, discovery, Markdown & desktop projections.
 
-| Classification | Action |
-|----------------|--------|
-| Data loss or incorrect ledger state | Fix before next milestone |
-| Workflow blocker | Fix before next milestone |
-| Frequent usability issue | Consider patch release |
-| Cosmetic | Backlog |
-| New capability | Roadmap |
-| One-off preference | Do not build immediately |
-
-## Milestone status
-
-| Milestone | Status |
-|-----------|--------|
-| M4.5 React migration | complete |
-| M4.6 append-only ledger semantics | complete |
-| M5 local run discovery and ledger-focused UX | complete |
-| C1 redaction ordinary projections | complete |
-| C2 stranger-safe Linux install + Codex pack | complete |
-| C3 beta hardening / surface freeze | in progress |
-
-See [ROADMAP.md](../ROADMAP.md) and [DEVELOPMENT_BLUEPRINT_ALIGNED.md](./DEVELOPMENT_BLUEPRINT_ALIGNED.md).
+Report vulnerabilities through the process in [SECURITY.md](SECURITY.md).

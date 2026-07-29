@@ -63,6 +63,11 @@ jobs:
         run: cargo test -p moraine-provision --test windows_task_scheduler_contract
       - name: Test production Windows capture listener
         run: cargo test -p moraine-service --all-targets
+      - name: Build Windows capture binaries
+        run: cargo build -p moraine-cli -p moraine-service
+      - name: Prove hook-to-spool named-pipe flow
+        shell: pwsh
+        run: ./scripts/windows-named-pipe-smoke.ps1
       - name: Check desktop host
         run: cargo check -p moraine-app
 

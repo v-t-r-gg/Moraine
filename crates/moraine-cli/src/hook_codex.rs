@@ -11,7 +11,12 @@ use sha2::{Digest, Sha256};
 use crate::capture::{self, CaptureDelivery};
 
 /// Read a Codex hook payload from stdin, map to a Moraine mechanical event, deliver.
-pub fn run_hook_codex(socket: Option<PathBuf>, spool_dir: Option<PathBuf>) -> Result<i32> {
+pub fn run_hook_codex(
+    socket: Option<PathBuf>,
+    named_pipe: Option<String>,
+    spool_dir: Option<PathBuf>,
+) -> Result<i32> {
+    let endpoint = select_capture_endpoint(socket, named_pipe)?;
     let mut raw = String::new();
     io::stdin()
         .read_to_string(&mut raw)
@@ -28,17 +33,37 @@ pub fn run_hook_codex(socket: Option<PathBuf>, spool_dir: Option<PathBuf>) -> Re
     };
 
     let body = serde_json::to_vec(&event)?;
-    let endpoint = socket
-        .map(CaptureEndpoint::UnixSocket)
-        .unwrap_or_else(|| moraine_platform::RuntimeLayout::discover().capture_endpoint);
     let spool = spool_dir.unwrap_or_else(default_spool_dir);
 
-    match capture::deliver(&endpoint, &body) {
+    handle_delivery(capture::deliver(&endpoint, &body), &endpoint, &spool, &body)?;
+    Ok(0)
+}
+
+fn handle_delivery(
+    delivery: CaptureDelivery,
+    endpoint: &CaptureEndpoint,
+    spool: &Path,
+    body: &[u8],
+) -> Result<()> {
+    match delivery {
         CaptureDelivery::Delivered => {}
         CaptureDelivery::Unavailable => {
             // A supported runtime is temporarily unavailable. Preserve the event
             // durably and exit successfully so the agent is not disrupted.
-            write_spooled(&spool, &body)?;
+            write_spooled(spool, body)?;
+        }
+        CaptureDelivery::AccessDenied => {
+            write_spooled(spool, body)?;
+            eprintln!(
+                "{}",
+                json!({
+                    "ok": false,
+                    "code": "capture_access_denied",
+                    "operation": "capture_delivery",
+                    "endpoint": endpoint,
+                    "fallback": "spool",
+                })
+            );
         }
         CaptureDelivery::Unsupported => {
             eprintln!(
@@ -52,7 +77,29 @@ pub fn run_hook_codex(socket: Option<PathBuf>, spool_dir: Option<PathBuf>) -> Re
             );
         }
     }
-    Ok(0)
+    Ok(())
+}
+
+fn select_capture_endpoint(
+    socket: Option<PathBuf>,
+    named_pipe: Option<String>,
+) -> Result<CaptureEndpoint> {
+    if socket.is_some() && named_pipe.is_some() {
+        anyhow::bail!("--socket and --named-pipe are mutually exclusive");
+    }
+    if let Some(path) = socket {
+        if moraine_platform::HostPlatform::current() != moraine_platform::HostPlatform::Linux {
+            anyhow::bail!("--socket is supported only on Linux");
+        }
+        return Ok(CaptureEndpoint::UnixSocket(path));
+    }
+    if let Some(name) = named_pipe {
+        if moraine_platform::HostPlatform::current() != moraine_platform::HostPlatform::Windows {
+            anyhow::bail!("--named-pipe is supported only on Windows");
+        }
+        return Ok(CaptureEndpoint::WindowsNamedPipe(name));
+    }
+    Ok(moraine_platform::RuntimeLayout::try_discover()?.capture_endpoint)
 }
 
 fn default_spool_dir() -> PathBuf {
@@ -445,5 +492,30 @@ mod tests {
             std::fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777,
             0o700
         );
+    }
+
+    #[test]
+    fn unavailable_and_access_denied_preserve_the_event() {
+        for delivery in [CaptureDelivery::Unavailable, CaptureDelivery::AccessDenied] {
+            let dir = tempfile::tempdir().unwrap();
+            handle_delivery(
+                delivery,
+                &CaptureEndpoint::WindowsNamedPipe(r"\\.\pipe\denied".into()),
+                dir.path(),
+                br#"{"eventId":"windows-fallback"}"#,
+            )
+            .unwrap();
+            assert!(dir.path().join("event-id-windows-fallback.json").exists());
+        }
+    }
+
+    #[test]
+    fn duplicate_endpoint_flags_fail_before_delivery() {
+        let error = select_capture_endpoint(
+            Some(PathBuf::from("/tmp/capture.sock")),
+            Some(r"\\.\pipe\capture".into()),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("mutually exclusive"));
     }
 }

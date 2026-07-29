@@ -2308,6 +2308,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "windows",
 ]
 
 [[package]]
@@ -2357,9 +2358,12 @@ name = "moraine-platform"
 version = "0.1.0"
 dependencies = [
  "dirs",
+ "hex",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
+ "windows",
 ]
 
 [[package]]

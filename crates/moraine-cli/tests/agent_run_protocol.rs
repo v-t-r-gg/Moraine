@@ -28,12 +28,12 @@ fn run_json(args: &[&str]) -> (i32, serde_json::Value, String) {
 fn project_init_registers_canonical_root() {
     let dir = tempdir().unwrap();
     let project = dir.path().join("project");
-    let data_home = dir.path().join("data");
+    let registry_path = dir.path().join("data/moraine/projects.json");
     fs::create_dir_all(&project).unwrap();
 
     let output = Command::new(cli_bin())
         .args(["project", "init", project.to_str().unwrap(), "--json"])
-        .env("XDG_DATA_HOME", &data_home)
+        .env("MORAINE_PROJECT_REGISTRY", &registry_path)
         .output()
         .unwrap();
     assert!(
@@ -42,8 +42,7 @@ fn project_init_registers_canonical_root() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let registry =
-        moraine_core::read_project_registry_at(&data_home.join("moraine/projects.json")).unwrap();
+    let registry = moraine_core::read_project_registry_at(&registry_path).unwrap();
     assert_eq!(registry.projects.len(), 1);
     assert_eq!(
         PathBuf::from(&registry.projects[0].root),

@@ -36,8 +36,9 @@ the domain & does not depend on runtime control.
 Owns host identity, capability descriptions, user directories, suite layout,
 runtime-layout defaults, executable names & capture endpoint descriptions.
 
-It describes Windows paths & unsupported capabilities; it does not implement
-named pipes, background registration or product readiness.
+It derives the Windows account SID, stable capture scope & named-pipe
+description. It does not create pipes, manage background registration or
+derive product readiness.
 
 ### `moraine-core`
 
@@ -72,8 +73,9 @@ intent & its actual operations.
 Owns command-line presentation, Codex hook mapping & capture delivery.
 
 The hook parses Codex input, creates stable event identifiers & decides whether
-to spool. The Linux capture backend delivers bytes to a Unix socket. Unsupported
-endpoints fail explicitly; they do not use a fake transport.
+to spool. Linux delivers through a Unix socket. Windows delivers through a
+bounded write-only named-pipe client. Unsupported endpoints fail explicitly;
+they do not use a fake transport.
 
 Service lifecycle commands call the provisioning runtime manager. The CLI does
 not contain a second systemd implementation.
@@ -84,9 +86,9 @@ Owns capture listener backends, spool intake, event processing, loopback
 diagnostics & the rebuildable discovery index.
 
 Startup binds capture before publishing diagnostics readiness. Unexpected
-listener failure stops truthful readiness. Linux Unix-socket behavior is
-isolated in its backend; the service executable does not install or control
-its operating-system registration.
+listener failure stops truthful readiness. Linux Unix-socket & Windows
+named-pipe behavior live in separate backends; the service executable does not
+install or control its operating-system registration.
 
 ### `moraine-mcp`
 
@@ -160,10 +162,11 @@ Codex hook
   → rebuildable discovery index
 ```
 
-If the Linux socket is temporarily unavailable, valid hook payloads spool
-without disrupting the agent. Product verification still requires a real,
-session-bound run to materialize & remain readable; direct core tests cannot
-produce product `Ready`.
+If the selected local endpoint is temporarily unavailable, valid hook payloads
+spool without disrupting the agent. Windows access denial is reported as a
+local security/configuration diagnostic while preserving the same fallback.
+Product verification still requires a real, session-bound run to materialize &
+remain readable; direct core tests cannot produce product `Ready`.
 
 Mechanical hooks establish activity coverage. MCP checkpoints add semantic
 intent, evidence & findings. Moraine reports the distinction.
@@ -183,7 +186,7 @@ avoid deleting records; the receipt reports that retained state.
 
 Product readiness requires:
 
-* supported capture, background-runtime & installation capabilities;
+* supported capture & background-runtime capabilities;
 * supported desktop capability for native desktop setup;
 * valid runtime registration;
 * live diagnostics & capture intake;
@@ -211,9 +214,11 @@ access paths; see [SECURITY.md](SECURITY.md).
 Linux is the supported runtime: Unix capture, systemd user registration &
 archive installation.
 
-The full Rust workspace compiles on Windows in required CI. Windows paths &
-capabilities are modeled, but capture, background registration, desktop product
-operation, installation & ProductCapture readiness are unsupported.
+The full Rust workspace compiles on Windows in required CI. The SID-scoped
+named-pipe client & protected service listener are implemented and tested, but
+Windows background registration, desktop product operation, installation &
+ProductCapture readiness remain unsupported. Capability values stay
+unsupported until the remaining runtime paths close.
 
 ## Protocol & operations
 

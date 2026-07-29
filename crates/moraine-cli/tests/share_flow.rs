@@ -10,9 +10,16 @@ use std::time::{Duration, Instant};
 use tempfile::tempdir;
 
 fn server_bin() -> Option<PathBuf> {
+    let name = if cfg!(target_os = "windows") {
+        "moraine-server.exe"
+    } else {
+        "moraine-server"
+    };
     let candidates = [
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/moraine-server"),
-        PathBuf::from("target/debug/moraine-server"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/debug")
+            .join(name),
+        PathBuf::from("target/debug").join(name),
     ];
     candidates.into_iter().find(|p| p.is_file())
 }

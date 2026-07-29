@@ -1,7 +1,9 @@
 //! Platform-dispatched capture listener binding.
 
 #[cfg(target_os = "linux")]
-mod linux_unix;
+pub mod linux_unix;
+#[cfg(target_os = "windows")]
+pub mod windows_named_pipe;
 
 use std::{path::PathBuf, sync::Arc};
 
@@ -12,6 +14,8 @@ use tokio::sync::Notify;
 pub enum BoundCaptureListener {
     #[cfg(target_os = "linux")]
     Unix(linux_unix::UnixCaptureListener),
+    #[cfg(target_os = "windows")]
+    WindowsNamedPipe(windows_named_pipe::WindowsNamedPipeCaptureListener),
     #[allow(
         dead_code,
         reason = "explicit non-Linux backend slot; bind fails before constructing it until W2"
@@ -25,6 +29,10 @@ pub async fn bind(endpoint: &CaptureEndpoint) -> Result<BoundCaptureListener> {
         CaptureEndpoint::UnixSocket(path) => Ok(BoundCaptureListener::Unix(
             linux_unix::UnixCaptureListener::bind(path).await?,
         )),
+        #[cfg(target_os = "windows")]
+        CaptureEndpoint::WindowsNamedPipe(name) => Ok(BoundCaptureListener::WindowsNamedPipe(
+            windows_named_pipe::WindowsNamedPipeCaptureListener::bind(name)?,
+        )),
         endpoint => anyhow::bail!("unsupported capture endpoint for moraine-service: {endpoint:?}"),
     }
 }
@@ -34,6 +42,8 @@ impl BoundCaptureListener {
         match self {
             #[cfg(target_os = "linux")]
             Self::Unix(listener) => listener.run(spool_dir, shutdown).await,
+            #[cfg(target_os = "windows")]
+            Self::WindowsNamedPipe(listener) => listener.run(spool_dir, shutdown).await,
             Self::Unsupported => {
                 let _ = (spool_dir, shutdown);
                 anyhow::bail!("unsupported capture endpoint for moraine-service")

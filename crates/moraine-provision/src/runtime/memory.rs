@@ -76,6 +76,10 @@ impl MemoryRuntimeManager {
         (inner.install_count, inner.start_count, inner.stop_count)
     }
 
+    pub fn inspect_count(&self) -> u32 {
+        self.inner.lock().unwrap().inspect_count
+    }
+
     pub fn reload_count(&self) -> u32 {
         self.inner.lock().unwrap().reload_count
     }

@@ -80,6 +80,117 @@ fn check(
 }
 
 pub fn run_doctor(project: Option<&Path>, integration: Option<&str>) -> DoctorReport {
+    let capabilities = moraine_platform::PlatformCapabilities::current();
+    if !capabilities.product_ready_supported() {
+        return run_unsupported_doctor(project, integration, &capabilities);
+    }
+    run_supported_doctor(project, integration)
+}
+
+fn run_unsupported_doctor(
+    project_path: Option<&Path>,
+    integration_name: Option<&str>,
+    capabilities: &moraine_platform::PlatformCapabilities,
+) -> DoctorReport {
+    let build = BuildIdentity::current();
+    let suite = SuitePaths::discover();
+    let current = current_exe_path();
+    let mut checks = vec![
+        check(
+            "platform.productCapture",
+            "fail",
+            format!(
+                "Background capture is not supported on {:?} yet",
+                capabilities.host
+            ),
+            Some(&format!("{:?}", capabilities.host).to_lowercase()),
+            Some("supported product-capture platform"),
+            None,
+        ),
+        check(
+            "suite.cli_path",
+            "info",
+            format!("running executable {}", current.display()),
+            Some(&current.display().to_string()),
+            None,
+            None,
+        ),
+        check(
+            "suite.manifest",
+            if suite.manifest.is_file() {
+                "pass"
+            } else {
+                "warn"
+            },
+            if suite.manifest.is_file() {
+                format!("manifest at {}", suite.manifest.display())
+            } else {
+                "suite manifest is not present".into()
+            },
+            Some(&suite.manifest.display().to_string()),
+            None,
+            None,
+        ),
+    ];
+
+    let cli_name =
+        moraine_platform::executable_name(capabilities.host, moraine_platform::SuiteComponent::Cli);
+    let cli_on_path = enumerate_moraine_on_path().into_iter().next();
+    checks.push(check(
+        "suite.cli_identity",
+        if cli_on_path.is_some() {
+            "pass"
+        } else {
+            "info"
+        },
+        if cli_on_path.is_some() {
+            format!("{cli_name} is discoverable")
+        } else {
+            format!("{cli_name} is not on PATH")
+        },
+        cli_on_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .as_deref(),
+        None,
+        None,
+    ));
+
+    let project = project_path.map(|path| match resolve_existing_project(Some(path)) {
+        Ok(resolved) => ProjectCheck {
+            path: resolved.project_root.display().to_string(),
+            initialized: true,
+            project_id: Some(resolved.project_id.to_string()),
+            message: None,
+        },
+        Err(error) => ProjectCheck {
+            path: path.display().to_string(),
+            initialized: false,
+            project_id: None,
+            message: Some(error.to_string()),
+        },
+    });
+    let integration = integration_name.map(|name| {
+        let binary = which_on_path(name);
+        IntegrationCheck {
+            name: name.into(),
+            configured: false,
+            details: vec![binary
+                .map(|path| format!("{name} executable at {}", path.display()))
+                .unwrap_or_else(|| format!("{name} executable not on PATH"))],
+        }
+    });
+
+    DoctorReport {
+        ok: false,
+        build,
+        checks,
+        project,
+        integration,
+    }
+}
+
+fn run_supported_doctor(project: Option<&Path>, integration: Option<&str>) -> DoctorReport {
     let build = BuildIdentity::current();
     let suite = SuitePaths::discover();
     let ver = collect_version_report();

@@ -12,6 +12,14 @@ fn runtime() -> std::sync::Arc<dyn BackgroundRuntimeManager> {
     default_background_runtime_manager()
 }
 
+fn ensure_mutation_supported(operation: &'static str) -> Result<()> {
+    moraine_provision::ensure_product_capture_supported(
+        &moraine_platform::PlatformCapabilities::current(),
+        operation,
+    )
+    .map_err(Into::into)
+}
+
 fn service_binary() -> Result<std::path::PathBuf> {
     let suite = SuitePaths::discover();
     if suite.service.is_file() {
@@ -36,22 +44,26 @@ fn service_binary() -> Result<std::path::PathBuf> {
 }
 
 pub fn service_install(json: bool) -> Result<()> {
+    ensure_mutation_supported("background_runtime_install")?;
     let executable = service_binary()?;
     runtime().install_runtime(&RuntimeInstallSpec::discover(executable))?;
     print_state(json, "install")
 }
 
 pub fn service_start(json: bool) -> Result<()> {
+    ensure_mutation_supported("background_runtime_start")?;
     runtime().start()?;
     print_state(json, "start")
 }
 
 pub fn service_stop(json: bool) -> Result<()> {
+    ensure_mutation_supported("background_runtime_stop")?;
     runtime().stop()?;
     print_state(json, "stop")
 }
 
 pub fn service_restart(json: bool) -> Result<()> {
+    ensure_mutation_supported("background_runtime_restart")?;
     runtime().restart()?;
     print_state(json, "restart")
 }
@@ -80,6 +92,7 @@ pub fn service_logs(json_output: bool) -> Result<()> {
 }
 
 pub fn service_uninstall(json: bool) -> Result<()> {
+    ensure_mutation_supported("background_runtime_uninstall")?;
     runtime().uninstall()?;
     print_state(json, "uninstall")
 }

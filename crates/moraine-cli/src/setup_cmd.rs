@@ -11,6 +11,32 @@ use crate::suite::{collect_version_report, SuitePaths};
 
 /// Inspect suite, repair/install user unit, start service, report next steps.
 pub fn setup_post_install(json: bool) -> Result<i32> {
+    let capabilities = moraine_platform::PlatformCapabilities::current();
+    if !capabilities.product_ready_supported() {
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "ok": false,
+                    "code": "unsupported_platform",
+                    "platform": capabilities.host,
+                    "operation": "product_setup",
+                    "message": format!(
+                        "Moraine background capture is not supported on {:?} yet",
+                        capabilities.host
+                    ),
+                    "capabilities": capabilities,
+                }))?
+            );
+        } else {
+            eprintln!(
+                "unsupported_platform: Moraine background capture is not supported on {:?} yet",
+                capabilities.host
+            );
+        }
+        return Ok(1);
+    }
+
     let suite = SuitePaths::discover();
     let ver = collect_version_report();
     let mut actions = Vec::new();

@@ -58,7 +58,8 @@ W2 supplies concrete Windows backends without reopening shared orchestration.
 
 ### Background runtime
 
-* Select a user-scoped, no-admin registration mechanism.
+* Use Task Scheduler 2.0 through native COM as the selected user-scoped,
+  no-admin registration mechanism.
 * Implement inspect, install, uninstall, start, stop, restart, autostart & logs
   behind the existing runtime manager.
 * Capture & restore exact registration state transactionally.
@@ -83,6 +84,11 @@ W2 supplies concrete Windows backends without reopening shared orchestration.
   onboarding, capture, repair, rollback & uninstall behavior.
 * Compile support is not reported as runtime support.
 * No TCP capture fallback or fake in-memory production backend is accepted.
+
+The fixed Windows task, named-pipe, security, restoration & capability
+contracts are recorded in
+[ADR 0004](adr/0004-windows-user-runtime-and-capture.md). W2 implementation
+must follow that decision rather than reopening the mechanism choice.
 
 ## W3 acceptance; signed installation & WinGet
 

@@ -50,10 +50,10 @@ fn handle_delivery(
         CaptureDelivery::Unavailable => {
             // A supported runtime is temporarily unavailable. Preserve the event
             // durably and exit successfully so the agent is not disrupted.
-            write_spooled(&spool, &body)?;
+            write_spooled(spool, body)?;
         }
         CaptureDelivery::AccessDenied => {
-            write_spooled(&spool, &body)?;
+            write_spooled(spool, body)?;
             eprintln!(
                 "{}",
                 json!({

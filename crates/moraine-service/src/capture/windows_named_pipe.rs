@@ -69,7 +69,7 @@ fn server_options(first: bool) -> ServerOptions {
         .pipe_mode(PipeMode::Byte)
         .reject_remote_clients(true)
         .first_pipe_instance(first)
-        .max_instances(MAX_PIPE_INSTANCES as u32)
+        .max_instances(MAX_PIPE_INSTANCES)
         .in_buffer_size((crate::MAX_EVENT_BYTES + 1) as u32)
         .out_buffer_size(1);
     options

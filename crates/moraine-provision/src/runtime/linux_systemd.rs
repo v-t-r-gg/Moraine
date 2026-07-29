@@ -185,9 +185,11 @@ impl super::BackgroundRuntimeManager for LinuxSystemdUserRuntime {
         let layout = moraine_platform::RuntimeLayout::discover();
         self.install_runtime(&RuntimeInstallSpec {
             executable: executable.to_path_buf(),
+            working_directory: self.suite.prefix.clone(),
             capture_endpoint: layout.capture_endpoint,
             diagnostics_endpoint: layout.diagnostics_endpoint,
             spool_dir: layout.spool_dir,
+            log_dir: None,
         })
     }
 
@@ -214,7 +216,11 @@ impl super::BackgroundRuntimeManager for LinuxSystemdUserRuntime {
     }
 
     fn restore_registration(&self, snapshot: &RuntimeRegistrationSnapshot) -> Result<()> {
-        let RuntimeRegistrationSnapshot::File(snapshot) = snapshot;
+        let RuntimeRegistrationSnapshot::File(snapshot) = snapshot else {
+            return Err(ProvisionError::Service(
+                "Linux runtime cannot restore a non-file registration snapshot".into(),
+            ));
+        };
         crate::snapshot::restore_snapshot(snapshot)?;
         let status = Self::systemctl(&["daemon-reload"]).map_err(ProvisionError::Service)?;
         if !status.success() {
@@ -346,11 +352,13 @@ mod tests {
     fn rendered_unit_uses_complete_runtime_spec() {
         let spec = RuntimeInstallSpec {
             executable: "/home/user/.local/libexec/moraine/moraine-service".into(),
+            working_directory: "/home/user/.local".into(),
             capture_endpoint: moraine_platform::CaptureEndpoint::UnixSocket(
                 "/run/user/1000/moraine-service.sock".into(),
             ),
             diagnostics_endpoint: "127.0.0.1:33111".parse().unwrap(),
             spool_dir: "/home/user/.cache/moraine-service/spool".into(),
+            log_dir: None,
         };
         let unit = render_systemd_unit(&spec).unwrap();
         assert!(unit.contains(

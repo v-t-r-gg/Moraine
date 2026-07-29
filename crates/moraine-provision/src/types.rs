@@ -114,6 +114,7 @@ pub type ServiceState = BackgroundRuntimeState;
 #[serde(rename_all = "snake_case")]
 pub enum BackgroundRuntimeBackend {
     LinuxSystemdUser,
+    WindowsTaskScheduler,
     Unsupported,
     #[default]
     MemoryTest,
@@ -123,6 +124,7 @@ pub enum BackgroundRuntimeBackend {
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeRegistrationKind {
     SystemdUserUnit,
+    WindowsTaskSchedulerTask,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -346,7 +348,8 @@ impl ApplyOutcome {
 #[serde(
     rename_all = "camelCase",
     rename_all_fields = "camelCase",
-    tag = "kind"
+    tag = "kind",
+    deny_unknown_fields
 )]
 pub enum FileSnapshot {
     Existing {
@@ -373,15 +376,40 @@ impl FileSnapshot {
 pub type BackupRecord = FileSnapshot;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WindowsTaskSnapshot {
+    pub task_path: String,
+    pub captured_at: String,
+    pub state: WindowsTaskSnapshotState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum WindowsTaskSnapshotState {
+    Existing {
+        xml: String,
+        security_descriptor: String,
+        fingerprint: String,
+    },
+    Absent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum RuntimeRegistrationSnapshot {
     File(FileSnapshot),
+    WindowsTask(WindowsTaskSnapshot),
 }
 
 impl RuntimeRegistrationSnapshot {
     pub fn path(&self) -> &str {
         match self {
             Self::File(snapshot) => snapshot.path(),
+            Self::WindowsTask(snapshot) => &snapshot.task_path,
         }
     }
 }
@@ -568,6 +596,59 @@ mod compatibility_tests {
         let snapshot: ServiceSnapshot = serde_json::from_value(legacy.clone()).unwrap();
         assert_eq!(snapshot.registration.path(), "/tmp/moraine-service.service");
         assert_eq!(serde_json::to_value(snapshot).unwrap(), legacy);
+    }
+
+    #[test]
+    fn windows_task_snapshots_round_trip_without_changing_file_snapshots() {
+        let existing = RuntimeRegistrationSnapshot::WindowsTask(WindowsTaskSnapshot {
+            task_path: r"\Moraine Background Capture (abc123def456)".into(),
+            captured_at: "2026-07-29T00:00:00Z".into(),
+            state: WindowsTaskSnapshotState::Existing {
+                xml: "<Task />".into(),
+                security_descriptor: "O:SYD:P(A;;FA;;;SY)".into(),
+                fingerprint: "abc".into(),
+            },
+        });
+        let absent = RuntimeRegistrationSnapshot::WindowsTask(WindowsTaskSnapshot {
+            task_path: r"\Moraine Background Capture (abc123def456)".into(),
+            captured_at: "2026-07-29T00:00:00Z".into(),
+            state: WindowsTaskSnapshotState::Absent,
+        });
+        for snapshot in [existing, absent] {
+            let value = serde_json::to_value(&snapshot).unwrap();
+            assert_eq!(
+                serde_json::from_value::<RuntimeRegistrationSnapshot>(value).unwrap(),
+                snapshot
+            );
+            assert!(snapshot.path().starts_with(r"\Moraine Background Capture"));
+        }
+
+        let legacy_file = serde_json::json!({
+            "kind": "absent",
+            "path": "/tmp/moraine-service.service",
+            "createdAt": "2026-01-01T00:00:00Z"
+        });
+        let parsed: RuntimeRegistrationSnapshot =
+            serde_json::from_value(legacy_file.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), legacy_file);
+    }
+
+    #[test]
+    fn malformed_or_ambiguous_registration_snapshots_fail() {
+        for value in [
+            serde_json::json!({}),
+            serde_json::json!({"taskPath": "\\Moraine"}),
+            serde_json::json!({
+                "kind": "absent",
+                "path": "/tmp/unit",
+                "createdAt": "now",
+                "taskPath": "\\Moraine",
+                "capturedAt": "now",
+                "state": {"kind": "absent"}
+            }),
+        ] {
+            assert!(serde_json::from_value::<RuntimeRegistrationSnapshot>(value).is_err());
+        }
     }
 
     #[test]

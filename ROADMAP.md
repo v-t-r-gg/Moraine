@@ -23,8 +23,9 @@ High-level direction. Product model: [VISION.md](./VISION.md), [ARCHITECTURE.md]
 
 * **W1 — Platform abstraction**
   * W1-A: host capabilities and one authoritative suite/runtime layout (merged)
-  * W1-B: capture and background-runtime backend boundaries (implemented on this branch)
-  * W1-C: capability-aware product closure and required Windows compile CI (planned)
+  * W1-B: capture and background-runtime backend boundaries (merged)
+  * W1-C: capability-aware product closure and required Windows compile CI
+    (implemented in PR #20; W1 closes when it merges)
 
 ### Validation language
 
@@ -39,7 +40,7 @@ High-level direction. Product model: [VISION.md](./VISION.md), [ARCHITECTURE.md]
 
 ## Next (ordered)
 
-1. Complete **W1 — Platform abstraction** (IPC/paths beyond Linux assumptions)
+1. Merge **W1-C — Capability-aware product closure**
 2. **W2 — Native Windows 11 port**
 3. **W3 — Signed installer and WinGet**
 4. Second agent adapter (subordinate to Windows portfolio reach)

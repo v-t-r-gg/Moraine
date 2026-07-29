@@ -255,7 +255,7 @@ mod tests {
                 None,
             )?;
             let _text = LocalAllocation(HLOCAL(text.0.cast()));
-            text.to_string()
+            Ok(text.to_string()?)
         }
     }
 

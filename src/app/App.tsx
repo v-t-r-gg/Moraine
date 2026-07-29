@@ -76,6 +76,20 @@ export function App() {
     };
   }, []);
 
+  const openLegacyDocument = useCallback(async () => {
+    if (!SURFACE_LEGACY_DOCUMENT) return;
+    if (!isTauri) {
+      setLegacyPath(null);
+      setRoute("legacy");
+      return;
+    }
+    const path = await pickMarkdownFile();
+    if (path) {
+      setLegacyPath(path);
+      setRoute("legacy");
+    }
+  }, []);
+
   if (isTauri && !onboardingChecked) {
     return (
       <div
@@ -94,20 +108,6 @@ export function App() {
       />
     );
   }
-
-  const openLegacyDocument = useCallback(async () => {
-    if (!SURFACE_LEGACY_DOCUMENT) return;
-    if (!isTauri) {
-      setLegacyPath(null);
-      setRoute("legacy");
-      return;
-    }
-    const path = await pickMarkdownFile();
-    if (path) {
-      setLegacyPath(path);
-      setRoute("legacy");
-    }
-  }, []);
 
   if (route === "onboarding") {
     return (

@@ -1,7 +1,8 @@
 //! Host identity, capabilities, and filesystem layout for Moraine.
 //!
-//! This crate describes platform state. Concrete capture and background-runtime
-//! backends remain owned by their product crates.
+//! This foundational crate owns descriptions only; it has no Moraine domain,
+//! IPC implementation, runtime manager, provisioning or desktop dependency.
+//! Concrete capture & background-runtime backends remain in product crates.
 
 use std::env;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};

@@ -1,0 +1,173 @@
+{
+  "schemaVersion": 6,
+  "run": {
+    "id": "81426ac3-371c-4df1-a0d2-5889ab8ba2e7",
+    "createdAt": "2026-07-29T04:28:15.040809492Z",
+    "updatedAt": "2026-07-29T04:28:15.052410695Z"
+  },
+  "decisions": [],
+  "comments": [],
+  "agent": {
+    "lifecycle": "active",
+    "recordRevision": 2,
+    "objective": "Document a current Moraine run bundle",
+    "recordPath": ".moraine/runs/2026-07-29-document-a-current-moraine-run-bundle-81426ac3.md",
+    "projectId": "dcc88366-c3ac-455b-b90d-22b319fe0c81",
+    "startIdempotencyKey": "example-start",
+    "startingGit": {
+      "available": false
+    },
+    "currentGit": {
+      "available": false
+    },
+    "checkpoints": [
+      {
+        "opId": "02a464da-857e-404f-a74e-3205d5a90adc",
+        "idempotencyKey": "example-checkpoint",
+        "createdAt": "2026-07-29T04:28:15.043506627Z",
+        "summary": "Generated the run-bundle fixture through public core operations.",
+        "actions": [
+          "Created a schema-current sidecar & Markdown projection."
+        ],
+        "evidence": [
+          {
+            "kind": "command_result",
+            "label": "Core fixture validation passed",
+            "command": "cargo test -p moraine-core --test run_bundle_fixture",
+            "exitCode": 0,
+            "provenance": "agent_reported"
+          }
+        ],
+        "risks": [
+          "Generated IDs & timestamps change when refreshed."
+        ],
+        "git": {
+          "available": false
+        }
+      }
+    ],
+    "lifecycleEvents": [],
+    "idempotency": {
+      "example-checkpoint": {
+        "payloadHash": "8ee47fa21c0775102aa5c70de6bedb695bbccb94f3dc5ae65ecdde05fc384be4",
+        "opId": "02a464da-857e-404f-a74e-3205d5a90adc",
+        "kind": "checkpoint",
+        "contentHash": "16d509308a07248a116fb2e9a54118aaaba12e576621df274fb6358ec0affa9c",
+        "recordRevision": 2,
+        "createdAt": "2026-07-29T04:28:15.044029928Z"
+      }
+    },
+    "risks": [
+      "Generated IDs & timestamps change when refreshed."
+    ],
+    "openQuestions": [],
+    "captureCoverage": "semantic_only",
+    "sessionId": "codex:dcc88366-c3ac-455b-b90d-22b319fe0c81:example-session",
+    "provisional": false,
+    "evidence": [],
+    "findings": [
+      {
+        "id": "04e26154-9fe0-4edb-82f3-138845a3aa5f",
+        "kind": "clarification",
+        "state": "open",
+        "body": "Keep the generator beside the fixture so its provenance stays clear.",
+        "target": {
+          "kind": "checkpoint",
+          "checkpointOpId": "02a464da-857e-404f-a74e-3205d5a90adc",
+          "snapshotHash": "16d509308a07248a116fb2e9a54118aaaba12e576621df274fb6358ec0affa9c",
+          "checkpoint": {
+            "opId": "02a464da-857e-404f-a74e-3205d5a90adc",
+            "idempotencyKey": "example-checkpoint",
+            "createdAt": "2026-07-29T04:28:15.043506627Z",
+            "summary": "Generated the run-bundle fixture through public core operations.",
+            "actions": [
+              "Created a schema-current sidecar & Markdown projection."
+            ],
+            "evidence": [
+              {
+                "kind": "command_result",
+                "label": "Core fixture validation passed",
+                "command": "cargo test -p moraine-core --test run_bundle_fixture",
+                "exitCode": 0,
+                "provenance": "agent_reported"
+              }
+            ],
+            "risks": [
+              "Generated IDs & timestamps change when refreshed."
+            ],
+            "git": {
+              "available": false
+            }
+          }
+        },
+        "createdAt": "2026-07-29T04:28:15.045150180Z",
+        "updatedAt": "2026-07-29T04:28:15.045150180Z"
+      }
+    ],
+    "findingEvents": [
+      {
+        "eventId": "cdf88b57-b100-4644-9562-9a55f2bb4648",
+        "event": "finding.created",
+        "findingId": "04e26154-9fe0-4edb-82f3-138845a3aa5f",
+        "createdAt": "2026-07-29T04:28:15.045150180Z",
+        "toState": "open",
+        "kind": "clarification",
+        "checkpointOpId": "02a464da-857e-404f-a74e-3205d5a90adc",
+        "snapshotHash": "16d509308a07248a116fb2e9a54118aaaba12e576621df274fb6358ec0affa9c"
+      }
+    ],
+    "appendOnlyOps": [
+      {
+        "opId": "c9800492-1757-4067-a5c6-9d7d456576b2",
+        "opKind": "human_observation_add",
+        "actorCategory": "human",
+        "createdAt": "2026-07-29T04:28:15.046701833Z",
+        "reason": "Record the product boundary.",
+        "targetId": "02a464da-857e-404f-a74e-3205d5a90adc",
+        "targetKind": "checkpoint",
+        "previousSnapshotHash": "16d509308a07248a116fb2e9a54118aaaba12e576621df274fb6358ec0affa9c",
+        "newContent": "The fixture is documentation, not a merge verdict.",
+        "relationship": "observation"
+      },
+      {
+        "opId": "a5ac71f9-651b-4e18-bb04-10efab34aafe",
+        "opKind": "run_amend",
+        "actorCategory": "agent",
+        "createdAt": "2026-07-29T04:28:15.048434287Z",
+        "reason": "Clarify that both artifacts are generated.",
+        "targetId": "02a464da-857e-404f-a74e-3205d5a90adc",
+        "targetKind": "checkpoint",
+        "previousSnapshotHash": "a04296e6f0bcb435cee23a879bee9d8f008201e2cd03f2f7f554d1232aa2ca5d",
+        "previousContent": "Generated the run-bundle fixture through public core operations.",
+        "newContent": "Generated & validated the current Markdown and sidecar bundle.",
+        "relationship": "amended"
+      },
+      {
+        "opId": "28ea522e-566b-41f0-9c89-523e56362811",
+        "opKind": "entry_supersede",
+        "actorCategory": "agent",
+        "createdAt": "2026-07-29T04:28:15.050336951Z",
+        "reason": "Use the final concise statement.",
+        "targetId": "02a464da-857e-404f-a74e-3205d5a90adc",
+        "targetKind": "checkpoint",
+        "previousSnapshotHash": "663e07b5716446c1e0bd103667210373aea5273371de81ebd83b40e781fd533d",
+        "previousContent": "Generated & validated the current Markdown and sidecar bundle.",
+        "newContent": "Current run-bundle fixture generated & validated.",
+        "relationship": "superseded"
+      },
+      {
+        "opId": "4bcf2dd4-0a2f-47c6-aed2-79afd4dd778d",
+        "opKind": "entry_redact",
+        "actorCategory": "human",
+        "createdAt": "2026-07-29T04:28:15.052370315Z",
+        "reason": "Demonstrate ordinary-view withholding.",
+        "targetId": "02a464da-857e-404f-a74e-3205d5a90adc",
+        "targetKind": "checkpoint",
+        "previousSnapshotHash": "080fd4a0c02db65139f7b46518c6bb2c154f7298703178c53f3209f6deec5d61",
+        "previousContent": "Current run-bundle fixture generated & validated.",
+        "newContent": "[REDACTED]",
+        "relationship": "redacted"
+      }
+    ]
+  }
+}

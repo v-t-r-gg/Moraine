@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a versioned, self-contained Moraine Linux x86_64 release suite (C2).
+# Build a versioned, self-contained Moraine Linux x86_64 release suite.
 # Requires: Rust toolchain, Node/npm for desktop, optional WebKit deps for full app.
 set -euo pipefail
 

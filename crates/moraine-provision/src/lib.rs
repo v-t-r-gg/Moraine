@@ -1,6 +1,9 @@
-//! Shared Moraine installation-state inspection and onboarding.
+//! Transactional setup, rollback, health & background-runtime authority.
 //!
-//! CLI and Tauri desktop both call this crate; the desktop never scrapes CLI stdout.
+//! CLI & Tauri call this crate directly. It does not own run-domain persistence,
+//! capture listener implementation or presentation. Linux runtime control is
+//! isolated behind the production backend; memory implementations require
+//! explicit test injection.
 
 pub mod agent;
 pub mod apply;
@@ -12,7 +15,7 @@ pub mod journal;
 pub mod plan;
 pub mod platform_support;
 pub mod runtime;
-/// Source compatibility for C3 callers; runtime ownership lives in `runtime`.
+/// Source compatibility for callers using the former service-manager module.
 pub mod service {
     pub use crate::runtime::*;
 }

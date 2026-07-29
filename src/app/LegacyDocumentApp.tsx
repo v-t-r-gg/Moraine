@@ -121,7 +121,7 @@ export interface LegacyDocumentAppProps {
 
 /**
  * Historical/compatibility free-form document editor.
- * Live collab (Yjs relay) is frozen for C3 beta — local editor session only.
+ * Live collab is compatibility-only; this route uses a local editor session.
  * Not the primary installed-product path (see App ledger workspace).
  */
 export function LegacyDocumentApp({
@@ -147,7 +147,7 @@ export function LegacyDocumentApp({
   const [session, setSession] = useState<YjsSession | null>(null);
   const [peerCount, setPeerCount] = useState(0);
   const [peerLabel, setPeerLabel] = useState("");
-  // C3: freeze live collab — never attach remote sync URL.
+  // Compatibility route: never attach a remote sync URL.
   const [sessionCfg, setSessionCfg] = useState<SessionConfig>({ roomId: null, syncUrl: null });
   const [localAuthor, setLocalAuthor] = useState("You");
   const [runReview, setRunReview] = useState<RunReviewDto | null>(null);

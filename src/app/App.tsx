@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { Workspace } from "@/app/Workspace";
 import { ServiceHealthBanner } from "@/app/ServiceHealthBanner";
 import { useProductBootstrap } from "@/app/useProductBootstrap";
-import { SURFACE_LEGACY_DOCUMENT } from "@/app/surfaceFreeze";
+import { SURFACE_LEGACY_DOCUMENT } from "@/app/legacySurface";
 import { StatusBar } from "@/features/shell/StatusBar";
 import { OnboardingWizard } from "@/features/onboarding/OnboardingWizard";
 import { HealthPanel } from "@/features/onboarding/HealthPanel";
@@ -21,7 +21,7 @@ const LegacyDocumentApp = lazy(async () => {
 const ONBOARDING_DISMISSED_KEY = "moraine.onboarding.dismissed.this-session";
 
 /**
- * C3 installed-product shell:
+ * Installed-product shell:
  *   bootstrap → first-run wizard (if needed) → service health → ledger workspace
  *   optional legacy document route (collab frozen; secondary only)
  */

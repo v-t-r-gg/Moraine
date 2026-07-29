@@ -71,7 +71,7 @@ pub fn default_background_runtime_manager() -> Arc<dyn BackgroundRuntimeManager>
     background_runtime_manager_for_host(HostPlatform::current())
 }
 
-// Source-compatible names for persisted C3 callers. New implementation code uses
+// Source-compatible names for callers of the former service abstraction. New code uses
 // the platform-neutral runtime vocabulary above.
 pub use default_background_runtime_manager as default_service_manager;
 pub use BackgroundRuntimeManager as ServiceManager;

@@ -98,7 +98,7 @@ vi.mock("@/shared/api/provision", () => ({
 import { App } from "./App";
 import { provisionInspect } from "@/shared/api/provision";
 
-describe("App product shell (C3)", () => {
+describe("App product shell", () => {
   it("starts on ledger workspace with service health banner", async () => {
     render(<App />);
     await waitFor(() => {

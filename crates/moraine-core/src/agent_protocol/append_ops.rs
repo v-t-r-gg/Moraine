@@ -1,4 +1,4 @@
-//! Append-only ledger operations (M4.6).
+//! Append-only ledger operations.
 //!
 //! Protocol agent claims (checkpoints, rationale, evidence, mechanical events) are
 //! never rewritten in place. Humans add observations; agents or humans may amend,

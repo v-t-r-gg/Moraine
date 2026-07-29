@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# C3 lifecycle smoke: reinstall, service restart/spool, uninstall retain ledger.
+# Linux lifecycle smoke: reinstall, service restart/spool, uninstall retains ledger.
 # Uses a temporary HOME under /tmp (not goal scratch). Requires prebuilt release bins
 # or runs cargo build --release for cli+service.
 set -euo pipefail
@@ -68,4 +68,4 @@ echo keep > "$PROJ/.moraine/keep.txt"
 "$STAGE/uninstall.sh"
 test ! -e "$MORAINE_PREFIX/bin/moraine"
 test -f "$PROJ/.moraine/keep.txt"
-echo "C3_LIFECYCLE_SMOKE_OK"
+echo "LINUX_LIFECYCLE_SMOKE_OK"

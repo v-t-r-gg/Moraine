@@ -1,7 +1,9 @@
-//! Domain library for Moraine run records. No Tauri / Axum / UI deps.
+//! Canonical domain, persistence & projection authority for Moraine run records.
 //!
-//! One Markdown run record path maps to one live review room.
-//! Structured review state lives in `file.md.moraine.json`.
+//! Project-local Markdown plus schema-versioned sidecars are authoritative.
+//! This crate owns no IPC, service lifecycle, provisioning, Tauri or UI code.
+//! User-level registry data is rebuildable metadata; run bundles remain
+//! source-adjacent.
 
 pub mod agent_protocol;
 pub mod annotation_ops;

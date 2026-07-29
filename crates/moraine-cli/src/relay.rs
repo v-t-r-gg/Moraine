@@ -79,7 +79,7 @@ pub fn launch_desktop(path: &Path) -> Result<bool> {
         moraine_platform::HostPlatform::current(),
         moraine_platform::SuiteComponent::Desktop,
     );
-    // Prefer installed suite desktop (C2), then PATH, then cargo target (dev only).
+    // Prefer the installed suite desktop, then PATH, then a development target.
     let suite_app = crate::suite::SuitePaths::discover().desktop;
     if suite_app.is_file() {
         bins.push(suite_app);

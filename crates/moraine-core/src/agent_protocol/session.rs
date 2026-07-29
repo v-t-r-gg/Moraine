@@ -3,7 +3,7 @@
 //! Session files are rebuildable runtime state beside the project. Canonical
 //! ledger content remains in run bundles.
 //!
-//! **Cardinality policy (M2):** at most one *active provisional* run per
+//! Cardinality policy: at most one *active provisional* run per
 //! session. A session may accumulate many confirmed runs over time. MCP
 //! `run_start` is the authoritative semantic boundary for new runs after the
 //! first provisional has been confirmed.

@@ -57,10 +57,12 @@ jobs:
         run: cargo check --workspace --all-targets
       - name: Test portable platform contracts
         run: cargo test -p moraine-platform
+      - name: Test Windows CLI capture
+        run: cargo test -p moraine-cli --all-targets
       - name: Prove current-user Task Scheduler contracts
         run: cargo test -p moraine-provision --test windows_task_scheduler_contract
-      - name: Prove secured named-pipe contracts
-        run: cargo test -p moraine-service --test windows_named_pipe_contract
+      - name: Test production Windows capture listener
+        run: cargo test -p moraine-service --all-targets
       - name: Check desktop host
         run: cargo check -p moraine-app
 

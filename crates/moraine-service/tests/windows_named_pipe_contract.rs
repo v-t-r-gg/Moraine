@@ -7,8 +7,8 @@ use std::os::windows::io::AsRawHandle;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::windows::named_pipe::{ClientOptions, PipeMode, ServerOptions};
 use uuid::Uuid;
-use windows::core::PWSTR;
-use windows::Win32::Foundation::{CloseHandle, LocalFree, BOOL, HANDLE, HLOCAL};
+use windows::core::{BOOL, PWSTR};
+use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL};
 use windows::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
     ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SDDL_REVISION_1,
@@ -147,12 +147,12 @@ fn pipe_sddl(
             None,
         )?;
         let _text_allocation = LocalAllocation(HLOCAL(text.0.cast()));
-        text.to_string()
+        Ok(text.to_string()?)
     }
 }
 
 async fn read_one_event(
-    mut server: tokio::net::windows::named_pipe::NamedPipeServer,
+    server: tokio::net::windows::named_pipe::NamedPipeServer,
 ) -> std::io::Result<Vec<u8>> {
     server.connect().await?;
     let mut payload = Vec::new();

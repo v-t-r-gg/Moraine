@@ -1,6 +1,6 @@
 //! `moraine service` lifecycle through the shared background-runtime backend.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use moraine_provision::{
     default_background_runtime_manager, BackgroundRuntimeManager, RuntimeInstallSpec,
 };
@@ -110,9 +110,6 @@ fn print_state(json_output: bool, action: &str) -> Result<()> {
         );
     } else {
         println!("{}", state.status_message);
-        if !state.supported {
-            bail!("{}", state.status_message);
-        }
     }
     Ok(())
 }

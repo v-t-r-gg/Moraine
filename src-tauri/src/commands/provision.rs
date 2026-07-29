@@ -24,7 +24,13 @@ fn ensure_desktop_product_setup_supported_with_capabilities(
     operation: &'static str,
     capabilities: &moraine_platform::PlatformCapabilities,
 ) -> Result<(), String> {
-    moraine_provision::ensure_product_capture_supported(capabilities, operation).map_err(map_err)
+    if capabilities.desktop_product_supported() {
+        return Ok(());
+    }
+    Err(format!(
+        "unsupported_platform: {operation} is unsupported on {:?}",
+        capabilities.host
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -182,5 +188,18 @@ mod tests {
         .unwrap_err();
         assert!(error.contains("unsupported_platform"));
         assert!(error.contains("desktop_provision_apply"));
+    }
+
+    #[test]
+    fn degraded_desktop_host_fails_even_when_capture_is_supported() {
+        let mut capabilities = PlatformCapabilities::for_host(HostPlatform::Linux);
+        capabilities.desktop_host = moraine_platform::CapabilityStatus::Degraded;
+        let error = ensure_desktop_product_setup_supported_with_capabilities(
+            "desktop_provision_plan",
+            &capabilities,
+        )
+        .unwrap_err();
+        assert!(error.contains("unsupported_platform"));
+        assert!(error.contains("desktop_provision_plan"));
     }
 }

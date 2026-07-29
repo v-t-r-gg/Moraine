@@ -97,6 +97,10 @@ impl PlatformCapabilities {
             && matches!(self.background_runtime, CapabilityStatus::Supported)
             && matches!(self.user_installation, CapabilityStatus::Supported)
     }
+
+    pub const fn desktop_product_supported(&self) -> bool {
+        self.product_ready_supported() && matches!(self.desktop_host, CapabilityStatus::Supported)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

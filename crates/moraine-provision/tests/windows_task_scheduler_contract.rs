@@ -145,9 +145,12 @@ fn register(
     name: &BSTR,
     sid: &str,
     xml: &str,
-    sddl: &str,
+    sddl: Option<&str>,
 ) -> windows::core::Result<windows::Win32::System::TaskScheduler::IRegisteredTask> {
     unsafe {
+        let sddl = sddl
+            .map(|value| VARIANT::from(BSTR::from(value)))
+            .unwrap_or_default();
         folder.RegisterTask(
             name,
             &BSTR::from(xml),
@@ -155,7 +158,7 @@ fn register(
             &VARIANT::from(BSTR::from(sid)),
             &VARIANT::default(),
             TASK_LOGON_INTERACTIVE_TOKEN,
-            &VARIANT::from(BSTR::from(sddl)),
+            &sddl,
         )
     }
 }
@@ -198,7 +201,7 @@ fn current_user_task_can_run_restore_and_preserve_demand_start() -> windows::cor
         &name,
         &sid,
         &task_xml(&sid, false, "original"),
-        &sddl,
+        Some(&sddl),
     )?;
     let (original_xml, original_sddl) = read_registration(&original)?;
     assert!(original_xml.contains("<LogonType>InteractiveToken</LogonType>"));
@@ -236,11 +239,13 @@ fn current_user_task_can_run_restore_and_preserve_demand_start() -> windows::cor
         &name,
         &sid,
         &task_xml(&sid, true, "mutated"),
-        &sddl,
+        Some(&sddl),
     )?;
     assert_ne!(read_registration(&mutated)?.0, original_xml);
 
-    let restored = register(&folder, &name, &sid, &original_xml, &original_sddl)?;
+    // Returned XML embeds Task Scheduler's normalized security descriptor.
+    // Supplying SDDL again rewrites that element and breaks byte equality.
+    let restored = register(&folder, &name, &sid, &original_xml, None)?;
     let (restored_xml, restored_sddl) = read_registration(&restored)?;
     assert_eq!(restored_xml, original_xml);
     assert_eq!(restored_sddl, original_sddl);

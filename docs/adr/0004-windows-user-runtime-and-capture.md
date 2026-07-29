@@ -259,9 +259,13 @@ SHA-256(UTF-8(returned XML) + NUL + UTF-8(returned SDDL))
 Always re-read the registered task before hashing; Task Scheduler may normalize
 the supplied definition.
 
-Restoration must stop & delete the current registration, restore exact XML plus
-ACL or exact absence, re-read & verify the fingerprint, then restore prior
-autostart & running state. Any unproven restoration yields `RollbackRequired`.
+Restoration must stop & delete the current registration, then register the
+captured Task Scheduler-returned XML without separately overriding its embedded
+security descriptor. Passing both captured XML & SDDL makes Task Scheduler
+rewrite the XML representation even when the effective ACL is unchanged.
+Re-read XML & SDDL, verify the combined fingerprint, then restore prior
+autostart & running state. Exact absence is restored by deletion. Any unproven
+restoration yields `RollbackRequired`.
 
 ## Named-pipe capture
 

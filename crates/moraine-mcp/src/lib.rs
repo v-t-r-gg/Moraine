@@ -1,7 +1,8 @@
 //! Local STDIO MCP transport for the Moraine agent-run protocol.
 //!
-//! Handlers call `moraine-core` directly (no CLI shell-out). Project root is
-//! fixed for the lifetime of the server process.
+//! Handlers call `moraine-core` directly; no CLI shell-out or network listener.
+//! The project root is fixed for the server lifetime. Core remains authoritative
+//! for persistence; this crate owns transport mapping only.
 
 mod server;
 mod tools;

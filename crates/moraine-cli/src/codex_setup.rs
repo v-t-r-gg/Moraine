@@ -1,4 +1,4 @@
-//! Project-scoped Codex MCP + hooks configuration (C2).
+//! Project-scoped Codex MCP & hooks configuration.
 //!
 //! Merges Moraine-managed entries without wiping unrelated Codex config or hooks.
 //! Managed markers let `--remove` delete only Moraine-owned content.

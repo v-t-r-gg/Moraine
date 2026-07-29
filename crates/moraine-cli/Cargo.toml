@@ -6,7 +6,6 @@ license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
 description = "CLI for Moraine agent-run protocol, share, status, and local history"
-readme = "README.md"
 
 [[bin]]
 name = "moraine"

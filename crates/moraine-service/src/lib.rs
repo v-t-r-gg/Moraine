@@ -1,3 +1,9 @@
+//! Capture intake, durable spool processing & rebuildable discovery.
+//!
+//! Project run bundles remain canonical in `moraine-core`. Concrete listeners
+//! are selected by the executable; this library owns event processing, not
+//! operating-system registration or desktop state.
+
 pub mod service;
 
 pub use service::{

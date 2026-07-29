@@ -1,63 +1,54 @@
 # Roadmap
 
-High-level direction. Product model: [VISION.md](./VISION.md), [ARCHITECTURE.md](./ARCHITECTURE.md), [docs/DEVELOPMENT_BLUEPRINT_ALIGNED.md](./docs/DEVELOPMENT_BLUEPRINT_ALIGNED.md).
+Moraine records review activity; it does not render a verdict.
 
-**Invariant:** Moraine records review activity; it does not render the verdict.
+## Completed
 
-## Done (foundation)
+* Project-local Markdown run records with structured schema-v6 sidecars.
+* Local STDIO agent protocol with checkpoints, evidence & findings.
+* Append-only observations, amendments, supersessions & target redaction.
+* Codex hooks plus MCP integration.
+* Background capture, durable spool & rebuildable project discovery.
+* Transactional Linux provisioning, rollback, repair & self-verification.
+* Linux archive installation with a user-scoped systemd runtime.
+* Platform, path, capture & runtime boundaries.
+* Required Windows workspace compilation with fail-closed product behavior.
 
-* Run records as Markdown + `*.md.moraine.json` (schema through v6)  
-* Agent run protocol + local STDIO MCP (run + findings tools)  
-* Local service + rebuildable discovery index  
-* Minimal trustworthy evidence on checkpoints  
-* Checkpoint findings (MCP + desktop)  
-* React desktop migration (Svelte removed from app)  
-* Append-only ledger semantics; target-scoped redaction (C1)  
-* **C2 — Stranger-safe Linux installation and Codex reference pack** (merged)  
-* **C3 — Beta hardening and product-surface freeze** (merged)
-  * Transactional provisioning and exact rollback
-  * Truthful ProductCapture onboarding and durable project discovery
-  * Complete Linux source and release-package validation
+## Current
 
-## Now
+### W2; native Windows 11 runtime
 
-* **W1 — Platform abstraction**
-  * W1-A: host capabilities and one authoritative suite/runtime layout (merged)
-  * W1-B: capture and background-runtime backend boundaries (merged)
-  * W1-C: capability-aware product closure and required Windows compile CI
-    (implemented in PR #20; W1 closes when it merges)
+Implement the concrete Windows backends already isolated by the platform
+boundary:
 
-### Validation language
+* per-user named-pipe capture sender & listener;
+* user-scoped background-runtime registration;
+* Windows diagnostics, repair, rollback & ProductCapture verification;
+* native desktop lifecycle acceptance on Windows 11.
 
-* **Implemented:** present in this branch.
-* **Tested locally:** covered by hermetic Rust/Tauri/frontend tests and the
-  authoritative source gate.
-* **Tested in CI:** only after the corresponding PR checks report success.
-* **Graphical Linux session:** not claimed by headless tests; a real
-  WebKit/systemd user-session lifecycle remains manual acceptance evidence.
-* **Planned:** unfinished W1 work and W2–W3 below.
-* **Deferred:** the explicitly listed capabilities below.
+W2 does not include a signed installer or WinGet publication.
 
-## Next (ordered)
+## Later
 
-1. Merge **W1-C — Capability-aware product closure**
-2. **W2 — Native Windows 11 port**
-3. **W3 — Signed installer and WinGet**
-4. Second agent adapter (subordinate to Windows portfolio reach)
+1. **W3; signed installer & WinGet**
+   * no-admin installation where practical;
+   * uninstall that preserves project ledgers;
+   * signing, upgrade & package-manager validation.
+2. **Second agent adapter**
+   * begin only after the shared protocol survives Linux & Windows backends;
+   * preserve one run model rather than adding agent-specific domain state.
+3. **External beta evidence & product presentation**
+   * clean-machine workflows;
+   * real graphical acceptance;
+   * current screenshots or demonstrations only when reproducible.
+4. **Deferred**
+   * broad evidence expansion;
+   * semantic or vector search;
+   * relay authentication;
+   * richer Git/PR integration;
+   * hosted or live-collaboration expansion;
+   * general public API reorganization.
 
-## Deferred (do not expand in C3)
-
-* `moraine-core::prelude` public API reorg  
-* Broad evidence expansion  
-* Semantic/vector search  
-* Relay authentication  
-* Richer Git/PR integration  
-* Hosted collaboration  
-
-## Explicit non-goals (near term)
-
-Approval/rejection as product center, merge gates, remote MCP, full observability, agent orchestration, live-collaboration hardening for untrusted networks, compliance features, enterprise policy, general KM workspace, Git/PR replacement.
-
-## Compatibility
-
-`moraine decide` remains CLI-only legacy. Prefer findings and append-only observations. Live collab/Yjs is frozen for beta defaults.
+Implementation constraints & acceptance gates live in
+[docs/DEVELOPMENT_BLUEPRINT.md](docs/DEVELOPMENT_BLUEPRINT.md). Current
+architecture lives in [ARCHITECTURE.md](ARCHITECTURE.md).

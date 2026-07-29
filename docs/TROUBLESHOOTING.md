@@ -1,66 +1,98 @@
-# Troubleshooting (installed suite)
+# Troubleshooting
 
-## Stale CLI on PATH
-
-Symptoms: `moraine version` shows an unexpected commit or old version; doctor warns about `~/.cargo/bin`.
+Start with read-only inspection:
 
 ```bash
-type -a moraine
+moraine version --json
 moraine doctor --json
-# put suite first:
-export PATH="$HOME/.local/bin:$PATH"
-hash -r   # bash
-# zsh: rehash
+moraine service status --json
 ```
 
-Do not delete binaries blindly; deprioritize Cargo installs for normal use.
+## Unsupported platform
 
-## Service unit points at Cargo
+Windows, macOS & unknown hosts can inspect Moraine but cannot run
+ProductCapture. Setup, runtime mutation, agent repair & desktop onboarding fail
+closed. A present executable or initialized project does not change that state.
+
+Windows compilation is tested; runtime support begins with W2.
+
+## Suite is incomplete
+
+If `doctor` reports missing or incoherent components:
+
+1. Check that `PATH` resolves the CLI from the installed prefix.
+2. Re-run `install.sh` from one release archive.
+3. Run `moraine version --json` & compare suite component versions/hashes.
+
+Do not mix Cargo-built binaries with a release suite.
+
+## Background capture is unavailable
+
+On supported Linux:
 
 ```bash
-grep ExecStart ~/.config/systemd/user/moraine-service.service
-moraine service install
-systemctl --user daemon-reload
-moraine service restart
-```
-
-`ExecStart` must be an absolute path under `~/.local/libexec/moraine/` (or your prefix).
-
-## Service offline
-
-```bash
-moraine service start
 moraine service status --json
 moraine service logs
+moraine service restart --json
 ```
 
-Hook events spool under `~/.cache/moraine-service` when the service is down and process on restart.
+If registration is missing or invalid, run `moraine setup` or use desktop
+health repair. A diagnostics response without live capture intake is not ready.
 
-## Codex integration
+## Project is missing after restart
+
+Project runs remain canonical under `.moraine/`. Re-register an existing
+project through desktop “Add project” or:
 
 ```bash
-moraine doctor --project . --integration codex
-moraine setup codex --project . --check
-# repair absolute paths:
-moraine setup codex --project .
-# remove only Moraine-managed entries:
-moraine setup codex --project . --remove
+moraine project init /absolute/path/to/project
 ```
 
-Unrelated MCP servers and non-Moraine hooks are preserved. Config without managed markers is not auto-removed.
+The command is idempotent & registers the canonical root. Missing registered
+paths remain visible in diagnostics.
 
-## Desktop offline / version mismatch
-
-The status bar shows service online/offline and mismatch. Discovery falls back to direct filesystem inspection when the service is down. Run `moraine doctor` for remediation.
-
-## Uninstall without losing ledgers
+## Codex is detected but capture is absent
 
 ```bash
-./uninstall.sh
-# project .moraine/ directories remain
-# spool retained unless --purge-user-state
+moraine integrate codex --project /absolute/path/to/project
+moraine doctor --project /absolute/path/to/project --integration codex
+moraine self-test --project /absolute/path/to/project --json
 ```
 
-## Support claim
+See [integrations/CODEX.md](integrations/CODEX.md) for managed files & coverage.
 
-x86_64 Linux + systemd user services. Validated profiles are listed in [INSTALL.md](./INSTALL.md).
+## Setup failed
+
+Provisioning attempts automatic rollback. Inspect the returned outcome:
+
+* `rolledBack`; prior mutable state was restored;
+* `rollbackRequired`; restoration needs manual attention;
+* `degraded`; safe project ledger state was intentionally retained.
+
+Do not delete `.moraine/` to repair setup. Transaction journals live in the
+Moraine user-data directory & support explicit rollback/recovery.
+
+## Runs exist but the desktop is empty
+
+Confirm the project is registered & readable:
+
+```bash
+moraine doctor --project /absolute/path/to/project
+moraine open --path /absolute/path/to/project
+```
+
+The service index is rebuildable. Broken or future-schema sidecars should be
+reported rather than suppressing healthy runs.
+
+## Redacted text is still on disk
+
+This is expected. Target redaction withholds text from ordinary projections;
+raw sidecars, Git history, backups & separate evidence artifacts remain
+forensic sources. Follow the secret-response guidance in
+[../SECURITY.md](../SECURITY.md).
+
+## Uninstall left project files
+
+Project-local `.moraine/` directories are retained by design. Uninstall removes
+the installed suite & user registration; project ledgers belong to the project
+owner.

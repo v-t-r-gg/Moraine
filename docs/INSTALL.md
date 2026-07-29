@@ -1,65 +1,64 @@
-# Install Moraine (Linux x86_64)
+# Install Moraine on Linux
 
-**Supported profile (C2):** x86_64 Linux with **systemd user** services (glibc). Validated on **Arch Linux** (development host + clean temporary HOME) and **Ubuntu 24.04 LTS** userland (ubuntu-base rootfs via bubblewrap for install/CLI/service smoke; full graphical/WebKit and interactive `systemctl --user` login session still depend on a real desktop install). Other distributions are unverified.
+Moraine supports x86_64 Linux with a systemd user session & glibc. The workspace
+compiles on Windows, but no supported Windows runtime or installer exists before
+W2/W3.
 
-You do **not** need Rust, Cargo, Node.js, npm, or a Moraine source checkout for normal use.
+Normal installation does not require Rust, Node.js or a source checkout.
 
-## Install from a release bundle
+## Install the release archive
 
 ```bash
 tar -xzf moraine-<version>-linux-x86_64.tar.gz
 cd moraine-<version>-linux-x86_64
 ./install.sh
-# optional:
-# ./install.sh --prefix "$HOME/.local"
-# ./install.sh --dry-run
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Ensure `~/.local/bin` is on your `PATH` **before** `~/.cargo/bin` so a stale Cargo install does not shadow the suite.
+The default prefix is `~/.local`. Use a custom user prefix when needed:
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
-moraine version --verbose
-moraine service start
+./install.sh --prefix /absolute/user/path
+```
+
+Keep the selected `bin` directory before stale Cargo installs on `PATH`.
+
+## Set up the product
+
+Launch `moraine-app` from the desktop menu & follow onboarding, or inspect the
+installation from the CLI:
+
+```bash
+moraine setup
 moraine doctor
 ```
 
-## Configure the first reference integration (Codex)
+For explicit project setup:
 
 ```bash
-moraine project init /absolute/path/to/your/repo
-moraine setup codex --project /absolute/path/to/your/repo
-moraine doctor --project /absolute/path/to/your/repo --integration codex
+moraine project init /path/to/project
+moraine integrate codex --project /path/to/project
+moraine doctor --project /path/to/project --integration codex
 ```
 
-Start Codex in that project as usual. Hooks and MCP use the **installed** `moraine` on `PATH`. The desktop may remain closed while capture runs.
+The desktop may stay closed while capture runs.
 
-## Desktop
+## Installed files
 
-After install, launch `moraine-app` from the menu (if registered) or:
+The suite includes:
 
-```bash
-~/.local/lib/moraine/moraine-app
-```
+* `~/.local/bin/moraine`;
+* `~/.local/libexec/moraine/moraine-service`;
+* `~/.local/lib/moraine/moraine-app`;
+* a suite manifest;
+* a systemd user registration;
+* a desktop entry & icon;
+* current end-user documentation.
 
-Discovery talks to the local service over **loopback HTTP** with a native client (no `curl` required).
+Environment overrides are supported for advanced installations & tests; normal
+users should keep one coherent prefix.
 
-## Uninstall product files (keeps ledgers)
-
-```bash
-cd moraine-<version>-linux-x86_64   # or keep a copy of uninstall.sh
-./uninstall.sh
-```
-
-This removes suite binaries, unit files, and desktop registration. It does **not** delete project-local `.moraine/` run records. Spool/cache under `~/.cache/moraine-service` is retained unless you pass `--purge-user-state`.
-
-Remove Codex project config separately:
-
-```bash
-moraine setup codex --project /path/to/repo --remove
-```
-
-## Diagnostics
+## Diagnose
 
 ```bash
 moraine version --json
@@ -68,11 +67,27 @@ moraine service status --json
 moraine service logs
 ```
 
-## Building a bundle (developers only)
+See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for repair paths.
+
+## Uninstall
+
+Run `uninstall.sh` from the extracted archive before deleting it:
 
 ```bash
-./scripts/build-linux-release.sh
-# output: dist/moraine-<version>-linux-x86_64.tar.gz
+./uninstall.sh
 ```
 
-Development workflows (`cargo run`, `npm run tauri:dev`) remain available for contributors; they are **not** the stranger-safe path.
+The normal path calls the installed CLI runtime backend before removing the
+suite. A legacy fallback handles damaged older registrations.
+
+Uninstall removes product binaries, registrations & desktop files. It does not
+delete project-local `.moraine/` ledgers. User spool/cache is retained unless
+`--purge-user-state` is requested.
+
+Remove managed Codex configuration separately:
+
+```bash
+moraine integrate codex --project /path/to/project --remove
+```
+
+Contributor build instructions live in [CONTRIBUTING.md](../CONTRIBUTING.md).

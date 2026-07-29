@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install Moraine suite from an extracted release directory (C2).
+# Install Moraine suite from an extracted Linux release directory.
 # User-scoped by default. Idempotent. Does not require root, sudo, or Python.
 set -euo pipefail
 

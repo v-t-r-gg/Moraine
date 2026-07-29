@@ -26,6 +26,9 @@ cargo test -p moraine-mcp
 cargo test -p moraine-service
 cargo test -p moraine-provision
 
+echo "== docs =="
+./scripts/check-docs.sh
+
 echo "== tauri =="
 cargo check -p moraine-app
 cargo test -p moraine-app --test provision_commands

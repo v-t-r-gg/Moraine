@@ -1,217 +1,150 @@
 # Agent run protocol
 
-Compact JSON CLI and local STDIO MCP for durable **agent run** ledgers. Agents do not rewrite full Markdown on every step; humans inspect a structured projection and append-only review ops—not free-form “Human notes + Save” as the primary path.
+This document defines Moraine’s durable, transport-neutral run contract. Code
+owns exact schemas, fields, error variants & live MCP tool inventory.
 
-Related: [MCP.md](./MCP.md) · [REDACTION.md](./REDACTION.md) · [integrations/codex/](./integrations/codex/) · [INSTALL.md](./INSTALL.md).
+## Project identity
 
----
+`moraine project init <path>` creates or discovers one project identity under
+`.moraine/project.json`. Initialization is idempotent & registers the canonical
+project root for rebuildable discovery.
 
-## Authority model (current)
+Read-only operations do not create a project. A process confined to a project
+does not silently switch roots.
 
-Protocol runs are **append-only** for review context.
+## Run identity
 
-| Region / surface | Source of truth | Human interaction |
-|------------------|-----------------|-------------------|
-| Objective, lifecycle, Git context, checkpoints, risks, questions, ready text | Structured sidecar (`agent` state); Markdown is a **projection** | Desktop presents managed protocol content as structured ledger; free-form rewrite of managed regions is not the product path |
-| Checkpoints & agent claims | Immutable once committed (correct via amend / supersede / redact) | Inspect; create findings against targets |
-| Human context on protocol runs | **Append-only** `human_observation_add` (and related append ops) | Structured observation UI / CLI ops—not an editable Human notes blob as the durable write path |
-| Findings | Structured finding records + events | Create, respond, state change; ordinary views respect redaction |
-| Evidence | Checkpoint-linked items; mechanical capture where configured | Inspect with provenance labels |
-| Legacy free-form Markdown | Non-protocol documents only | **Historical/compatibility surface** — host Save / free-form edit may still apply to non-protocol docs |
+A run has a UUID, project identity, integration, session namespace & durable
+record path. Session binding prevents unrelated prompts from creating duplicate
+runs.
 
-Legacy detection of `## Protocol status` + `## Human notes` regions may still appear in older projections; **new protocol work uses the structured ledger model**, not free-form Human notes as the durable human write path.
+Canonical files:
 
-`ready_for_review` means ready for human **inspection**. It is **not** approval, merge authority, or deployment authorization.
-
----
-
-## Authority boundary
-
-| Actor | Can do | Cannot do |
-|-------|--------|-----------|
-| Agent (`moraine run …` / MCP) | start, checkpoint, ready, resume, show, open; findings list/get/respond via MCP | product approval/rejection, merge authority, authenticated identity |
-| Human (desktop / CLI) | inspect ledger, append observations, findings, amend/supersede/redact | agent lifecycle as “approval” |
-| Human (`moraine decide`) | **legacy compatibility** decisions only | primary product workflow |
-
----
-
-## Schema
-
-- Current writable sidecar schema: **v6** (`SCHEMA_VERSION` in `moraine-core`).
-- Readable range: minimum **3** through current maximum readable (**6**); see suite `manifest.json` / `moraine version --json`.
-- v4 sidecars load with empty findings defaults; v5+ carry findings; v6 continues findings + append-only ops evolution.
-
-Do not assume “schema v4 only” in new docs or integrations.
-
----
-
-## Commands (CLI)
-
-```bash
-moraine project init [PATH] --json
-
-moraine run start --objective "…" --idempotency-key "…" [--project PATH] --json
-moraine run show --run-id UUID [--project PATH] [--include-markdown] --json
-moraine run checkpoint --run-id UUID --expected-hash HEX --idempotency-key "…" --input FILE|- [--project PATH] --json
-moraine run ready --run-id UUID --expected-hash HEX --idempotency-key "…" [--summary "…"] [--project PATH] --json
-moraine run resume --run-id UUID --expected-hash HEX --idempotency-key "…" [--reason "…"] [--project PATH] --json
-moraine run open --run-id UUID [--project PATH] --json
+```text
+.moraine/runs/<run>.md
+.moraine/runs/<run>.md.moraine.json
 ```
 
-Installed product helpers (C2):
-
-```bash
-moraine version [--verbose|--json]
-moraine setup
-moraine doctor [--project PATH] [--integration codex] [--json]
-moraine service install|start|stop|restart|status|logs|uninstall
-moraine integrate codex --project PATH [--check|--remove|--dry-run|--json]
-moraine open [--path PATH] [--run-id ID] [--project PATH]
-```
-
-`moraine decide` remains **legacy / compatibility-only** (stderr warning; not MCP).
-
----
-
-## MCP (implemented)
-
-Local STDIO MCP is **implemented** (`moraine mcp --project /absolute/path`).
-
-**Do not hardcode a five-tool list.** Ask the live server (`tools/list`) or `moraine doctor --project . --integration codex --json` (`integration.codex.mcp_tools`).
-
-Current implementation tools include:
-
-| Tool | Role |
-|------|------|
-| `run_start` | Start or reconcile provisional run (`sessionId` optional) |
-| `run_show` | Compact run packet |
-| `run_checkpoint` | Sparse checkpoint |
-| `run_ready` | Lifecycle → ready_for_review |
-| `run_resume` | Resume active work |
-| `list_findings` | List findings |
-| `get_finding` | Finding detail |
-| `respond_to_finding` | Human/agent response on a finding |
-
-No decision/approval MCP tools. See [MCP.md](./MCP.md).
-
----
+The sidecar is structured authority. Markdown is the readable projection.
+Human-notes bytes are preserved across projection updates.
 
 ## Lifecycle
 
+A run may be provisional from mechanical activity, then confirmed by an agent
+start operation. Repeated starts with the same idempotency key resolve to the
+same run.
+
+Typical semantic flow:
+
 ```text
-active ──run ready──► ready_for_review ──run resume──► active
+start or resume
+  → checkpoint
+  → finding or correction operations
+  → ready
+  → later resume when work continues
 ```
 
-Lifecycle is operational stage, not approval. Historical run-level decisions in sidecars remain readable; content-hash binding can mark them **stale** after later edits.
+`ready` records that the agent considers its work ready for human inspection.
+It is not an approval, merge authorization or deployment verdict.
 
-**Provisional runs** (mechanical hooks) can be **confirmed** by `run_start` with matching `sessionId` rather than duplicated.
+## Checkpoints & evidence
 
----
+A checkpoint records a bounded summary of work, actions, evidence references,
+risks & open questions. Expected revisions/hashes prevent stale mutation.
 
-## Project discovery and desktop workspace
+Evidence may describe commands, files, URLs or captured artifacts. Sensitive
+values are redacted before ordinary storage where the capture path supports it.
+Evidence is a claim with provenance; it is not automatic proof of correctness.
 
-- `project init` is idempotent; creates `.moraine/`, `runs/`, `project.json`.
-- `run start` may auto-init project structure; `run show` / `run open` discover only.
-- **Discovery desktop (implemented):** projects → runs → structured ledger (timeline, findings, capture coverage).
-- Service index (`index.json` under spool) is a **rebuildable nonauthoritative cache**. Canonical data remains project-local bundles.
-- Capture continues with the desktop closed; offline desktop can use direct filesystem inspection.
-- Service must not require the Moraine source checkout as CWD for installed use.
-
----
-
-## Checkpoints and evidence
-
-Checkpoint input (summary, actions, rationales, evidence, risks, open questions) is validated for injection safety and size. Agent evidence cannot claim `moraine_captured`. Moraine may attach Git context mechanically.
-
-**Evidence capture (minimal, implemented):** structured evidence items on checkpoints; mechanical hook/spool path for lifecycle events; provenance is explicit. Not a full host observability or signing stack.
-
----
-
-## Append-only correction and redaction
-
-| Op | Role |
-|----|------|
-| `human_observation_add` | Append human observation |
-| amend / supersede | Correct earlier claims without silent rewrite |
-| redact | Target-scoped withholding in **ordinary** projections (C1) |
-
-Ordinary list/show/timeline/MCP views must not leak redacted claim text. Privileged recovery is separate. See [REDACTION.md](./REDACTION.md).
-
----
+Mechanical hooks may establish prompt or tool coverage without a semantic
+checkpoint. Capture coverage must state that distinction.
 
 ## Findings
 
-Findings are **implemented**: create, list, get, respond, state changes; target checkpoints or other structured targets. Ordinary views respect redaction. Prefer findings + observations over legacy run-level decisions.
+Findings are durable review items linked to a run or checkpoint. They have
+identity, kind, state, statement & response history.
 
----
+Finding mutations use idempotency & expected state. Findings survive later
+checkpoints, projection rebuilds & supported schema promotion.
 
-## Persistence and recovery
+Findings record review activity. Their state does not authorize an external
+product decision.
 
-- Structured state in sidecar; Markdown is projection.
-- Mutations after start require `--expected-hash` (UTF-8 SHA-256).
-- Two-phase commit (incomplete_op → Markdown write → promote) with explicit recovery codes.
-- Start idempotency reserves `run_id` under the project lock.
+## Append-only operations
 
----
+The ledger supports:
 
-## Idempotency and errors
+* observation; add a new reviewer statement;
+* amend; replace the ordinary projection of a prior claim while retaining both;
+* supersede; mark a prior claim as replaced by another claim;
+* redact; withhold a target from ordinary views while retaining the operation.
 
-Mutating ops require `--idempotency-key`. Same key + same payload → original success; conflict on payload change.
+Operations target stable IDs. They do not rewrite an earlier entry in place.
+Sequential amendment records the immediate prior content needed to understand
+the chain.
 
-JSON errors use stable codes (`revision_conflict`, `idempotency_conflict`, `operation_recovery_required`, `unsupported_schema_version`, …). With `--json`, stdout is only the JSON object.
+## Redaction
 
----
+Ordinary CLI, MCP, discovery, Markdown & desktop projections omit redacted claim
+text. The redaction operation remains visible.
 
-## Capture coverage (honesty)
+Raw sidecars, Git history, backups & independent evidence files remain forensic
+sources. See [../SECURITY.md](../SECURITY.md).
 
-| Path | What it proves |
-|------|----------------|
-| Hooks only | Mechanical session/provisional capture; may lack semantic checkpoints |
-| MCP tools | Semantic ledger ops when the model calls them |
-| Service down | Hook adapter spools; process once on restart |
+## Idempotency & concurrency
 
-Do **not** claim full semantic capture when only mechanical hooks ran. See [integrations/codex/EXPECTED_CAPTURE.md](./integrations/codex/EXPECTED_CAPTURE.md).
+Mutating operations require idempotency keys where retries could duplicate
+state. Reusing a key with a different payload is a conflict.
 
----
+Expected revisions, checkpoint hashes & finding state prevent stale writes.
+Mutation paths lock, re-read & atomically replace files. Concurrent valid
+operations either serialize safely or return a conflict; they do not silently
+drop one mutation.
 
-## Managed-region presentation
+## Persistence & recovery
 
-Structured protocol presentation in the desktop (Protocol ledger panel) is the primary human surface for protocol runs. Free-form edit of managed agent narrative is not the supported durable path. Legacy free-form document mode remains for **non-protocol** Markdown only and should be labeled as historical/compatibility when documented.
+Incomplete operations are recoverable or discardable according to their
+recorded phase. Read paths represent unsupported schemas, broken sidecars &
+recovery-required state without mutating them.
 
----
+Supported older sidecars remain readable. Mutation promotes them to the current
+writable schema through tested compatibility paths. The current schema constant
+is `moraine_core::run_meta::SCHEMA_CURRENT_WRITABLE`.
 
-## Decisions (legacy)
+## Capture coverage
 
-Run-level `approved` / `changes_requested` / `rejected` may exist in older sidecars. They are **compatibility-only**: preserved, loadable, not the product center, not MCP, not the preferred desktop workflow. Prefer comments, observations, and findings.
+Coverage is explicit:
 
----
+* mechanical; hook activity reached the capture path;
+* semantic; the agent used run/checkpoint operations;
+* evidence; evidence references or artifacts were recorded;
+* findings; review findings exist;
+* incomplete; an expected layer is absent or failed.
 
-## Honest limitations
+No single hook event proves full semantic capture.
 
-- Not authenticated identity, remote MCP, or compliance-grade audit.
-- Markdown + sidecar are not a single ACID transaction; recovery is explicit.
-- Model may skip MCP tools; coverage stays honest.
-- Live multiplayer/relay is secondary and unsafe on untrusted networks.
-- Windows / macOS install are out of scope for C2.
-- Evidence capture is minimal, not full host telemetry.
+## CLI & MCP mapping
 
----
+The CLI exposes project/run operations for people, automation & compatibility.
+The local MCP maps JSON-RPC requests onto the same `moraine-core` operations.
+MCP runs over STDIO; the project root is fixed for the server lifetime.
 
-## Future work (not C2 claims)
+Clients initialize normally, call `tools/list` for the current inventory & use
+returned structured errors for conflicts or invalid state. Documentation does
+not copy the tool list because code & tests are authoritative.
 
-- Broader agent adapters beyond Codex  
-- Richer evidence kinds and signing  
-- Platform install (W1+)  
-- Beta surface freeze and fault matrix (C3)  
-- Hosted collaboration is **not** planned for beta  
+The Codex adapter adds managed hooks plus this local MCP; see
+[integrations/CODEX.md](integrations/CODEX.md).
 
----
+## Compatibility
 
-## Related surfaces labeled legacy
+Compatibility covers:
 
-| Surface | Status |
-|---------|--------|
-| `moraine share` / `moraine-server` live rooms | Secondary / experimental collab—not the primary install story |
-| Free-form Human notes + host Save | Historical/compatibility for non-protocol docs |
-| `moraine decide` | Legacy compatibility only |
-| Editor-oriented “Review + Save” examples | Superseded by agent-run ledger + discovery workspace |
+* supported readable sidecar schemas;
+* stable run, finding & operation identity;
+* persisted transaction & receipt shapes where setup recovery needs them;
+* CLI/MCP semantics across presentation changes.
+
+Compatibility does not require preserving every internal Rust type name.
+Schema changes need fixtures, promotion tests, non-leak tests & an explicit
+migration decision.

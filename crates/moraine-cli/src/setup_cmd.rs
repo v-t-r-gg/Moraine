@@ -1,4 +1,4 @@
-//! Post-install `moraine setup` entry point (C2 §15).
+//! Post-install `moraine setup` entry point.
 //!
 //! CLI automation path; normal users should use the desktop Enable Moraine wizard.
 //! Prefer `moraine enable --project <path>` for a strict transactional setup.

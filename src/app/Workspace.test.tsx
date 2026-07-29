@@ -145,7 +145,7 @@ describe("Workspace discovery shell", () => {
 
   it("App defaults to workspace not welcome-md", () => {
     const app = readFileSync(join(root, "src/app/App.tsx"), "utf8");
-    // C3: ledger workspace is the default product shell (not welcome-md / showWorkspace toggle).
+    // The ledger workspace is the default product shell.
     expect(app).toContain("product-shell");
     expect(app).toContain("<Workspace");
     expect(app).not.toContain("WELCOME_MD");

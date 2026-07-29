@@ -6,7 +6,8 @@ Closes #
 
 ## Moraine run record
 
-`.moraine/runs/...`
+Local Moraine run records remain untracked unless deliberately published as a
+curated example.
 
 ## Implementation commits reviewed
 

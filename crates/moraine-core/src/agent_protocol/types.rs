@@ -421,7 +421,7 @@ pub struct AgentRunState {
     /// Append-only finding ledger events for history reconstruction.
     #[serde(default)]
     pub finding_events: Vec<FindingLedgerEvent>,
-    /// Append-only ledger ops: observations, amendments, supersessions, redactions (M4.6).
+    /// Append-only ledger ops: observations, amendments, supersessions & redactions.
     /// Never rewrites checkpoints, rationale, or evidence in place.
     #[serde(default)]
     pub append_only_ops: Vec<AppendOnlyOpRecord>,

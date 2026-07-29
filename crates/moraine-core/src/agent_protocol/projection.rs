@@ -13,7 +13,7 @@ use super::types::{AgentRunState, AppendOnlyOpRecord, CheckpointRecord, LedgerRe
 /// Ordinary-view marker for withheld claim text.
 pub const REDACTED_MARKER: &str = "[REDACTED]";
 
-/// Sentinel used in C1 complete-payload nonleak tests (must never appear in ordinary JSON).
+/// Sentinel used in complete-payload non-leak tests; never appears in ordinary JSON.
 #[cfg(test)]
 pub const REDACTION_TEST_SENTINEL: &str = "MORAINE_REDACTION_SENTINEL_7f4d2a91";
 

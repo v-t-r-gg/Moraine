@@ -6,7 +6,6 @@ license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
 description = "Local STDIO MCP transport for Moraine agent-run protocol"
-readme = "README.md"
 
 [dependencies]
 moraine-core.workspace = true

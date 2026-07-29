@@ -1,5 +1,7 @@
-//! Optional live review relay (Yjs WebSocket). In-memory only; no auth, no disk.
-//! Wire format must stay compatible with src/lib/editor/yjsSession.ts.
+//! Compatibility-only live review relay.
+//!
+//! This in-memory Yjs WebSocket service has no authentication or canonical
+//! persistence. It is not part of ProductCapture readiness.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;

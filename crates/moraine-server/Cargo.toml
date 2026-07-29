@@ -6,7 +6,6 @@ license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
 description = "Optional in-memory Yjs relay for live Moraine review sessions"
-readme = "README.md"
 
 [[bin]]
 name = "moraine-server"

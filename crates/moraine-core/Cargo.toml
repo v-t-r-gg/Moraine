@@ -6,7 +6,6 @@ license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
 description = "Moraine domain library: run-record files, history, rooms, agent-run ledger"
-readme = "README.md"
 
 [dependencies]
 moraine-platform.workspace = true

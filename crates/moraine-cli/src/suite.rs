@@ -1,4 +1,4 @@
-//! Installed suite paths, manifest, and PATH drift helpers (C2).
+//! Installed suite paths, manifest & PATH drift helpers.
 
 use std::env;
 use std::fs;

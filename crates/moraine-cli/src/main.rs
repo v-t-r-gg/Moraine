@@ -1,4 +1,8 @@
-//! CLI for agent run records and review helpers. Fail-fast share unless `--start`.
+//! Command-line boundary for the installed Moraine ledger product.
+//!
+//! Primary commands inspect, configure & open project-local run ledgers.
+//! Compatibility commands keep the earlier file-editor & collaboration surface
+//! available without making it the product authority.
 
 mod capture;
 mod codex_setup;
@@ -43,12 +47,12 @@ const EXIT_RELAY: i32 = 3;
 #[command(
     name = "moraine",
     version,
-    about = "Moraine CLI: run records and review helpers for agents and scripts",
-    long_about = "Create and inspect Markdown run records, share live review rooms, and read sidecar status.\n\
-                  Agent protocol: moraine project init; moraine run start|show|checkpoint|ready|resume|open --json.\n\
-                  Install suite: moraine version|doctor|service|setup.\n\
+    about = "Moraine: local-first ledger for coding-agent work",
+    long_about = "Moraine: local-first ledger for coding-agent work\n\n\
+                  Primary: setup, doctor, project, run, open, service, integrate, mcp.\n\
+                  Legacy file-editor and collaboration commands remain available for compatibility.\n\
                   Exit codes: 0 ok, 1 error, 2 not found, 3 relay down.\n\
-                  Prefer --json on share/status/info/join/run/project when calling from scripts."
+                  Prefer --json for automation."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -61,14 +65,16 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    /// Print version and data directories
+    /// Compatibility: print version and data directories
+    #[command(hide = true)]
     Info {
         /// Machine-readable object on stdout
         #[arg(long)]
         json: bool,
     },
 
-    /// Snapshot path/room, relay health, and sidecar review counts
+    /// Compatibility: inspect a legacy file/room status
+    #[command(hide = true)]
     #[command(after_help = "Examples:\n  \
         moraine status notes.md\n  \
         moraine status notes.md --human\n  \
@@ -89,10 +95,12 @@ enum Commands {
         human: bool,
     },
 
-    /// Print file contents
+    /// Compatibility: print file contents
+    #[command(hide = true)]
     Cat { path: PathBuf },
 
-    /// Write content or stdin to a file
+    /// Compatibility: write content or stdin to a file
+    #[command(hide = true)]
     Write {
         path: PathBuf,
         #[arg(long, short)]
@@ -101,7 +109,8 @@ enum Commands {
         history: bool,
     },
 
-    /// Open a file in the desktop app or $EDITOR
+    /// Compatibility: open a free-form file
+    #[command(hide = true)]
     Edit {
         path: PathBuf,
         #[arg(long, default_value_t = true)]
@@ -111,7 +120,8 @@ enum Commands {
         share: bool,
     },
 
-    /// Print a collab join URL for a Markdown file
+    /// Compatibility: print a collaboration URL
+    #[command(hide = true)]
     #[command(after_help = "Examples:\n  \
         moraine share notes.md\n  \
         moraine share notes.md --json\n  \
@@ -134,7 +144,8 @@ enum Commands {
         open: bool,
     },
 
-    /// Resolve a room/URL for joining (optionally open a browser)
+    /// Compatibility: resolve a collaboration room
+    #[command(hide = true)]
     #[command(after_help = "Examples:\n  \
         moraine join doc_abc123 --json --no-open\n  \
         moraine join 'http://localhost:1420/?room=doc_abc123'")]
@@ -151,7 +162,8 @@ enum Commands {
         no_open: bool,
     },
 
-    /// List local edit history for a path
+    /// Compatibility: list local file-edit history
+    #[command(hide = true)]
     History {
         path: PathBuf,
         #[arg(long)]
@@ -160,7 +172,8 @@ enum Commands {
         limit: usize,
     },
 
-    /// Restore a history entry
+    /// Compatibility: restore a file-history entry
+    #[command(hide = true)]
     Restore {
         path: PathBuf,
         entry_id: String,
@@ -168,10 +181,12 @@ enum Commands {
         write: bool,
     },
 
-    /// Watch a path for filesystem events
+    /// Compatibility: watch a path for filesystem events
+    #[command(hide = true)]
     Watch { path: PathBuf },
 
-    /// Create or migrate the run ledger for a Markdown file (idempotent)
+    /// Compatibility: create a sidecar for a free-form Markdown file
+    #[command(hide = true)]
     #[command(after_help = "Examples:\n  \
         moraine init run.md --json")]
     Init {
@@ -182,6 +197,7 @@ enum Commands {
 
     /// Record a run-level review decision (legacy / compatibility-only)
     #[command(
+        hide = true,
         after_help = "LEGACY: Run-level decisions are compatibility-only. Prefer comments, suggestions, and human notes.\n\
 Moraine records review activity; it does not authorize merge or deployment.\n\n\
 Examples:\n  \
@@ -272,7 +288,7 @@ On delivery failure, events are written to the local spool (exit 0)."
         cmd: ServiceSub,
     },
 
-    /// Post-install suite check (and optional project integrations)
+    /// Post-install suite check; `setup codex` is a compatibility alias
     Setup {
         /// Integration subcommand; omit for bare post-install setup
         #[command(subcommand)]
@@ -281,7 +297,7 @@ On delivery failure, events are written to the local spool (exit 0)."
         json: bool,
     },
 
-    /// Alias for project-scoped integrations (`setup codex`)
+    /// Configure or remove a project-scoped agent integration
     Integrate {
         #[command(subcommand)]
         cmd: IntegrateSub,
@@ -369,7 +385,7 @@ enum ServiceSub {
 
 #[derive(Debug, Subcommand)]
 enum SetupSub {
-    /// Configure project-scoped Codex MCP + hooks for Moraine
+    /// Compatibility alias for `moraine integrate codex`
     Codex {
         #[arg(long)]
         project: PathBuf,
@@ -388,7 +404,7 @@ enum SetupSub {
 
 #[derive(Debug, Subcommand)]
 enum IntegrateSub {
-    /// Configure project-scoped Codex MCP + hooks (same as `setup codex`)
+    /// Configure project-scoped Codex hooks & local MCP
     Codex {
         #[arg(long)]
         project: PathBuf,

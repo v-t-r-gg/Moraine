@@ -1,4 +1,4 @@
-//! `moraine doctor` health report (C2).
+//! Portable product inspection with Linux-only checks isolated by capability.
 
 use std::fs;
 #[cfg(unix)]
@@ -590,7 +590,7 @@ fn run_supported_doctor(project: Option<&Path>, integration: Option<&str>) -> Do
             return IntegrationCheck {
                 name: name.into(),
                 configured: false,
-                details: vec!["only codex is supported in C2".into()],
+                details: vec!["only the Codex integration is currently supported".into()],
             };
         }
         let root = project

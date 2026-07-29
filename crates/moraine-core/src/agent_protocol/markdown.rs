@@ -3,7 +3,7 @@
 //! Uses ordinary ATX headings and lists so Tiptap (`html: false`) round-trips
 //! preserve structure.
 //!
-//! **Authority model A (M4.6):** Moraine-managed sections are projections of
+//! Moraine-managed sections are projections of
 //! structured sidecar state. Agent checkpoints are immutable; amendments and
 //! observations are append-only. The `## Human notes` section remains for
 //! compatibility projection of observation bodies, not free-form rewrite of claims.

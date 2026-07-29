@@ -35,7 +35,7 @@ export interface AppInfo {
   dataDir: string;
   historyDir: string;
   configDir: string;
-  /** C2 About / Diagnostics */
+  /** Installed-suite About / diagnostics */
   serviceOnline?: boolean;
   serviceVersion?: string | null;
   serviceCompatible?: boolean;

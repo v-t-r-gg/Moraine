@@ -1,89 +1,76 @@
 # Vision
 
-## Product invariant
-
-> Moraine records review activity; it does not render the verdict.
-
-Moraine is a **local-first ledger for coding-agent work**.
-
-It preserves what an agent did, why, what evidence exists, what remains open, and what humans observed—as **files on disk** next to the work. It does **not** decide whether work is accepted, rejected, mergeable, deployable, or authorized.
+Moraine is a local-first ledger for coding-agent work.
 
 ## The problem
 
-Autonomous agents perform real work. That work often leaves chat transcripts, tool logs, or nothing durable. Humans need a **reviewable record** they can open later, put next to the code, comment on, and challenge—without a vendor session viewer.
+Coding agents can produce useful work without leaving a durable account of
+their goals, actions, evidence, uncertainty or corrections. Chat transcripts
+are hard to review, easy to lose & detached from the source they changed.
 
-**Review agent work without relying on agent chat.**
+Moraine makes an agent run the conceptual object. A run is not a chat room or
+an approval request; it is a durable record of work.
 
-## What Moraine is
+## Stable principles
 
-* **Semantic run protocol** — sparse checkpoints, lifecycle, findings, append-only human observations  
-* **Mechanical capture** — supported agent hooks (Codex first) even when the model skips MCP  
-* **Discovery desktop** — projects → runs → structured ledger  
-* **Installable Linux suite** — CLI, service, MCP/hooks, desktop, doctor (C2)  
+### Local first
 
-Collaborative live editing is **secondary** and frozen for beta (C3). Moraine is **not** an approval system.
+Canonical records live beside the project as ordinary files. They remain
+readable without a hosted account, relay or proprietary database.
 
-## Agent run
+### Source adjacent
 
-An **agent run** is a bounded unit of work. During or after it, Moraine holds a **run bundle**:
+Run Markdown, structured sidecars & optional evidence stay close to the code
+they describe. Teams choose whether to commit or share them.
 
-* Markdown projection (human-readable)  
-* Structured sidecar `*.md.moraine.json`  
-* Checkpoints, evidence references, findings, append-only ops  
-* Capture coverage (honest: mechanical vs semantic)  
+### Desktop independent
 
-Agents use **CLI**, **local MCP**, or hooks. Humans use the **installed desktop ledger workspace** (or CLI doctor/open).
+Capture continues through the local service while the desktop is closed. The
+desktop is a reader, navigator & repair surface; it is not the authority for
+the ledger.
 
-## Human review (without verdict)
+### Honest capture
 
-* Launch ledger workspace; discover projects/runs without knowing paths  
-* Inspect timeline, findings, evidence, capture coverage  
-* Append observations; create/respond to findings  
-* **Legacy document mode** only for free-form non-protocol Markdown (secondary)  
+Moraine distinguishes mechanical hook events, semantic agent checkpoints,
+evidence references & missing coverage. It must not imply that an event was
+captured when only an indirect signal exists.
 
-Review may happen **live** (capture while desktop closed) or **hindsight** (open files later).
+### Append-only correction
 
-## Durable artifacts
+Observations, amendments, supersessions & redactions preserve history. Current
+views may hide or replace a claim; the ledger still records the operation that
+changed its ordinary projection.
 
-| Artifact | Role |
-|----------|------|
-| `.moraine/runs/*.md` + `*.moraine.json` | Canonical run bundles |
-| `.moraine/project.json` | Project identity |
-| Session / spool under user cache | Mechanical capture fallback |
-| Installed suite under `~/.local` | Product binaries + manifest |
+### Human review without verdict
 
-## Evidence and trust
+People may inspect, comment, add findings & record observations. Moraine does
+not authorize a merge, deployment, approval or rejection. External systems own
+those decisions.
 
-* Agent text can be wrong or incomplete.  
-* Evidence carries provenance.  
-* Redaction withholds target-scoped claims in ordinary views (C1).  
-* No authenticated identity or compliance-grade tamper-proof audit.  
+### Bounded integrations
 
-## Current scope (beta)
+Agent adapters map an external agent into one durable run protocol. The domain
+model must not depend on one agent, operating system or desktop framework.
 
-Implemented:
+## Product boundaries
 
-* Agent run protocol + MCP (including findings tools)  
-* Mechanical Codex hooks + spool  
-* Discovery desktop + offline direct inspection  
-* Stranger-safe Linux install suite (C2, on `main`)
-* Append-only correction and target-scoped redaction  
+Moraine is:
 
-C3 focus: **beta stabilization and closure**: transactional provisioning,
-truthful desktop onboarding, durable project discovery, service/package hardening,
-and the frozen ledger-first surface.
+* a durable ledger for agent runs;
+* a local capture & discovery system;
+* a review surface for evidence, findings & corrections;
+* a transport-neutral run protocol with local integrations.
 
-## Explicit non-goals (near term)
+Moraine is not:
 
-Approval as product center, merge gates, remote MCP, hosted multi-tenant collab, second agent before Windows portfolio (W1–W3), semantic/vector search, relay auth, `moraine-core::prelude` churn.
+* an agent orchestrator;
+* a merge gate or approval engine;
+* a Git or pull-request replacement;
+* a hosted compliance archive;
+* a secret manager;
+* a general knowledge workspace;
+* a trusted multi-user network service.
 
-## Direction sequence
-
-```text
-C3  Beta hardening and surface freeze
-W1  Platform abstraction
-W2  Native Windows 11 port
-W3  Signed installer and WinGet
-```
-
-Canonical blueprint: [docs/DEVELOPMENT_BLUEPRINT_ALIGNED.md](./docs/DEVELOPMENT_BLUEPRINT_ALIGNED.md).
+The product succeeds when a person can understand an agent run from durable
+project files, see what was & was not captured, add review activity without
+rewriting history & keep working without a remote dependency.

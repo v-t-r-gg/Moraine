@@ -1,4 +1,4 @@
-//! Non-mutating project/run discovery and ledger timeline read models (M5).
+//! Non-mutating project/run discovery & ledger timeline read models.
 //!
 //! These helpers never promote schemas, rewrite Markdown, or alter sidecars.
 //! The service index is a rebuildable cache only; run bundles remain canonical.

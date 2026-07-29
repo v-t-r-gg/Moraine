@@ -28,10 +28,8 @@ vite.config.ts.timestamp-*
 *.log
 coverage
 
-# Ad-hoc local Moraine data outside the project dogfood area
-# (project run records under .moraine/runs are committed intentionally)
-.moraine/*.tmp
-.moraine/**/*.lock
+# Local Moraine ledger state; publish curated examples under examples/ instead.
+/.moraine/
 
 # Local ledger noise next to tracked docs (do not commit locks)
 *.moraine.json.lock

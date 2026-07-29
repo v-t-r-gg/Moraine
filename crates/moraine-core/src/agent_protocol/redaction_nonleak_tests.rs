@@ -1,4 +1,4 @@
-//! C1 complete-payload nonleak tests for ordinary redaction projections.
+//! Complete-payload non-leak tests for ordinary redaction projections.
 #![cfg(test)]
 
 use super::append_ops::{
@@ -56,7 +56,7 @@ fn all_needles() -> Vec<&'static str> {
 fn setup_full_checkpoint(dir: &Path) -> (Uuid, std::path::PathBuf, Uuid, String) {
     let project = init_project(Some(dir)).unwrap();
     let start = run_start(RunStartRequest {
-        objective: "C1 redaction nonleak".into(),
+        objective: "redaction non-leak regression".into(),
         idempotency_key: "c1-start".into(),
         project: Some(project.project_root.clone()),
         session_id: None,

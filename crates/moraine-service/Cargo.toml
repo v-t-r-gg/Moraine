@@ -6,7 +6,6 @@ license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
 description = "Local integration runtime for Moraine (minimal scaffold)"
-readme = "README.md"
 
 [[bin]]
 name = "moraine-service"

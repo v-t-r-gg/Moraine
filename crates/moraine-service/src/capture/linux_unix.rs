@@ -12,7 +12,7 @@ use tokio::{io::AsyncReadExt, net::UnixListener, sync::Notify};
 use tracing::{error, info};
 
 #[derive(Debug)]
-pub(crate) struct UnixCaptureListener {
+pub struct UnixCaptureListener {
     listener: UnixListener,
     socket_path: PathBuf,
     _cleanup: SocketCleanup,
@@ -95,9 +95,9 @@ impl UnixCaptureListener {
                 accepted = self.listener.accept() => {
                     let (stream, _) = accepted?;
                     let mut buf = Vec::new();
-                    let mut limited = stream.take((moraine_service::MAX_EVENT_BYTES + 1) as u64);
+                    let mut limited = stream.take((crate::MAX_EVENT_BYTES + 1) as u64);
                     match limited.read_to_end(&mut buf).await {
-                        Ok(_) => match moraine_service::write_spooled_payload(&spool_dir, &buf).await {
+                        Ok(_) => match crate::write_spooled_payload(&spool_dir, &buf).await {
                             Ok(path) => info!(file=%path.display(), "spooled event"),
                             Err(error) => error!(%error, "failed to spool payload"),
                         },

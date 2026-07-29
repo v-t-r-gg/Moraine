@@ -4,6 +4,7 @@
 //! are selected by the executable; this library owns event processing, not
 //! operating-system registration or desktop state.
 
+pub mod capture;
 pub mod service;
 
 pub use service::{

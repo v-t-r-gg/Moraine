@@ -1,5 +1,3 @@
-mod capture;
-
 use anyhow::Result;
 use axum::{
     extract::{Path as AxumPath, State},
@@ -36,13 +34,17 @@ struct AppState {
 #[command(author, version, about = "Moraine local integration runtime")]
 struct Args {
     /// Loopback HTTP listen address for diagnostics only (e.g. 127.0.0.1:33111).
-    /// Must not bind to non-loopback interfaces. Hook delivery uses the Unix socket.
+    /// Must not bind to non-loopback interfaces. Hook delivery uses local capture IPC.
     #[arg(long)]
     http: Option<String>,
 
     /// Unix domain socket for hook / adapter event delivery (primary capture transport).
     #[arg(long)]
     unix_socket: Option<PathBuf>,
+
+    /// Windows named pipe for hook / adapter event delivery.
+    #[arg(long)]
+    named_pipe: Option<String>,
 
     /// Spool directory for undelivered events
     #[arg(long)]
@@ -58,11 +60,20 @@ struct Health {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
-    let args = Args::parse();
-
-    let spool_dir = args
-        .spool_dir
-        .unwrap_or_else(|| moraine_platform::RuntimeLayout::discover().spool_dir);
+    let Args {
+        http,
+        unix_socket,
+        named_pipe,
+        spool_dir,
+    } = Args::parse();
+    let runtime_layout = moraine_platform::RuntimeLayout::try_discover()?;
+    let capture_endpoint = resolve_capture_endpoint(
+        unix_socket.as_deref(),
+        named_pipe.as_deref(),
+        &runtime_layout,
+        moraine_platform::HostPlatform::current(),
+    )?;
+    let spool_dir = spool_dir.unwrap_or_else(|| runtime_layout.spool_dir.clone());
     std::fs::create_dir_all(&spool_dir)?;
     #[cfg(unix)]
     {
@@ -76,22 +87,18 @@ async fn main() -> Result<()> {
         .await
         .ok();
 
-    let runtime_layout = moraine_platform::RuntimeLayout::discover();
-    let http = args
-        .http
-        .unwrap_or_else(|| runtime_layout.diagnostics_endpoint.to_string());
+    let http = http.unwrap_or_else(|| runtime_layout.diagnostics_endpoint.to_string());
     // Diagnostics HTTP on loopback only — not the hook transport.
     let http_addr: SocketAddr = http.parse()?;
     if !http_addr.ip().is_loopback() {
         anyhow::bail!(
             "refusing non-loopback HTTP bind {http_addr}; diagnostics must use 127.0.0.1/::1. \
-             Hook delivery uses the Unix domain socket, not TCP."
+             Hook delivery uses local capture IPC, not TCP."
         );
     }
 
-    let capture_endpoint = resolve_capture_endpoint(args.unix_socket.as_deref(), &runtime_layout)?;
     // Capture is the product intake. Bind it before diagnostics can report online.
-    let capture_listener = capture::bind(&capture_endpoint).await?;
+    let capture_listener = moraine_service::capture::bind(&capture_endpoint).await?;
     let started_at_unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -116,10 +123,16 @@ async fn main() -> Result<()> {
         .with_state(state);
     let listener = TcpListener::bind(http_addr).await?;
 
+    let capture_kind = match &capture_endpoint {
+        moraine_platform::CaptureEndpoint::UnixSocket(_) => "unix-socket",
+        moraine_platform::CaptureEndpoint::WindowsNamedPipe(_) => "windows-named-pipe",
+        moraine_platform::CaptureEndpoint::Unsupported => "unsupported",
+    };
     info!(
         %http_addr,
         spool_dir = %spool_dir.display(),
-        "starting moraine-service (hooks=unix-socket, diagnostics=loopback-http)"
+        hooks = capture_kind,
+        "starting moraine-service (diagnostics=loopback-http)"
     );
 
     // Spool processing task: periodically scan spool dir and process events
@@ -196,18 +209,37 @@ async fn main() -> Result<()> {
 }
 
 fn resolve_capture_endpoint(
-    explicit: Option<&std::path::Path>,
+    unix_socket: Option<&std::path::Path>,
+    named_pipe: Option<&str>,
     layout: &moraine_platform::RuntimeLayout,
+    host: moraine_platform::HostPlatform,
 ) -> Result<moraine_platform::CaptureEndpoint> {
-    if let Some(path) = explicit {
+    if unix_socket.is_some() && named_pipe.is_some() {
+        anyhow::bail!("--unix-socket and --named-pipe are mutually exclusive");
+    }
+    if let Some(path) = unix_socket {
+        if host != moraine_platform::HostPlatform::Linux {
+            anyhow::bail!("--unix-socket is supported only on Linux");
+        }
         return Ok(moraine_platform::CaptureEndpoint::UnixSocket(
             path.to_path_buf(),
+        ));
+    }
+    if let Some(name) = named_pipe {
+        if host != moraine_platform::HostPlatform::Windows {
+            anyhow::bail!("--named-pipe is supported only on Windows");
+        }
+        return Ok(moraine_platform::CaptureEndpoint::WindowsNamedPipe(
+            name.to_owned(),
         ));
     }
     match &layout.capture_endpoint {
         moraine_platform::CaptureEndpoint::UnixSocket(path) => {
             Ok(moraine_platform::CaptureEndpoint::UnixSocket(path.clone()))
         }
+        moraine_platform::CaptureEndpoint::WindowsNamedPipe(name) => Ok(
+            moraine_platform::CaptureEndpoint::WindowsNamedPipe(name.clone()),
+        ),
         endpoint => anyhow::bail!("unsupported capture endpoint for moraine-service: {endpoint:?}"),
     }
 }
@@ -458,8 +490,13 @@ mod tests {
             "/runtime/default.sock".into(),
         ));
         assert_eq!(
-            resolve_capture_endpoint(Some(std::path::Path::new("/explicit.sock")), &runtime)
-                .unwrap(),
+            resolve_capture_endpoint(
+                Some(std::path::Path::new("/explicit.sock")),
+                None,
+                &runtime,
+                moraine_platform::HostPlatform::Linux,
+            )
+            .unwrap(),
             moraine_platform::CaptureEndpoint::UnixSocket(PathBuf::from("/explicit.sock"))
         );
     }
@@ -470,7 +507,8 @@ mod tests {
             "/runtime/shared.sock".into(),
         ));
         assert_eq!(
-            resolve_capture_endpoint(None, &runtime).unwrap(),
+            resolve_capture_endpoint(None, None, &runtime, moraine_platform::HostPlatform::Linux,)
+                .unwrap(),
             moraine_platform::CaptureEndpoint::UnixSocket(PathBuf::from("/runtime/shared.sock"))
         );
     }
@@ -478,9 +516,37 @@ mod tests {
     #[test]
     fn unsupported_capture_endpoint_fails_explicitly() {
         let runtime = layout(moraine_platform::CaptureEndpoint::Unsupported);
-        assert!(resolve_capture_endpoint(None, &runtime)
-            .unwrap_err()
-            .to_string()
-            .contains("unsupported capture endpoint"));
+        assert!(resolve_capture_endpoint(
+            None,
+            None,
+            &runtime,
+            moraine_platform::HostPlatform::Other,
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("unsupported capture endpoint"));
+    }
+
+    #[test]
+    fn duplicate_or_cross_platform_capture_flags_fail() {
+        let runtime = layout(moraine_platform::CaptureEndpoint::Unsupported);
+        assert!(resolve_capture_endpoint(
+            Some(std::path::Path::new("/capture.sock")),
+            Some(r"\\.\pipe\capture"),
+            &runtime,
+            moraine_platform::HostPlatform::Windows,
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("mutually exclusive"));
+        assert!(resolve_capture_endpoint(
+            None,
+            Some(r"\\.\pipe\capture"),
+            &runtime,
+            moraine_platform::HostPlatform::Linux,
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("only on Windows"));
     }
 }

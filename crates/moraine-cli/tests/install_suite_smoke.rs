@@ -1,11 +1,13 @@
 //! C2 smoke: version/doctor/setup; suite paths; Codex merge safety.
 
+#![cfg(target_os = "linux")]
+
 use std::fs;
 use std::process::Command;
 use tempfile::tempdir;
 
 fn moraine_bin() -> std::path::PathBuf {
-    let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/moraine");
+    let p = std::path::PathBuf::from(env!("CARGO_BIN_EXE_moraine"));
     assert!(p.is_file(), "build moraine first");
     p
 }

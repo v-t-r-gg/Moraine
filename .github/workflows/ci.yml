@@ -57,14 +57,14 @@ jobs:
         run: cargo check --workspace --all-targets
       - name: Test portable platform contracts
         run: cargo test -p moraine-platform
+      - name: Build Windows runtime binaries
+        run: cargo build -p moraine-cli -p moraine-service -p moraine-server
       - name: Test Windows CLI capture
         run: cargo test -p moraine-cli --all-targets
       - name: Prove current-user Task Scheduler contracts
         run: cargo test -p moraine-provision --test windows_task_scheduler_contract
       - name: Test production Windows capture listener
         run: cargo test -p moraine-service --all-targets
-      - name: Build Windows capture binaries
-        run: cargo build -p moraine-cli -p moraine-service
       - name: Prove hook-to-spool named-pipe flow
         shell: pwsh
         run: ./scripts/windows-named-pipe-smoke.ps1

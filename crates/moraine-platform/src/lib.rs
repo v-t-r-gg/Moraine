@@ -10,7 +10,36 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+mod windows_identity;
+
+#[cfg(target_os = "windows")]
+pub use windows_identity::current_windows_user_identity;
+pub use windows_identity::{named_pipe_name_from_scope, scope_id_from_sid, WindowsUserIdentity};
+
 pub const DIAGNOSTICS_PORT: u16 = 33111;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlatformError {
+    pub code: &'static str,
+    pub message: String,
+}
+
+impl PlatformError {
+    pub fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for PlatformError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for PlatformError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -275,11 +304,22 @@ pub struct RuntimeLayout {
 
 impl RuntimeLayout {
     pub fn for_host(host: HostPlatform, users: &UserPaths) -> Self {
+        Self::for_host_with_scope(host, users, None)
+    }
+
+    pub fn for_host_with_scope(
+        host: HostPlatform,
+        users: &UserPaths,
+        windows_scope_id: Option<&str>,
+    ) -> Self {
         let capture_endpoint = match host {
             HostPlatform::Linux => {
                 CaptureEndpoint::UnixSocket(users.runtime_dir.join("moraine-service.sock"))
             }
-            HostPlatform::Windows => CaptureEndpoint::Unsupported,
+            HostPlatform::Windows => windows_scope_id
+                .map(named_pipe_name_from_scope)
+                .map(CaptureEndpoint::WindowsNamedPipe)
+                .unwrap_or(CaptureEndpoint::Unsupported),
             HostPlatform::MacOs | HostPlatform::Other => CaptureEndpoint::Unsupported,
         };
         Self {
@@ -294,12 +334,28 @@ impl RuntimeLayout {
         }
     }
 
+    pub fn try_discover() -> Result<Self, PlatformError> {
+        let host = HostPlatform::current();
+        let users = UserPaths::discover();
+        let overrides = LayoutOverrides::from_env();
+        #[cfg(target_os = "windows")]
+        let windows_scope = Some(current_windows_user_identity()?.scope_id);
+        #[cfg(not(target_os = "windows"))]
+        let windows_scope: Option<String> = None;
+
+        let mut layout = Self::for_host_with_scope(host, &users, windows_scope.as_deref());
+        Self::apply_overrides(&mut layout, host, &overrides);
+        Ok(layout)
+    }
+
     pub fn discover() -> Self {
-        Self::with_overrides(
-            HostPlatform::current(),
-            &UserPaths::discover(),
-            &LayoutOverrides::from_env(),
-        )
+        Self::try_discover().unwrap_or_else(|_| {
+            Self::with_overrides(
+                HostPlatform::current(),
+                &UserPaths::discover(),
+                &LayoutOverrides::from_env(),
+            )
+        })
     }
 
     pub fn with_overrides(
@@ -308,6 +364,11 @@ impl RuntimeLayout {
         overrides: &LayoutOverrides,
     ) -> Self {
         let mut layout = Self::for_host(host, users);
+        Self::apply_overrides(&mut layout, host, overrides);
+        layout
+    }
+
+    fn apply_overrides(layout: &mut Self, host: HostPlatform, overrides: &LayoutOverrides) {
         if let Some(socket) = &overrides.capture_socket {
             layout.capture_endpoint = if host == HostPlatform::Linux {
                 CaptureEndpoint::UnixSocket(socket.clone())
@@ -318,7 +379,6 @@ impl RuntimeLayout {
         if let Some(spool) = &overrides.spool_dir {
             layout.spool_dir = spool.clone();
         }
-        layout
     }
 }
 
@@ -436,6 +496,25 @@ mod tests {
             assert!(!relative.contains("moraine-service.sock"));
         }
         assert!(!PlatformCapabilities::for_host(HostPlatform::Windows).product_ready_supported());
+    }
+
+    #[test]
+    fn windows_runtime_layout_requires_an_explicit_scope() {
+        let root = tempfile::tempdir().unwrap();
+        let users = users(root.path());
+        assert_eq!(
+            RuntimeLayout::for_host(HostPlatform::Windows, &users).capture_endpoint,
+            CaptureEndpoint::Unsupported
+        );
+        assert_eq!(
+            RuntimeLayout::for_host_with_scope(HostPlatform::Windows, &users, Some("0123456789ab"))
+                .capture_endpoint,
+            CaptureEndpoint::WindowsNamedPipe(r"\\.\pipe\moraine.capture.v1.0123456789ab".into())
+        );
+        assert_eq!(
+            PlatformCapabilities::for_host(HostPlatform::Windows).capture_transport,
+            CapabilityStatus::Unsupported
+        );
     }
 
     #[test]

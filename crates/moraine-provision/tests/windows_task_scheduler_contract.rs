@@ -5,8 +5,8 @@ use std::thread;
 use std::time::Duration;
 
 use uuid::Uuid;
-use windows::core::{BSTR, VARIANT};
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HLOCAL};
+use windows::core::{BSTR, PWSTR};
+use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL};
 use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows::Win32::Security::{
     GetTokenInformation, TokenUser, DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
@@ -15,12 +15,12 @@ use windows::Win32::Security::{
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
 };
-use windows::Win32::System::Memory::LocalFree;
 use windows::Win32::System::TaskScheduler::{
     ITaskFolder, ITaskService, TaskScheduler, TASK_CREATE_OR_UPDATE, TASK_LOGON_INTERACTIVE_TOKEN,
     TASK_STATE_RUNNING,
 };
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+use windows::Win32::System::Variant::VARIANT;
 
 struct ComApartment;
 
@@ -70,7 +70,8 @@ fn current_account_sid() -> windows::core::Result<String> {
         CloseHandle(token)?;
 
         let token_user = &*(buffer.as_ptr().cast::<TOKEN_USER>());
-        let sid = ConvertSidToStringSidW(token_user.User.Sid)?;
+        let mut sid = PWSTR::null();
+        ConvertSidToStringSidW(token_user.User.Sid, &mut sid)?;
         let value = sid.to_string()?;
         LocalFree(Some(HLOCAL(sid.0.cast())));
         Ok(value)

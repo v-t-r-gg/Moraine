@@ -8,7 +8,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::windows::named_pipe::{ClientOptions, PipeMode, ServerOptions};
 use uuid::Uuid;
 use windows::core::PWSTR;
-use windows::Win32::Foundation::{CloseHandle, BOOL, HANDLE, HLOCAL};
+use windows::Win32::Foundation::{CloseHandle, LocalFree, BOOL, HANDLE, HLOCAL};
 use windows::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
     ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SDDL_REVISION_1,
@@ -19,7 +19,6 @@ use windows::Win32::Security::{
     PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_QUERY,
     TOKEN_USER,
 };
-use windows::Win32::System::Memory::LocalFree;
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
 const MAX_EVENT_BYTES: usize = 1024 * 1024;
@@ -52,7 +51,8 @@ fn current_account_sid() -> windows::core::Result<String> {
         CloseHandle(token)?;
 
         let token_user = &*(buffer.as_ptr().cast::<TOKEN_USER>());
-        let sid = ConvertSidToStringSidW(token_user.User.Sid)?;
+        let mut sid = PWSTR::null();
+        ConvertSidToStringSidW(token_user.User.Sid, &mut sid)?;
         let value = sid.to_string()?;
         LocalFree(Some(HLOCAL(sid.0.cast())));
         Ok(value)

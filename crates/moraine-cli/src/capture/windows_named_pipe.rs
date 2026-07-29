@@ -152,8 +152,8 @@ mod tests {
         assert_eq!(reader.await.unwrap(), expected);
     }
 
-    #[test]
-    fn protected_pipe_access_denial_is_distinct() {
+    #[tokio::test]
+    async fn protected_pipe_access_denial_is_distinct() {
         let pipe_name = format!(r"\\.\pipe\moraine.capture.denied.{}", uuid::Uuid::new_v4());
         let (_server, _security) = server(&pipe_name, 1, Some("D:P(A;;FA;;;SY)"));
         assert_eq!(

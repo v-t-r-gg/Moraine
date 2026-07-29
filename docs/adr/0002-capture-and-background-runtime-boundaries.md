@@ -42,7 +42,7 @@ journal JSON remain compatible. Registration recovery is platform-owned, so a
 future Windows backend can restore its registration without teaching the
 transaction engine about Task Scheduler or another mechanism.
 
-W1-B does not implement named pipes or a Windows runtime registration backend.
-Windows layouts are modeled, but workspace compilation on Windows is not yet
-proven; the required `windows-latest` boundary belongs to W1-C. Linux remains
-the only supported runtime.
+This decision does not implement named pipes or a Windows runtime registration
+backend. Windows layouts are modeled & the complete workspace compiles in
+required `windows-latest` CI. Runtime capture, registration, desktop operation
+& installation remain unsupported. Linux remains the only supported runtime.

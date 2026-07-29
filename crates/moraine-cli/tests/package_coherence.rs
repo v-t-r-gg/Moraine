@@ -105,3 +105,31 @@ fn ci_uses_authoritative_release_script_and_tests_provision() {
         "primary CI package must not force headless"
     );
 }
+
+#[test]
+fn release_documentation_manifest_is_exact() {
+    let root = repo_root();
+    let release = fs::read_to_string(root.join("scripts/build-linux-release.sh")).unwrap();
+    let copies: Vec<_> = release
+        .lines()
+        .filter(|line| line.contains("\"$STAGE/share/documentation/"))
+        .collect();
+    assert_eq!(copies.len(), 6, "unexpected release documentation copy set");
+    for name in [
+        "README.md",
+        "INSTALL.md",
+        "SECURITY.md",
+        "TROUBLESHOOTING.md",
+        "CODEX.md",
+        "LICENSE",
+    ] {
+        assert!(
+            copies.iter().any(|line| line.contains(name)),
+            "release documentation missing {name}"
+        );
+    }
+    assert!(
+        !copies.iter().any(|line| line.contains("REDACTION.md")),
+        "consolidated redaction guide must not be packaged"
+    );
+}

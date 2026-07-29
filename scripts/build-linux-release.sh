@@ -96,9 +96,10 @@ fi
 
 cp -f "$ROOT/LICENSE" "$STAGE/LICENSE" 2>/dev/null || true
 cp -f "$ROOT/LICENSE" "$STAGE/share/documentation/LICENSE" 2>/dev/null || true
+cp -f "$ROOT/README.md" "$STAGE/share/documentation/README.md"
 cp -f "$ROOT/docs/INSTALL.md" "$STAGE/share/documentation/INSTALL.md" 2>/dev/null || true
 cp -f "$ROOT/SECURITY.md" "$STAGE/share/documentation/SECURITY.md" 2>/dev/null || true
-cp -f "$ROOT/docs/REDACTION.md" "$STAGE/share/documentation/REDACTION.md" 2>/dev/null || true
+cp -f "$ROOT/docs/TROUBLESHOOTING.md" "$STAGE/share/documentation/TROUBLESHOOTING.md"
 cp -f "$ROOT/docs/integrations/CODEX.md" "$STAGE/share/documentation/CODEX.md" 2>/dev/null || true
 
 # Manifest (single helper shared with CI)

@@ -18,3 +18,4 @@ Accepted records:
 * [0001; platform boundary](0001-platform-boundary.md)
 * [0002; capture & background-runtime boundaries](0002-capture-and-background-runtime-boundaries.md)
 * [0003; capability-aware product closure](0003-capability-aware-product-closure.md)
+* [0004; Windows user runtime & capture](0004-windows-user-runtime-and-capture.md)

@@ -4,6 +4,7 @@ use std::ffi::c_void;
 use std::mem::size_of;
 use std::os::windows::io::AsRawHandle;
 
+use anyhow::Context;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::windows::named_pipe::{ClientOptions, PipeMode, ServerOptions};
 use uuid::Uuid;
@@ -105,6 +106,11 @@ fn server_options(first: bool) -> ServerOptions {
     options
 }
 
+fn sddl_names_current_account(sddl: &str, sid: &str) -> bool {
+    sddl.contains(sid)
+        || (sid.ends_with("-500") && (sddl.contains("O:LA") || sddl.contains(";;;LA)")))
+}
+
 unsafe fn create_server(
     pipe_name: &str,
     first: bool,
@@ -181,7 +187,10 @@ async fn secured_pipe_preserves_framing_size_and_first_instance() -> anyhow::Res
     assert!(second.is_err(), "a second first instance claimed the pipe");
 
     let sddl = pipe_sddl(&server)?;
-    assert!(sddl.contains(&sid));
+    assert!(
+        sddl_names_current_account(&sddl, &sid),
+        "current SID {sid} is absent from pipe SDDL {sddl}"
+    );
     assert!(sddl.contains("SY"));
     for broad in ["WD", "AN", "BU", "AU"] {
         assert!(
@@ -192,7 +201,10 @@ async fn secured_pipe_preserves_framing_size_and_first_instance() -> anyhow::Res
 
     let expected = vec![0x5a; MAX_EVENT_BYTES];
     let reader = tokio::spawn(read_one_event(server));
-    let mut client = ClientOptions::new().write(true).open(&pipe_name)?;
+    let mut client = ClientOptions::new()
+        .write(true)
+        .open(&pipe_name)
+        .context("open maximum-size payload client")?;
     client.write_all(&expected).await?;
     client.flush().await?;
     drop(client);
@@ -201,7 +213,10 @@ async fn secured_pipe_preserves_framing_size_and_first_instance() -> anyhow::Res
     let mut attributes = security.attributes();
     let oversized_server = unsafe { create_server(&pipe_name, true, &mut attributes)? };
     let reader = tokio::spawn(read_one_event(oversized_server));
-    let mut client = ClientOptions::new().write(true).open(&pipe_name)?;
+    let mut client = ClientOptions::new()
+        .write(true)
+        .open(&pipe_name)
+        .context("open oversized payload client")?;
     client.write_all(&vec![0x7b; MAX_EVENT_BYTES + 1]).await?;
     client.flush().await?;
     drop(client);
@@ -217,13 +232,26 @@ async fn next_listener_exists_before_connected_event_is_processed() -> anyhow::R
     let mut security = SecurityDescriptor::protected_for(&sid)?;
     let mut attributes = security.attributes();
 
-    let first = unsafe { create_server(&pipe_name, true, &mut attributes)? };
-    let mut client_one = ClientOptions::new().write(true).open(&pipe_name)?;
-    first.connect().await?;
+    let first = unsafe { create_server(&pipe_name, true, &mut attributes) }
+        .context("create first concurrent server instance")?;
+    let mut client_one = ClientOptions::new()
+        .write(true)
+        .open(&pipe_name)
+        .context("open first concurrent client")?;
+    first
+        .connect()
+        .await
+        .context("connect first concurrent server")?;
 
-    let next = unsafe { create_server(&pipe_name, false, &mut attributes)? };
-    let mut client_two = ClientOptions::new().write(true).open(&pipe_name)?;
-    next.connect().await?;
+    let next = unsafe { create_server(&pipe_name, false, &mut attributes) }
+        .context("create next concurrent server instance")?;
+    let mut client_two = ClientOptions::new()
+        .write(true)
+        .open(&pipe_name)
+        .context("open second concurrent client")?;
+    next.connect()
+        .await
+        .context("connect second concurrent server")?;
 
     client_one.write_all(b"one").await?;
     client_two.write_all(b"two").await?;

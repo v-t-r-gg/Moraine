@@ -44,13 +44,10 @@ fn validate_sid(sid: &str) -> Result<(), PlatformError> {
     Ok(())
 }
 
-pub fn scope_id_from_sid(sid: &str) -> String {
-    assert!(
-        validate_sid(sid).is_ok(),
-        "scope identity requires a valid SID"
-    );
+pub fn scope_id_from_sid(sid: &str) -> Result<String, PlatformError> {
+    validate_sid(sid)?;
     let digest = Sha256::digest(sid.as_bytes());
-    hex::encode(digest)[..12].to_owned()
+    Ok(hex::encode(digest)[..12].to_owned())
 }
 
 pub fn named_pipe_name_from_scope(scope_id: &str) -> String {
@@ -118,7 +115,7 @@ pub fn current_windows_user_identity() -> Result<WindowsUserIdentity, PlatformEr
             let sid = sid_string?;
             validate_sid(&sid)?;
             Ok(WindowsUserIdentity {
-                scope_id: scope_id_from_sid(&sid),
+                scope_id: scope_id_from_sid(&sid)?,
                 sid,
             })
         })();
@@ -133,9 +130,9 @@ mod tests {
 
     #[test]
     fn sid_scope_is_stable_distinct_and_fixed_width() {
-        let first = scope_id_from_sid("S-1-5-21-1000-2000-3000-1001");
-        let repeated = scope_id_from_sid("S-1-5-21-1000-2000-3000-1001");
-        let second = scope_id_from_sid("S-1-5-21-1000-2000-3000-1002");
+        let first = scope_id_from_sid("S-1-5-21-1000-2000-3000-1001").unwrap();
+        let repeated = scope_id_from_sid("S-1-5-21-1000-2000-3000-1001").unwrap();
+        let second = scope_id_from_sid("S-1-5-21-1000-2000-3000-1002").unwrap();
         assert_eq!(first, "d07be4ed3160");
         assert_eq!(first, repeated);
         assert_ne!(first, second);
@@ -147,7 +144,7 @@ mod tests {
 
     #[test]
     fn pipe_name_contains_only_the_versioned_scope() {
-        let scope = scope_id_from_sid("S-1-5-21-1000-2000-3000-1001");
+        let scope = scope_id_from_sid("S-1-5-21-1000-2000-3000-1001").unwrap();
         let pipe = named_pipe_name_from_scope(&scope);
         assert_eq!(pipe, format!(r"\\.\pipe\moraine.capture.v1.{scope}"));
         assert!(!pipe.contains("1000-2000"));
@@ -156,9 +153,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "scope identity requires a valid SID")]
     fn invalid_sid_is_rejected_before_hashing() {
-        let _ = scope_id_from_sid("not-a-sid");
+        let error = scope_id_from_sid("not-a-sid").unwrap_err();
+        assert_eq!(error.code, "invalid_windows_sid");
     }
 
     #[cfg(target_os = "windows")]
@@ -166,7 +163,7 @@ mod tests {
     fn current_identity_resolves_to_its_pipe() {
         let identity = current_windows_user_identity().unwrap();
         assert!(identity.sid.starts_with("S-1-"));
-        assert_eq!(identity.scope_id, scope_id_from_sid(&identity.sid));
+        assert_eq!(identity.scope_id, scope_id_from_sid(&identity.sid).unwrap());
         assert_eq!(
             named_pipe_name_from_scope(&identity.scope_id),
             format!(r"\\.\pipe\moraine.capture.v1.{}", identity.scope_id)

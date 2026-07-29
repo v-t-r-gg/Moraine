@@ -277,6 +277,27 @@ pub struct SetupPlan {
     pub state_witness: SetupStateWitness,
 }
 
+impl SetupPlan {
+    /// Whether applying this serialized plan requires the ProductCapture platform backend.
+    ///
+    /// Plans cross process boundaries, so this deliberately considers both the
+    /// declared intent and the operations actually present in the plan.
+    pub fn requires_product_capture(&self) -> bool {
+        !self.intent.skip_service || self.has_background_runtime_operations()
+    }
+
+    pub fn has_background_runtime_operations(&self) -> bool {
+        self.operations.iter().any(|operation| {
+            matches!(
+                operation.kind,
+                ProvisionOpKind::InstallService
+                    | ProvisionOpKind::EnableAutostart
+                    | ProvisionOpKind::StartService
+            )
+        })
+    }
+}
+
 /// Result of transactional apply (auto-rollback attempted on failure).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(

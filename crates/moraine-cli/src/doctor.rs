@@ -1,6 +1,7 @@
 //! `moraine doctor` health report (C2).
 
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -9,9 +10,10 @@ use moraine_core::{resolve_existing_project, BuildIdentity};
 use serde::Serialize;
 
 use crate::suite::{
-    collect_version_report, current_exe_path, default_socket_path, enumerate_moraine_on_path,
-    http_get_loopback, SuitePaths,
+    collect_version_report, current_exe_path, enumerate_moraine_on_path, SuitePaths,
 };
+#[cfg(unix)]
+use crate::suite::{http_get_loopback, unix_capture_socket};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -78,6 +80,117 @@ fn check(
 }
 
 pub fn run_doctor(project: Option<&Path>, integration: Option<&str>) -> DoctorReport {
+    let capabilities = moraine_platform::PlatformCapabilities::current();
+    if !capabilities.product_ready_supported() {
+        return run_unsupported_doctor(project, integration, &capabilities);
+    }
+    run_supported_doctor(project, integration)
+}
+
+fn run_unsupported_doctor(
+    project_path: Option<&Path>,
+    integration_name: Option<&str>,
+    capabilities: &moraine_platform::PlatformCapabilities,
+) -> DoctorReport {
+    let build = BuildIdentity::current();
+    let suite = SuitePaths::discover();
+    let current = current_exe_path();
+    let mut checks = vec![
+        check(
+            "platform.productCapture",
+            "fail",
+            format!(
+                "Background capture is not supported on {:?} yet",
+                capabilities.host
+            ),
+            Some(&format!("{:?}", capabilities.host).to_lowercase()),
+            Some("supported product-capture platform"),
+            None,
+        ),
+        check(
+            "suite.cli_path",
+            "info",
+            format!("running executable {}", current.display()),
+            Some(&current.display().to_string()),
+            None,
+            None,
+        ),
+        check(
+            "suite.manifest",
+            if suite.manifest.is_file() {
+                "pass"
+            } else {
+                "warn"
+            },
+            if suite.manifest.is_file() {
+                format!("manifest at {}", suite.manifest.display())
+            } else {
+                "suite manifest is not present".into()
+            },
+            Some(&suite.manifest.display().to_string()),
+            None,
+            None,
+        ),
+    ];
+
+    let cli_name =
+        moraine_platform::executable_name(capabilities.host, moraine_platform::SuiteComponent::Cli);
+    let cli_on_path = enumerate_moraine_on_path().into_iter().next();
+    checks.push(check(
+        "suite.cli_identity",
+        if cli_on_path.is_some() {
+            "pass"
+        } else {
+            "info"
+        },
+        if cli_on_path.is_some() {
+            format!("{cli_name} is discoverable")
+        } else {
+            format!("{cli_name} is not on PATH")
+        },
+        cli_on_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .as_deref(),
+        None,
+        None,
+    ));
+
+    let project = project_path.map(|path| match resolve_existing_project(Some(path)) {
+        Ok(resolved) => ProjectCheck {
+            path: resolved.project_root.display().to_string(),
+            initialized: true,
+            project_id: Some(resolved.project_id.to_string()),
+            message: None,
+        },
+        Err(error) => ProjectCheck {
+            path: path.display().to_string(),
+            initialized: false,
+            project_id: None,
+            message: Some(error.to_string()),
+        },
+    });
+    let integration = integration_name.map(|name| {
+        let binary = which_on_path(name);
+        IntegrationCheck {
+            name: name.into(),
+            configured: false,
+            details: vec![binary
+                .map(|path| format!("{name} executable at {}", path.display()))
+                .unwrap_or_else(|| format!("{name} executable not on PATH"))],
+        }
+    });
+
+    DoctorReport {
+        ok: false,
+        build,
+        checks,
+        project,
+        integration,
+    }
+}
+
+fn run_supported_doctor(project: Option<&Path>, integration: Option<&str>) -> DoctorReport {
     let build = BuildIdentity::current();
     let suite = SuitePaths::discover();
     let ver = collect_version_report();
@@ -221,9 +334,10 @@ pub fn run_doctor(project: Option<&Path>, integration: Option<&str>) -> DoctorRe
         Some("Re-run install.sh or moraine service install"),
     ));
 
-    let unit_exists = suite.unit.is_file();
+    let unit = suite.service_registration.as_deref();
+    let unit_exists = unit.is_some_and(Path::is_file);
     let unit_body = unit_exists
-        .then(|| fs::read_to_string(&suite.unit).ok())
+        .then(|| unit.and_then(|path| fs::read_to_string(path).ok()))
         .flatten();
     let unit_points_cargo = unit_body
         .as_ref()
@@ -254,12 +368,14 @@ pub fn run_doctor(project: Option<&Path>, integration: Option<&str>) -> DoctorRe
         } else if unit_points_cargo {
             format!(
                 "unit {} points at ~/.cargo/bin (development drift)",
-                suite.unit.display()
+                unit.map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "unavailable".into())
             )
         } else {
             format!(
                 "unit {} ExecStart={}",
-                suite.unit.display(),
+                unit.map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "unavailable".into()),
                 unit_exec.as_deref().unwrap_or("?")
             )
         },
@@ -303,90 +419,97 @@ pub fn run_doctor(project: Option<&Path>, integration: Option<&str>) -> DoctorRe
         ));
     }
 
-    // Socket path + ownership
-    let sock = default_socket_path();
-    if sock.exists() {
-        let meta = fs::metadata(&sock).ok();
-        let mode = meta.as_ref().map(|m| m.permissions().mode() & 0o777);
-        let uid_ok = meta
-            .as_ref()
-            .map(|m| m.uid() == libc_uid())
-            .unwrap_or(false);
-        checks.push(check(
-            "service.socket",
-            if uid_ok { "pass" } else { "warn" },
-            format!(
-                "socket {} mode={:o} uid_ok={uid_ok}",
-                sock.display(),
-                mode.unwrap_or(0)
-            ),
-            Some(&sock.display().to_string()),
-            Some("user-owned unix socket"),
-            None,
-        ));
-    } else {
-        checks.push(check(
-            "service.socket",
-            "info",
-            format!(
-                "expected unix socket {} (created when service runs)",
-                sock.display()
-            ),
-            None,
-            Some(&sock.display().to_string()),
-            Some("moraine service start"),
-        ));
-    }
-
-    // Spool directory permissions
-    let spool = dirs::cache_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("moraine-service/spool");
-    if spool.is_dir() {
-        let mode = fs::metadata(&spool)
-            .map(|m| m.permissions().mode() & 0o777)
-            .unwrap_or(0);
-        let restricted = mode & 0o077 == 0;
-        checks.push(check(
-            "service.spool_perms",
-            if restricted { "pass" } else { "warn" },
-            format!("spool {} mode={mode:o}", spool.display()),
-            Some(&format!("{mode:o}")),
-            Some("0700 preferred"),
-            (!restricted).then_some("chmod 700 the spool directory"),
-        ));
-        if let Ok(body) = http_get_loopback(
-            moraine_platform::RuntimeLayout::discover()
-                .diagnostics_endpoint
-                .port(),
-            "/status",
-        ) {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
-                if let Some(sp) = v.get("spool") {
-                    checks.push(check(
-                        "service.spool_counts",
-                        "info",
-                        format!("spool counts {sp}"),
-                        Some(&sp.to_string()),
-                        None,
-                        None,
-                    ));
-                }
+    #[cfg(unix)]
+    {
+        // Socket path + ownership
+        if let Some(sock) = unix_capture_socket() {
+            if sock.exists() {
+                let meta = fs::metadata(&sock).ok();
+                let mode = meta.as_ref().map(|m| m.permissions().mode() & 0o777);
+                let uid_ok = meta
+                    .as_ref()
+                    .map(|m| m.uid() == libc_uid())
+                    .unwrap_or(false);
+                checks.push(check(
+                    "service.socket",
+                    if uid_ok { "pass" } else { "warn" },
+                    format!(
+                        "socket {} mode={:o} uid_ok={uid_ok}",
+                        sock.display(),
+                        mode.unwrap_or(0)
+                    ),
+                    Some(&sock.display().to_string()),
+                    Some("user-owned unix socket"),
+                    None,
+                ));
+            } else {
+                checks.push(check(
+                    "service.socket",
+                    "info",
+                    format!(
+                        "expected unix socket {} (created when service runs)",
+                        sock.display()
+                    ),
+                    None,
+                    Some(&sock.display().to_string()),
+                    Some("moraine service start"),
+                ));
             }
         }
-    } else {
-        checks.push(check(
-            "service.spool",
-            "info",
-            format!("spool dir not yet created ({})", spool.display()),
-            None,
-            None,
-            None,
-        ));
+
+        // Spool directory permissions
+        let spool = dirs::cache_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("moraine-service/spool");
+        if spool.is_dir() {
+            let mode = fs::metadata(&spool)
+                .map(|m| m.permissions().mode() & 0o777)
+                .unwrap_or(0);
+            let restricted = mode & 0o077 == 0;
+            checks.push(check(
+                "service.spool_perms",
+                if restricted { "pass" } else { "warn" },
+                format!("spool {} mode={mode:o}", spool.display()),
+                Some(&format!("{mode:o}")),
+                Some("0700 preferred"),
+                (!restricted).then_some("chmod 700 the spool directory"),
+            ));
+            if let Ok(body) = http_get_loopback(
+                moraine_platform::RuntimeLayout::discover()
+                    .diagnostics_endpoint
+                    .port(),
+                "/status",
+            ) {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
+                    if let Some(sp) = v.get("spool") {
+                        checks.push(check(
+                            "service.spool_counts",
+                            "info",
+                            format!("spool counts {sp}"),
+                            Some(&sp.to_string()),
+                            None,
+                            None,
+                        ));
+                    }
+                }
+            }
+        } else {
+            checks.push(check(
+                "service.spool",
+                "info",
+                format!("spool dir not yet created ({})", spool.display()),
+                None,
+                None,
+                None,
+            ));
+        }
     }
 
     // Desktop
-    let desk_entry = suite.desktop_entry.is_file()
+    let desk_entry = suite
+        .desktop_registration
+        .as_ref()
+        .is_some_and(|path| path.is_file())
         || dirs::data_dir()
             .map(|d| d.join("applications/app.moraine.desktop").is_file())
             .unwrap_or(false);
@@ -758,6 +881,7 @@ fn probe_mcp_tools_list(cli: &Path, project: &Path) -> Result<Vec<String>, Strin
     Ok(names)
 }
 
+#[cfg(unix)]
 fn libc_uid() -> u32 {
     // Avoid libc crate: read from /proc or nix; use std only.
     std::fs::read_to_string("/proc/self/status")

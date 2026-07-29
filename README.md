@@ -78,9 +78,25 @@ _Placeholder:_ installed desktop showing **Projects → Runs → Ledger** for a 
 | Discovery desktop | **Implemented** |
 | Stranger-safe Linux install | **Implemented (C2)**; archive + install script |
 | Live collaboration | **Legacy/secondary**; unsupported for untrusted networks |
-| Windows | **Planned** |
+| Windows | Workspace compile-tested; product runtime **unsupported until W2** |
 | macOS | **Planned** |
 | Hosted collaboration | **Not planned for beta** |
+
+### Platform support matrix
+
+| Capability | Linux | Windows after W1-C |
+|---|---:|---:|
+| Workspace compiles | Yes | Yes |
+| Path/layout model | Yes | Yes |
+| Ledger format | Yes | Yes |
+| Desktop product runtime | Yes | No |
+| Agent capture | Unix socket | No |
+| Background runtime | systemd user | No |
+| Installer | User-scoped archive | No |
+| Product Ready | Yes | No |
+
+Windows compilation is tested in GitHub Actions. Windows runtime, graphical
+operation, capture, installation, and packaging are not tested or supported.
 
 ## Example: agent-run ledger (current)
 

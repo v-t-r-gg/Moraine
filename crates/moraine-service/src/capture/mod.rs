@@ -12,6 +12,11 @@ use tokio::sync::Notify;
 pub enum BoundCaptureListener {
     #[cfg(target_os = "linux")]
     Unix(linux_unix::UnixCaptureListener),
+    #[allow(
+        dead_code,
+        reason = "explicit non-Linux backend slot; bind fails before constructing it until W2"
+    )]
+    Unsupported,
 }
 
 pub async fn bind(endpoint: &CaptureEndpoint) -> Result<BoundCaptureListener> {
@@ -29,6 +34,10 @@ impl BoundCaptureListener {
         match self {
             #[cfg(target_os = "linux")]
             Self::Unix(listener) => listener.run(spool_dir, shutdown).await,
+            Self::Unsupported => {
+                let _ = (spool_dir, shutdown);
+                anyhow::bail!("unsupported capture endpoint for moraine-service")
+            }
         }
     }
 }

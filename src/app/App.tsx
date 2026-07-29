@@ -8,6 +8,9 @@ import { OnboardingWizard } from "@/features/onboarding/OnboardingWizard";
 import { HealthPanel } from "@/features/onboarding/HealthPanel";
 import { pickMarkdownFile, isTauri } from "@/shared/api";
 import { provisionInspect } from "@/shared/api/provision";
+import type { SystemStateDto } from "@/shared/api/provision";
+import { deriveDesktopProductSupport } from "@/shared/platformSupport";
+import { UnsupportedPlatformView } from "@/features/platform/UnsupportedPlatformView";
 
 /** Lazy: keeps Yjs/editor out of the main ledger coordinator bundle path. */
 const LegacyDocumentApp = lazy(async () => {
@@ -24,11 +27,14 @@ const ONBOARDING_DISMISSED_KEY = "moraine.onboarding.dismissed.this-session";
  */
 export function App() {
   const bootstrap = useProductBootstrap();
-  const [route, setRoute] = useState<"ledger" | "legacy" | "onboarding">("ledger");
+  const [route, setRoute] = useState<
+    "ledger" | "legacy" | "onboarding" | "unsupported"
+  >("ledger");
   const [legacyPath, setLegacyPath] = useState<string | null>(null);
   const [showHealth, setShowHealth] = useState(false);
   const [enabledProject, setEnabledProject] = useState<string | null>(null);
   const [onboardingChecked, setOnboardingChecked] = useState(false);
+  const [inspectedSystem, setInspectedSystem] = useState<SystemStateDto | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -36,6 +42,11 @@ export function App() {
       try {
         const st = await provisionInspect();
         if (cancelled) return;
+        setInspectedSystem(st);
+        if (isTauri && !deriveDesktopProductSupport(st.platform).desktopSupported) {
+          setRoute("unsupported");
+          return;
+        }
         const dismissed =
           typeof sessionStorage !== "undefined" &&
           sessionStorage.getItem(ONBOARDING_DISMISSED_KEY) === "1";
@@ -79,10 +90,30 @@ export function App() {
     }
   }, []);
 
+  if (isTauri && !onboardingChecked) {
+    return (
+      <div
+        className="flex h-screen items-center justify-center text-sm"
+        data-testid="product-loading"
+      >
+        Inspecting Moraine…
+      </div>
+    );
+  }
+
+  if (route === "unsupported" && inspectedSystem) {
+    return (
+      <UnsupportedPlatformView
+        support={deriveDesktopProductSupport(inspectedSystem.platform)}
+      />
+    );
+  }
+
   if (route === "onboarding") {
     return (
       <div className="h-screen" data-testid="product-shell">
         <OnboardingWizard
+          systemState={inspectedSystem}
           onComplete={(projectPath) => {
             try {
               sessionStorage.removeItem(ONBOARDING_DISMISSED_KEY);

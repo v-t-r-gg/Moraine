@@ -11,6 +11,32 @@ use crate::suite::{collect_version_report, SuitePaths};
 
 /// Inspect suite, repair/install user unit, start service, report next steps.
 pub fn setup_post_install(json: bool) -> Result<i32> {
+    let capabilities = moraine_platform::PlatformCapabilities::current();
+    if !capabilities.product_ready_supported() {
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "ok": false,
+                    "code": "unsupported_platform",
+                    "platform": capabilities.host,
+                    "operation": "product_setup",
+                    "message": format!(
+                        "Moraine background capture is not supported on {:?} yet",
+                        capabilities.host
+                    ),
+                    "capabilities": capabilities,
+                }))?
+            );
+        } else {
+            eprintln!(
+                "unsupported_platform: Moraine background capture is not supported on {:?} yet",
+                capabilities.host
+            );
+        }
+        return Ok(1);
+    }
+
     let suite = SuitePaths::discover();
     let ver = collect_version_report();
     let mut actions = Vec::new();
@@ -21,7 +47,13 @@ pub fn setup_post_install(json: bool) -> Result<i32> {
         let runtime = moraine_provision::default_background_runtime_manager();
         let spec = moraine_provision::RuntimeInstallSpec::discover(suite.service.clone());
         match runtime.install_runtime(&spec) {
-            Ok(()) => actions.push(format!("service unit → {}", suite.unit.display())),
+            Ok(()) => actions.push(
+                suite
+                    .service_registration
+                    .as_ref()
+                    .map(|path| format!("service unit → {}", path.display()))
+                    .unwrap_or_else(|| "background runtime registration installed".into()),
+            ),
             Err(e) => warnings.push(format!("service install: {e:#}")),
         }
         match runtime.start() {
@@ -58,7 +90,7 @@ pub fn setup_post_install(json: bool) -> Result<i32> {
                     "path": suite.service.display().to_string(),
                     "installed": suite.service.is_file(),
                     "online": service_online,
-                    "unit": suite.unit.display().to_string(),
+                    "unit": suite.service_registration.as_ref().map(|path| path.display().to_string()),
                 },
                 "desktop": {
                     "installed": suite.desktop.is_file(),
@@ -101,10 +133,12 @@ pub fn setup_post_install(json: bool) -> Result<i32> {
             }
         );
         println!("Data:      {}", suite.share.display());
-        println!(
-            "Runtime:   {}",
-            crate::suite::default_socket_path().display()
-        );
+        let runtime = match crate::suite::capture_endpoint() {
+            moraine_platform::CaptureEndpoint::UnixSocket(path) => path.display().to_string(),
+            moraine_platform::CaptureEndpoint::WindowsNamedPipe(name) => name,
+            moraine_platform::CaptureEndpoint::Unsupported => "unsupported".into(),
+        };
+        println!("Runtime:   {runtime}");
         for a in &actions {
             println!("  · {a}");
         }

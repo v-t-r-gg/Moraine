@@ -49,8 +49,8 @@ pub use service_ready::{
 };
 pub use snapshot::{durable_backup, file_sha256, restore_snapshot, snapshot_absent};
 pub use suite::{
-    default_http_addr, default_prefix, default_socket_path, http_get_loopback,
-    setup_transactions_dir, SuitePaths, SuiteState,
+    capture_endpoint, default_http_addr, default_prefix, http_get_loopback, setup_transactions_dir,
+    unix_capture_socket, SuitePaths, SuiteState,
 };
 pub use types::FileSnapshot;
 pub use types::*;

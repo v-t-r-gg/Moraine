@@ -1,5 +1,7 @@
 //! Temp-prefix installer/uninstaller smoke (drives shipped packaging scripts).
 
+#![cfg(target_os = "linux")]
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};

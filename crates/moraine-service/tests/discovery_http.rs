@@ -3,6 +3,8 @@
 //! Spawns `moraine-service` against a temp spool and exercises
 //! status / projects / runs / detail / rebuild / rescan over 127.0.0.1.
 
+#![cfg(target_os = "linux")]
+
 use moraine_core::{init_project, run_checkpoint, run_start, CheckpointInput, RunStartRequest};
 use std::fs;
 use std::io::{Read, Write};

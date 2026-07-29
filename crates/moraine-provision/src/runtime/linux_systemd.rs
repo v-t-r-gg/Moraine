@@ -92,6 +92,14 @@ impl LinuxSystemdUserRuntime {
             .and_then(|o| String::from_utf8(o.stdout).ok())
             .map(|s| s.trim().to_string())
     }
+
+    fn registration_path(&self) -> Result<&Path> {
+        self.suite.service_registration.as_deref().ok_or_else(|| {
+            ProvisionError::Service(
+                "Linux systemd registration path is unavailable on this host".into(),
+            )
+        })
+    }
 }
 
 impl Default for LinuxSystemdUserRuntime {
@@ -102,11 +110,12 @@ impl Default for LinuxSystemdUserRuntime {
 
 impl super::BackgroundRuntimeManager for LinuxSystemdUserRuntime {
     fn inspect(&self) -> Result<BackgroundRuntimeState> {
+        let unit = self.registration_path()?;
         let binary = self.suite.absolute_service();
         let binary_present = binary.as_ref().map(|p| p.is_file()).unwrap_or(false);
-        let registration_present = self.suite.unit.is_file();
+        let registration_present = unit.is_file();
         let registration_valid =
-            registration_present && unit_exec_matches_suite(&self.suite.unit, binary.as_deref());
+            registration_present && unit_exec_matches_suite(unit, binary.as_deref());
         let active = Self::unit_active();
         let running_unit = active.as_deref() == Some("active");
         let (diagnostics_ready, capture_ready, version) = match crate::diagnostics::probe_default()
@@ -141,30 +150,32 @@ impl super::BackgroundRuntimeManager for LinuxSystemdUserRuntime {
             diagnostics_ready,
             capture_ready,
             binary_path: binary.map(|p| p.display().to_string()),
-            unit_path: Some(self.suite.unit.display().to_string()),
+            unit_path: Some(unit.display().to_string()),
             version,
             status_message,
             platform: "linux".into(),
             registration: registration_present.then(|| RuntimeRegistrationState {
                 kind: RuntimeRegistrationKind::SystemdUserUnit,
-                location: Some(self.suite.unit.display().to_string()),
-                fingerprint: crate::snapshot::file_sha256(&self.suite.unit).ok(),
+                location: Some(unit.display().to_string()),
+                fingerprint: crate::snapshot::file_sha256(unit).ok(),
             }),
         })
     }
 
     fn capture_registration(&self) -> Result<RuntimeRegistrationSnapshot> {
-        let snapshot = if self.suite.unit.is_file() {
-            crate::snapshot::durable_backup(&self.suite.unit)?
+        let unit = self.registration_path()?;
+        let snapshot = if unit.is_file() {
+            crate::snapshot::durable_backup(unit)?
         } else {
-            crate::snapshot::snapshot_absent(&self.suite.unit)
+            crate::snapshot::snapshot_absent(unit)
         };
         Ok(RuntimeRegistrationSnapshot::File(snapshot))
     }
 
     fn registration_fingerprint(&self) -> Result<Option<String>> {
-        Ok(if self.suite.unit.is_file() {
-            Some(crate::snapshot::file_sha256(&self.suite.unit)?)
+        let unit = self.registration_path()?;
+        Ok(if unit.is_file() {
+            Some(crate::snapshot::file_sha256(unit)?)
         } else {
             None
         })
@@ -193,10 +204,11 @@ impl super::BackgroundRuntimeManager for LinuxSystemdUserRuntime {
             )));
         }
         let unit = render_systemd_unit(spec)?;
-        if let Some(parent) = self.suite.unit.parent() {
+        let registration = self.registration_path()?;
+        if let Some(parent) = registration.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(&self.suite.unit, &unit)?;
+        fs::write(registration, &unit)?;
         let _ = Self::systemctl(&["daemon-reload"]);
         Ok(())
     }
@@ -214,10 +226,11 @@ impl super::BackgroundRuntimeManager for LinuxSystemdUserRuntime {
     }
 
     fn uninstall(&self) -> Result<()> {
+        let registration = self.registration_path()?;
         let _ = Self::systemctl(&["stop", "moraine-service.service"]);
         let _ = Self::systemctl(&["disable", "moraine-service.service"]);
-        if self.suite.unit.is_file() {
-            fs::remove_file(&self.suite.unit)?;
+        if registration.is_file() {
+            fs::remove_file(registration)?;
         }
         let _ = Self::systemctl(&["daemon-reload"]);
         Ok(())

@@ -67,11 +67,16 @@ pub fn apply_with_options_and_capabilities(
     service_probe: Option<std::sync::Arc<dyn ServiceProbe>>,
     capabilities: &moraine_platform::PlatformCapabilities,
 ) -> Result<ApplyOutcome> {
-    if !plan.intent.skip_service {
+    if plan.requires_product_capture() {
         crate::platform_support::ensure_product_capture_supported(
             capabilities,
             "product_capture_apply",
         )?;
+    }
+    if plan.intent.skip_service && plan.has_background_runtime_operations() {
+        return Err(ProvisionError::msg(
+            "invalid setup plan: skipService cannot include background runtime operations",
+        ));
     }
     let current = compute_witness(&plan.intent, service, &plan.absolute_cli)?;
     if current != plan.state_witness {
@@ -149,7 +154,12 @@ pub fn apply_with_options_and_capabilities(
                         .or_else(|| {
                             absolute_cli
                                 .parent()
-                                .map(|p| p.join("moraine-service"))
+                                .map(|p| {
+                                    p.join(moraine_platform::executable_name(
+                                        moraine_platform::HostPlatform::current(),
+                                        moraine_platform::SuiteComponent::Service,
+                                    ))
+                                })
                                 .filter(|p| p.is_file())
                         })
                         .ok_or_else(|| ProvisionError::msg("service binary not found in suite"))?;

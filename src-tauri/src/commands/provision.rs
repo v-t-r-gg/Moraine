@@ -13,6 +13,26 @@ fn map_err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
+fn ensure_desktop_product_setup_supported(operation: &'static str) -> Result<(), String> {
+    ensure_desktop_product_setup_supported_with_capabilities(
+        operation,
+        &moraine_platform::PlatformCapabilities::current(),
+    )
+}
+
+fn ensure_desktop_product_setup_supported_with_capabilities(
+    operation: &'static str,
+    capabilities: &moraine_platform::PlatformCapabilities,
+) -> Result<(), String> {
+    if capabilities.desktop_product_supported() {
+        return Ok(());
+    }
+    Err(format!(
+        "unsupported_platform: {operation} is unsupported on {:?}",
+        capabilities.host
+    ))
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SetupIntentDto {
@@ -55,6 +75,7 @@ pub fn provision_inspect() -> Result<SystemState, String> {
 /// Plan setup for a project + agent without applying.
 #[tauri::command]
 pub fn provision_plan(intent: SetupIntentDto) -> Result<SetupPlan, String> {
+    ensure_desktop_product_setup_supported("desktop_provision_plan")?;
     let intent = intent.into_intent()?;
     let svc = moraine_provision::default_service_manager();
     plan_setup(intent, svc.as_ref()).map_err(map_err)
@@ -63,6 +84,7 @@ pub fn provision_plan(intent: SetupIntentDto) -> Result<SetupPlan, String> {
 /// Apply by re-planning from intent (legacy). Prefer `provision_apply_plan`.
 #[tauri::command]
 pub fn provision_apply(intent: SetupIntentDto) -> Result<ApplyOutcome, String> {
+    ensure_desktop_product_setup_supported("desktop_provision_apply")?;
     let intent = intent.into_intent()?;
     let svc = moraine_provision::default_service_manager();
     let plan = plan_setup(intent, svc.as_ref()).map_err(map_err)?;
@@ -72,6 +94,7 @@ pub fn provision_apply(intent: SetupIntentDto) -> Result<ApplyOutcome, String> {
 /// Apply the **exact** user-approved plan (rejects stale state witness).
 #[tauri::command]
 pub fn provision_apply_plan(plan: SetupPlan) -> Result<ApplyOutcome, String> {
+    ensure_desktop_product_setup_supported("desktop_provision_apply_plan")?;
     let service = moraine_provision::default_service_manager();
     apply_approved_plan_with_service(plan, service.as_ref())
 }
@@ -87,6 +110,7 @@ pub fn apply_approved_plan_with_service(
 /// Full apply outcome including RolledBack / RollbackRequired.
 #[tauri::command]
 pub fn provision_apply_plan_outcome(plan: SetupPlan) -> Result<ApplyOutcome, String> {
+    ensure_desktop_product_setup_supported("desktop_provision_apply_plan")?;
     apply_default(plan).map_err(map_err)
 }
 
@@ -99,6 +123,7 @@ pub fn provision_rollback(receipt: SetupReceipt) -> Result<(), String> {
 /// Strict self-test / verify for Ready.
 #[tauri::command]
 pub fn provision_verify(intent: SetupIntentDto) -> Result<VerificationReport, String> {
+    ensure_desktop_product_setup_supported("desktop_provision_verify")?;
     let intent = intent.into_intent()?;
     verify(&intent).map_err(map_err)
 }
@@ -120,12 +145,16 @@ pub fn provision_health(
 /// Execute a repair action from a health check Fix button.
 #[tauri::command]
 pub fn provision_repair(action: RepairAction) -> Result<RepairResult, String> {
+    if !matches!(action.kind, moraine_provision::RepairKind::InitProject) {
+        ensure_desktop_product_setup_supported("desktop_provision_repair")?;
+    }
     repair_default(&action).map_err(map_err)
 }
 
 /// One-shot enable: plan + apply + self-test.
 #[tauri::command]
 pub fn provision_enable(intent: SetupIntentDto) -> Result<ApplyOutcome, String> {
+    ensure_desktop_product_setup_supported("desktop_provision_enable")?;
     let intent = intent.into_intent()?;
     moraine_provision::enable_project_default(intent).map_err(map_err)
 }
@@ -142,4 +171,35 @@ pub fn provision_init_project(path: String) -> Result<serde_json::Value, String>
         "projectId": r.project_id.to_string(),
         "created": r.created,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_desktop_product_setup_supported_with_capabilities;
+    use moraine_platform::{HostPlatform, PlatformCapabilities};
+
+    #[test]
+    fn desktop_product_mutations_fail_closed_on_unsupported_hosts() {
+        let capabilities = PlatformCapabilities::for_host(HostPlatform::Windows);
+        let error = ensure_desktop_product_setup_supported_with_capabilities(
+            "desktop_provision_apply",
+            &capabilities,
+        )
+        .unwrap_err();
+        assert!(error.contains("unsupported_platform"));
+        assert!(error.contains("desktop_provision_apply"));
+    }
+
+    #[test]
+    fn degraded_desktop_host_fails_even_when_capture_is_supported() {
+        let mut capabilities = PlatformCapabilities::for_host(HostPlatform::Linux);
+        capabilities.desktop_host = moraine_platform::CapabilityStatus::Degraded;
+        let error = ensure_desktop_product_setup_supported_with_capabilities(
+            "desktop_provision_plan",
+            &capabilities,
+        )
+        .unwrap_err();
+        assert!(error.contains("unsupported_platform"));
+        assert!(error.contains("desktop_provision_plan"));
+    }
 }

@@ -5,7 +5,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use moraine_core::{BuildIdentity, SuiteManifest};
-use moraine_platform::{HostPlatform, RuntimeLayout, SuiteLayout, UserPaths, DIAGNOSTICS_PORT};
+use moraine_platform::{
+    executable_name, CaptureEndpoint, HostPlatform, RuntimeLayout, SuiteComponent, SuiteLayout,
+    UserPaths, DIAGNOSTICS_PORT,
+};
 use serde::Serialize;
 
 /// Default user-scoped install prefix.
@@ -22,17 +25,21 @@ pub struct SuitePaths {
     pub desktop: PathBuf,
     pub share: PathBuf,
     pub manifest: PathBuf,
-    pub unit: PathBuf,
-    pub desktop_entry: PathBuf,
+    pub service_registration: Option<PathBuf>,
+    pub desktop_registration: Option<PathBuf>,
 }
 
 impl SuitePaths {
     pub fn from_prefix(prefix: impl AsRef<Path>) -> Self {
-        let layout = SuiteLayout::from_prefix(
+        Self::for_host(
             HostPlatform::current(),
             prefix.as_ref(),
             &UserPaths::discover(),
-        );
+        )
+    }
+
+    pub fn for_host(host: HostPlatform, prefix: &Path, users: &UserPaths) -> Self {
+        let layout = SuiteLayout::from_prefix(host, prefix, users);
         Self {
             prefix: layout.prefix,
             cli: layout.cli,
@@ -40,8 +47,8 @@ impl SuitePaths {
             desktop: layout.desktop,
             share: layout.share,
             manifest: layout.manifest,
-            unit: layout.service_registration.unwrap_or_default(),
-            desktop_entry: layout.desktop_registration.unwrap_or_default(),
+            service_registration: layout.service_registration,
+            desktop_registration: layout.desktop_registration,
         }
     }
 
@@ -65,10 +72,11 @@ impl SuitePaths {
 
 /// All `moraine` executables found by scanning PATH entries.
 pub fn enumerate_moraine_on_path() -> Vec<PathBuf> {
+    let cli_name = executable_name(HostPlatform::current(), SuiteComponent::Cli);
     let path = env::var_os("PATH").unwrap_or_default();
     let mut out = Vec::new();
     for dir in env::split_paths(&path) {
-        let cand = dir.join("moraine");
+        let cand = dir.join(cli_name);
         if cand.is_file() {
             if let Ok(canon) = fs::canonicalize(&cand) {
                 if !out.iter().any(|p| p == &canon) {
@@ -83,7 +91,12 @@ pub fn enumerate_moraine_on_path() -> Vec<PathBuf> {
 }
 
 pub fn current_exe_path() -> PathBuf {
-    env::current_exe().unwrap_or_else(|_| PathBuf::from("moraine"))
+    env::current_exe().unwrap_or_else(|_| {
+        PathBuf::from(executable_name(
+            HostPlatform::current(),
+            SuiteComponent::Cli,
+        ))
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -262,9 +275,37 @@ pub fn http_get_loopback(port: u16, path: &str) -> Result<String, String> {
     }
 }
 
-pub fn default_socket_path() -> PathBuf {
-    match RuntimeLayout::discover().capture_endpoint {
-        moraine_platform::CaptureEndpoint::UnixSocket(path) => path,
-        _ => PathBuf::new(),
+pub fn capture_endpoint() -> CaptureEndpoint {
+    RuntimeLayout::discover().capture_endpoint
+}
+
+#[cfg(unix)]
+pub fn unix_capture_socket() -> Option<PathBuf> {
+    match capture_endpoint() {
+        CaptureEndpoint::UnixSocket(path) => Some(path),
+        CaptureEndpoint::WindowsNamedPipe(_) | CaptureEndpoint::Unsupported => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unsupported_host_registrations_remain_absent() {
+        let root = tempfile::tempdir().unwrap();
+        let users = UserPaths {
+            data_dir: root.path().join("data"),
+            config_dir: root.path().join("config"),
+            cache_dir: root.path().join("cache"),
+            runtime_dir: root.path().join("runtime"),
+        };
+        let paths = SuitePaths::for_host(HostPlatform::Windows, root.path(), &users);
+        assert!(paths.service_registration.is_none());
+        assert!(paths.desktop_registration.is_none());
+        assert_eq!(
+            paths.cli.file_name().unwrap(),
+            executable_name(HostPlatform::Windows, SuiteComponent::Cli)
+        );
     }
 }

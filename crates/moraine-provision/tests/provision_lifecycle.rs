@@ -8,8 +8,8 @@ use moraine_provision::{
     apply, apply_with_options, enable_project, health, plan, rollback, verify, verify_with_options,
     AgentKind, AlwaysOfflineProbe, AlwaysReadyProbe, ApplyOutcome, ControlledCapture, FileSnapshot,
     MemoryServiceManager, ProvisionOpKind, ProvisionOperation, Readiness, RepairAction, RepairKind,
-    ServiceLog, ServiceManager, ServiceState, SetupIntent, SetupPlan, VecBackupRecorder,
-    VerificationMode, VerifyOptions,
+    ServiceLog, ServiceManager, ServiceState, SetupIntent, SetupPlan, UnsupportedRuntimeManager,
+    VecBackupRecorder, VerificationMode, VerifyOptions,
 };
 use tempfile::tempdir;
 
@@ -288,6 +288,104 @@ fn windows_capabilities_fail_closed_across_product_capture_boundaries() {
         ),
         "DirectCoreTest remains callable but never becomes Product Ready: {direct:?}"
     );
+}
+
+#[test]
+fn forged_skip_service_plan_is_rejected_before_inspection_or_journaling() {
+    let dir = tempdir().unwrap();
+    let project = dir.path().join("forged-unsupported-product");
+    fs::create_dir_all(&project).unwrap();
+    moraine_core::init_project(Some(&project)).unwrap();
+    let service = MemoryServiceManager::new();
+    let capabilities =
+        moraine_platform::PlatformCapabilities::for_host(moraine_platform::HostPlatform::Windows);
+    let fake_cli = dir.path().join("moraine");
+    fs::write(&fake_cli, b"fake").unwrap();
+
+    let mut intent = product_intent(project);
+    intent.skip_service = true;
+    let approved = plan_with_operations(
+        intent,
+        &service,
+        &fake_cli,
+        &[ProvisionOpKind::InstallService],
+    );
+    let inspections_before = service.inspect_count();
+    let operations_before = service.operation_counts();
+    let journal_dir = dir.path().join("journals");
+
+    let error = moraine_provision::journal::with_journal_dir_override(journal_dir.clone(), || {
+        moraine_provision::apply::apply_with_options_and_capabilities(
+            approved,
+            &service,
+            None,
+            None,
+            &capabilities,
+        )
+        .unwrap_err()
+    });
+
+    assert!(matches!(
+        error,
+        moraine_provision::ProvisionError::UnsupportedPlatform {
+            operation: "product_capture_apply",
+            ..
+        }
+    ));
+    assert_eq!(service.inspect_count(), inspections_before);
+    assert_eq!(service.operation_counts(), operations_before);
+    assert!(
+        !journal_dir.exists(),
+        "unsupported forged plan must fail before transaction creation"
+    );
+}
+
+#[test]
+fn unsupported_health_exposes_only_portable_project_repair() {
+    let dir = tempdir().unwrap();
+    let project = dir.path().join("unsupported-health");
+    fs::create_dir_all(&project).unwrap();
+    let service = UnsupportedRuntimeManager::new(moraine_platform::HostPlatform::Windows);
+
+    let report = health(&service, Some(&project), Some(AgentKind::Codex)).unwrap();
+
+    assert!(report
+        .checks
+        .iter()
+        .any(|check| check.id == "service.supported" && check.repair.is_none()));
+    assert!(report
+        .checks
+        .iter()
+        .filter_map(|check| check.repair.as_ref())
+        .all(|repair| repair.kind == RepairKind::InitProject));
+
+    let agent_repair = RepairAction {
+        id: "forged-agent-repair".into(),
+        label: "Fix".into(),
+        kind: RepairKind::RepairAgentIntegration,
+        project: Some(project.clone()),
+        agent: Some(AgentKind::Codex),
+    };
+    let blocked = moraine_provision::repair(&agent_repair, &service).unwrap();
+    assert!(!blocked.ok);
+    assert_eq!(
+        blocked.technical_detail.as_deref(),
+        Some("unsupported_platform")
+    );
+
+    let init_repair = RepairAction {
+        id: "portable-init".into(),
+        label: "Fix".into(),
+        kind: RepairKind::InitProject,
+        project: Some(project.clone()),
+        agent: None,
+    };
+    let initialized = moraine_core::project_registry::with_project_registry_path_override(
+        dir.path().join("projects.json"),
+        || moraine_provision::repair(&init_repair, &service).unwrap(),
+    );
+    assert!(initialized.ok);
+    assert!(project.join(".moraine").is_dir());
 }
 
 #[test]

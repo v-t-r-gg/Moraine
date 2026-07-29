@@ -75,18 +75,22 @@ fn server_bins() -> Vec<PathBuf> {
 pub fn launch_desktop(path: &Path) -> Result<bool> {
     let abs = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let mut bins = Vec::new();
+    let desktop_name = moraine_platform::executable_name(
+        moraine_platform::HostPlatform::current(),
+        moraine_platform::SuiteComponent::Desktop,
+    );
     // Prefer installed suite desktop (C2), then PATH, then cargo target (dev only).
     let suite_app = crate::suite::SuitePaths::discover().desktop;
     if suite_app.is_file() {
         bins.push(suite_app);
     }
-    for n in ["moraine-app", "moraine-desktop"] {
+    for n in [desktop_name, "moraine-desktop"] {
         if which_exists(n) {
             bins.push(PathBuf::from(n));
         }
     }
-    for rel in ["target/debug/moraine-app", "target/release/moraine-app"] {
-        let p = PathBuf::from(rel);
+    for profile in ["debug", "release"] {
+        let p = PathBuf::from("target").join(profile).join(desktop_name);
         if p.is_file() {
             bins.push(p);
         }
@@ -113,10 +117,14 @@ pub fn launch_desktop_workspace(open_path: Option<&Path>) -> Result<bool> {
     }
     // No path: still prefer suite binary so ledger workspace can open.
     let suite_app = crate::suite::SuitePaths::discover().desktop;
+    let desktop_name = moraine_platform::executable_name(
+        moraine_platform::HostPlatform::current(),
+        moraine_platform::SuiteComponent::Desktop,
+    );
     let bins = if suite_app.is_file() {
         vec![suite_app]
     } else {
-        ["moraine-app", "moraine-desktop"]
+        [desktop_name, "moraine-desktop"]
             .into_iter()
             .filter(|n| which_exists(n))
             .map(PathBuf::from)

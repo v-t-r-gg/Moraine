@@ -135,7 +135,7 @@ pub fn health(
                     status: HealthStatus::Fail,
                     user_message: format!("{} integration needs repair", adapter.display_name()),
                     technical_detail: state.details.join("; "),
-                    repair: Some(RepairAction {
+                    repair: svc.supported.then(|| RepairAction {
                         id: "repair.agent".into(),
                         label: "Fix".into(),
                         kind: RepairKind::RepairAgentIntegration,
@@ -166,6 +166,14 @@ pub fn health_default(project: Option<&Path>, agent: Option<AgentKind>) -> Resul
 }
 
 pub fn repair(action: &RepairAction, service: &dyn ServiceManager) -> Result<RepairResult> {
+    if !matches!(action.kind, RepairKind::InitProject) && !service.inspect()?.supported {
+        return Ok(RepairResult {
+            ok: false,
+            action_id: action.id.clone(),
+            user_message: "Background capture is not available on this platform".into(),
+            technical_detail: Some("unsupported_platform".into()),
+        });
+    }
     match action.kind {
         RepairKind::StartService => match service.start() {
             Ok(()) => Ok(RepairResult {
@@ -186,7 +194,12 @@ pub fn repair(action: &RepairAction, service: &dyn ServiceManager) -> Result<Rep
             let bin = suite.absolute_service().or_else(|| {
                 std::env::current_exe().ok().and_then(|e| {
                     e.parent()
-                        .map(|p| p.join("moraine-service"))
+                        .map(|p| {
+                            p.join(moraine_platform::executable_name(
+                                moraine_platform::HostPlatform::current(),
+                                moraine_platform::SuiteComponent::Service,
+                            ))
+                        })
                         .filter(|p| p.is_file())
                 })
             });

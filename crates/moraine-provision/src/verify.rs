@@ -765,7 +765,11 @@ fn invoke_hook_codex(
 }
 
 fn is_moraine_cli_binary(p: &Path) -> bool {
-    p.file_name().and_then(|n| n.to_str()) == Some("moraine")
+    p.file_name().and_then(|n| n.to_str())
+        == Some(moraine_platform::executable_name(
+            moraine_platform::HostPlatform::current(),
+            moraine_platform::SuiteComponent::Cli,
+        ))
 }
 
 fn paths_equal(a: &str, b: &Path) -> bool {

@@ -21,6 +21,8 @@ import {
   type SystemStateDto,
 } from "@/shared/api/provision";
 import { isTauri } from "@/shared/api";
+import { deriveDesktopProductSupport } from "@/shared/platformSupport";
+import { UnsupportedPlatformView } from "@/features/platform/UnsupportedPlatformView";
 
 export type WizardStep =
   | "welcome"
@@ -36,15 +38,17 @@ export interface OnboardingWizardProps {
   onDismiss?: () => void;
   /** Pre-selected folder (optional). */
   initialProject?: string | null;
+  systemState?: SystemStateDto | null;
 }
 
 export function OnboardingWizard({
   onComplete,
   onDismiss,
   initialProject,
+  systemState,
 }: OnboardingWizardProps) {
   const [step, setStep] = useState<WizardStep>("welcome");
-  const [system, setSystem] = useState<SystemStateDto | null>(null);
+  const [system, setSystem] = useState<SystemStateDto | null>(systemState ?? null);
   const [projectPath, setProjectPath] = useState(initialProject ?? "");
   const [plan, setPlan] = useState<SetupPlanDto | null>(null);
   const [receipt, setReceipt] = useState<SetupReceiptDto | null>(null);
@@ -53,6 +57,10 @@ export function OnboardingWizard({
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    if (systemState) {
+      setSystem(systemState);
+      return;
+    }
     let cancelled = false;
     void (async () => {
       try {
@@ -67,7 +75,7 @@ export function OnboardingWizard({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [systemState]);
 
   const pickFolder = useCallback(async () => {
     if (!isTauri) {
@@ -167,6 +175,21 @@ export function OnboardingWizard({
 
   const agents: DetectedAgentDto[] = system?.agents ?? [];
   const recentProjects = system?.projects ?? [];
+
+  if (isTauri && !system) {
+    return (
+      <div className="flex h-full items-center justify-center text-sm">
+        Inspecting Moraine…
+      </div>
+    );
+  }
+
+  if (system) {
+    const support = deriveDesktopProductSupport(system.platform);
+    if (isTauri && !support.desktopSupported) {
+      return <UnsupportedPlatformView support={support} />;
+    }
+  }
 
   return (
     <div

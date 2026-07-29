@@ -45,6 +45,19 @@ jobs:
         run: |
           cargo check -p moraine-core -p moraine-cli -p moraine-mcp -p moraine-server -p moraine-service -p moraine-provision
 
+  windows-compile:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check complete workspace
+        run: cargo check --workspace --all-targets
+      - name: Test portable platform contracts
+        run: cargo test -p moraine-platform
+      - name: Check desktop host
+        run: cargo check -p moraine-app
+
   frontend:
     runs-on: ubuntu-latest
     steps:

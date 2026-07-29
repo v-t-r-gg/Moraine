@@ -17,7 +17,7 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::System::TaskScheduler::{
     ITaskFolder, ITaskService, TaskScheduler, TASK_CREATE_OR_UPDATE, TASK_LOGON_INTERACTIVE_TOKEN,
-    TASK_STATE_RUNNING,
+    TASK_RUNLEVEL_LUA, TASK_STATE_RUNNING,
 };
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 use windows::Win32::System::Variant::VARIANT;
@@ -194,10 +194,15 @@ fn current_user_task_can_run_restore_and_preserve_demand_start() -> windows::cor
     )?;
     let (original_xml, original_sddl) = read_registration(&original)?;
     assert!(original_xml.contains("<LogonType>InteractiveToken</LogonType>"));
-    assert!(original_xml.contains("<RunLevel>LeastPrivilege</RunLevel>"));
     assert!(original_xml.contains("<Enabled>false</Enabled>"));
     assert!(original_sddl.contains(&sid));
     assert!(original_sddl.contains("SY"));
+    unsafe {
+        let principal = original.Definition()?.Principal()?;
+        let mut run_level = TASK_RUNLEVEL_LUA;
+        principal.RunLevel(&mut run_level)?;
+        assert_eq!(run_level, TASK_RUNLEVEL_LUA);
+    }
 
     unsafe {
         let running = original.Run(&VARIANT::default())?;

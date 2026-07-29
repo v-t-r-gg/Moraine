@@ -200,6 +200,7 @@ pub struct LayoutOverrides {
     pub service: Option<PathBuf>,
     pub capture_socket: Option<PathBuf>,
     pub spool_dir: Option<PathBuf>,
+    pub project_registry: Option<PathBuf>,
 }
 
 impl LayoutOverrides {
@@ -210,6 +211,7 @@ impl LayoutOverrides {
             service: env::var_os("MORAINE_SERVICE_BIN").map(PathBuf::from),
             capture_socket: env::var_os("MORAINE_SOCKET").map(PathBuf::from),
             spool_dir: env::var_os("MORAINE_SPOOL_DIR").map(PathBuf::from),
+            project_registry: env::var_os("MORAINE_PROJECT_REGISTRY").map(PathBuf::from),
         }
     }
 }
@@ -378,6 +380,9 @@ impl RuntimeLayout {
         }
         if let Some(spool) = &overrides.spool_dir {
             layout.spool_dir = spool.clone();
+        }
+        if let Some(registry) = &overrides.project_registry {
+            layout.project_registry = registry.clone();
         }
     }
 }
@@ -589,6 +594,7 @@ mod tests {
             service: Some(root.path().join("custom/moraine-service")),
             capture_socket: Some(root.path().join("custom/moraine.sock")),
             spool_dir: Some(root.path().join("custom/spool")),
+            project_registry: Some(root.path().join("custom/projects.json")),
         };
         let suite = SuiteLayout::with_overrides(HostPlatform::Linux, &users, &overrides);
         let runtime = RuntimeLayout::with_overrides(HostPlatform::Linux, &users, &overrides);
@@ -601,5 +607,9 @@ mod tests {
             CaptureEndpoint::UnixSocket(root.path().join("custom/moraine.sock"))
         );
         assert_eq!(runtime.spool_dir, root.path().join("custom/spool"));
+        assert_eq!(
+            runtime.project_registry,
+            root.path().join("custom/projects.json")
+        );
     }
 }

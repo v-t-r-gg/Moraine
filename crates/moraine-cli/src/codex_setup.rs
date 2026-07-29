@@ -421,7 +421,12 @@ fn which_moraine() -> PathBuf {
     if abs.is_file() {
         return abs;
     }
-    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("moraine"))
+    std::env::current_exe().unwrap_or_else(|_| {
+        PathBuf::from(moraine_platform::executable_name(
+            moraine_platform::HostPlatform::current(),
+            moraine_platform::SuiteComponent::Cli,
+        ))
+    })
 }
 
 fn which_codex() -> Option<PathBuf> {

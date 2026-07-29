@@ -149,7 +149,12 @@ pub fn apply_with_options_and_capabilities(
                         .or_else(|| {
                             absolute_cli
                                 .parent()
-                                .map(|p| p.join("moraine-service"))
+                                .map(|p| {
+                                    p.join(moraine_platform::executable_name(
+                                        moraine_platform::HostPlatform::current(),
+                                        moraine_platform::SuiteComponent::Service,
+                                    ))
+                                })
                                 .filter(|p| p.is_file())
                         })
                         .ok_or_else(|| ProvisionError::msg("service binary not found in suite"))?;

@@ -145,7 +145,10 @@ impl super::BackgroundRuntimeManager for MemoryRuntimeManager {
         let path = self
             .unit_path
             .clone()
-            .unwrap_or_else(|| crate::suite::SuitePaths::discover().unit);
+            .or_else(|| crate::suite::SuitePaths::discover().service_registration)
+            .ok_or_else(|| {
+                ProvisionError::Service("memory runtime registration path is not configured".into())
+            })?;
         let snapshot = if path.is_file() {
             crate::snapshot::durable_backup(&path)?
         } else {

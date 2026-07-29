@@ -186,7 +186,12 @@ pub fn repair(action: &RepairAction, service: &dyn ServiceManager) -> Result<Rep
             let bin = suite.absolute_service().or_else(|| {
                 std::env::current_exe().ok().and_then(|e| {
                     e.parent()
-                        .map(|p| p.join("moraine-service"))
+                        .map(|p| {
+                            p.join(moraine_platform::executable_name(
+                                moraine_platform::HostPlatform::current(),
+                                moraine_platform::SuiteComponent::Service,
+                            ))
+                        })
                         .filter(|p| p.is_file())
                 })
             });

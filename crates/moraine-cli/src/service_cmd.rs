@@ -20,7 +20,12 @@ fn service_binary() -> Result<std::path::PathBuf> {
     let sibling = std::env::current_exe()
         .context("current_exe")?
         .parent()
-        .map(|path| path.join("moraine-service"))
+        .map(|path| {
+            path.join(moraine_platform::executable_name(
+                moraine_platform::HostPlatform::current(),
+                moraine_platform::SuiteComponent::Service,
+            ))
+        })
         .filter(|path| path.is_file());
     sibling.ok_or_else(|| {
         anyhow::anyhow!(

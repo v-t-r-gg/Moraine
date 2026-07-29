@@ -13,7 +13,7 @@ use crate::suite::{
     collect_version_report, current_exe_path, enumerate_moraine_on_path, SuitePaths,
 };
 #[cfg(unix)]
-use crate::suite::{default_socket_path, http_get_loopback};
+use crate::suite::{http_get_loopback, unix_capture_socket};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -223,9 +223,10 @@ pub fn run_doctor(project: Option<&Path>, integration: Option<&str>) -> DoctorRe
         Some("Re-run install.sh or moraine service install"),
     ));
 
-    let unit_exists = suite.unit.is_file();
+    let unit = suite.service_registration.as_deref();
+    let unit_exists = unit.is_some_and(Path::is_file);
     let unit_body = unit_exists
-        .then(|| fs::read_to_string(&suite.unit).ok())
+        .then(|| unit.and_then(|path| fs::read_to_string(path).ok()))
         .flatten();
     let unit_points_cargo = unit_body
         .as_ref()
@@ -256,12 +257,14 @@ pub fn run_doctor(project: Option<&Path>, integration: Option<&str>) -> DoctorRe
         } else if unit_points_cargo {
             format!(
                 "unit {} points at ~/.cargo/bin (development drift)",
-                suite.unit.display()
+                unit.map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "unavailable".into())
             )
         } else {
             format!(
                 "unit {} ExecStart={}",
-                suite.unit.display(),
+                unit.map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "unavailable".into()),
                 unit_exec.as_deref().unwrap_or("?")
             )
         },
@@ -308,38 +311,39 @@ pub fn run_doctor(project: Option<&Path>, integration: Option<&str>) -> DoctorRe
     #[cfg(unix)]
     {
         // Socket path + ownership
-        let sock = default_socket_path();
-        if sock.exists() {
-            let meta = fs::metadata(&sock).ok();
-            let mode = meta.as_ref().map(|m| m.permissions().mode() & 0o777);
-            let uid_ok = meta
-                .as_ref()
-                .map(|m| m.uid() == libc_uid())
-                .unwrap_or(false);
-            checks.push(check(
-                "service.socket",
-                if uid_ok { "pass" } else { "warn" },
-                format!(
-                    "socket {} mode={:o} uid_ok={uid_ok}",
-                    sock.display(),
-                    mode.unwrap_or(0)
-                ),
-                Some(&sock.display().to_string()),
-                Some("user-owned unix socket"),
-                None,
-            ));
-        } else {
-            checks.push(check(
-                "service.socket",
-                "info",
-                format!(
-                    "expected unix socket {} (created when service runs)",
-                    sock.display()
-                ),
-                None,
-                Some(&sock.display().to_string()),
-                Some("moraine service start"),
-            ));
+        if let Some(sock) = unix_capture_socket() {
+            if sock.exists() {
+                let meta = fs::metadata(&sock).ok();
+                let mode = meta.as_ref().map(|m| m.permissions().mode() & 0o777);
+                let uid_ok = meta
+                    .as_ref()
+                    .map(|m| m.uid() == libc_uid())
+                    .unwrap_or(false);
+                checks.push(check(
+                    "service.socket",
+                    if uid_ok { "pass" } else { "warn" },
+                    format!(
+                        "socket {} mode={:o} uid_ok={uid_ok}",
+                        sock.display(),
+                        mode.unwrap_or(0)
+                    ),
+                    Some(&sock.display().to_string()),
+                    Some("user-owned unix socket"),
+                    None,
+                ));
+            } else {
+                checks.push(check(
+                    "service.socket",
+                    "info",
+                    format!(
+                        "expected unix socket {} (created when service runs)",
+                        sock.display()
+                    ),
+                    None,
+                    Some(&sock.display().to_string()),
+                    Some("moraine service start"),
+                ));
+            }
         }
 
         // Spool directory permissions
@@ -391,7 +395,10 @@ pub fn run_doctor(project: Option<&Path>, integration: Option<&str>) -> DoctorRe
     }
 
     // Desktop
-    let desk_entry = suite.desktop_entry.is_file()
+    let desk_entry = suite
+        .desktop_registration
+        .as_ref()
+        .is_some_and(|path| path.is_file())
         || dirs::data_dir()
             .map(|d| d.join("applications/app.moraine.desktop").is_file())
             .unwrap_or(false);

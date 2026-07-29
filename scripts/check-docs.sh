@@ -17,7 +17,7 @@ root = Path.cwd()
 docs = [
     Path(line)
     for line in __import__("subprocess")
-    .check_output(["rg", "--files", "-g", "*.md"], text=True)
+    .check_output(["git", "ls-files", "*.md"], text=True)
     .splitlines()
 ]
 
@@ -108,7 +108,7 @@ do
 done
 
 grep -q 'tool_names' crates/moraine-mcp/src/lib.rs
-! rg -n 'five tools only|start, show, checkpoint, ready, resume' \
+! grep -R -n -E 'five tools only|start, show, checkpoint, ready, resume' \
   README.md VISION.md ARCHITECTURE.md ROADMAP.md CONTRIBUTING.md SECURITY.md docs
 
 for file in README.md INSTALL.md SECURITY.md TROUBLESHOOTING.md CODEX.md LICENSE

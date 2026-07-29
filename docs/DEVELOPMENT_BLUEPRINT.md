@@ -16,8 +16,9 @@ Moraine has a supported Linux product with:
 * required Windows workspace compilation;
 * fail-closed unsupported-host behavior.
 
-Windows paths are modeled. No supported Windows capture, runtime registration,
-desktop lifecycle or installer exists yet.
+Windows paths are modeled. The SID-scoped named-pipe capture backend is
+implemented, but Windows runtime registration, desktop lifecycle & installation
+remain unsupported. Capture capability promotion waits for W2 product closure.
 
 ## Product invariant
 

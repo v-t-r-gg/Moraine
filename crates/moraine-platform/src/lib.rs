@@ -93,14 +93,32 @@ impl PlatformCapabilities {
         Self::for_host(HostPlatform::current())
     }
 
-    pub const fn product_ready_supported(&self) -> bool {
+    /// Whether this host has product capture transport & runtime backends.
+    ///
+    /// Distribution is deliberately separate; W2 can validate a manually
+    /// staged runtime without claiming the W3 installer exists.
+    pub const fn runtime_capture_supported(&self) -> bool {
         matches!(self.capture_transport, CapabilityStatus::Supported)
             && matches!(self.background_runtime, CapabilityStatus::Supported)
-            && matches!(self.user_installation, CapabilityStatus::Supported)
     }
 
+    pub const fn desktop_runtime_supported(&self) -> bool {
+        self.runtime_capture_supported() && matches!(self.desktop_host, CapabilityStatus::Supported)
+    }
+
+    pub const fn distribution_supported(&self) -> bool {
+        matches!(self.user_installation, CapabilityStatus::Supported)
+    }
+
+    /// Compatibility name for callers deciding whether ProductCapture can be
+    /// ready. Installation provenance is not a runtime readiness condition.
+    pub const fn product_ready_supported(&self) -> bool {
+        self.runtime_capture_supported()
+    }
+
+    /// Compatibility name for native desktop runtime support.
     pub const fn desktop_product_supported(&self) -> bool {
-        self.product_ready_supported() && matches!(self.desktop_host, CapabilityStatus::Supported)
+        self.desktop_runtime_supported()
     }
 }
 
@@ -428,6 +446,39 @@ mod tests {
             capabilities.background_runtime,
             CapabilityStatus::Unsupported
         );
+    }
+
+    #[test]
+    fn runtime_readiness_does_not_claim_distribution_support() {
+        let capabilities = PlatformCapabilities {
+            host: HostPlatform::Windows,
+            user_paths: CapabilityStatus::Supported,
+            suite_layout: CapabilityStatus::Supported,
+            capture_transport: CapabilityStatus::Supported,
+            background_runtime: CapabilityStatus::Supported,
+            desktop_host: CapabilityStatus::Supported,
+            user_installation: CapabilityStatus::Unsupported,
+        };
+
+        assert!(capabilities.runtime_capture_supported());
+        assert!(capabilities.desktop_runtime_supported());
+        assert!(capabilities.product_ready_supported());
+        assert!(capabilities.desktop_product_supported());
+        assert!(!capabilities.distribution_supported());
+    }
+
+    #[test]
+    fn runtime_and_desktop_capabilities_fail_closed_independently() {
+        let mut capabilities = PlatformCapabilities::for_host(HostPlatform::Linux);
+        capabilities.capture_transport = CapabilityStatus::Degraded;
+        assert!(!capabilities.runtime_capture_supported());
+        assert!(!capabilities.desktop_runtime_supported());
+        assert!(capabilities.distribution_supported());
+
+        capabilities.capture_transport = CapabilityStatus::Supported;
+        capabilities.desktop_host = CapabilityStatus::Unavailable;
+        assert!(capabilities.runtime_capture_supported());
+        assert!(!capabilities.desktop_runtime_supported());
     }
 
     #[test]

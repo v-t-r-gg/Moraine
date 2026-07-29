@@ -334,8 +334,10 @@ Preserve Unix capture semantics:
 one client connection = one serialized event
 ```
 
-The client connects, writes the complete payload, flushes & closes. The server
-accepts, creates the next listener, reads to EOF with a
+The client opens the pipe write-only, writes the complete payload, flushes &
+closes. Tokio clients default to read-write; the Windows backend must explicitly
+disable client reads because the server is inbound-only. The server accepts,
+creates the next listener, reads to EOF with a
 `MAX_EVENT_BYTES + 1` cap, writes through the existing spool path & closes the
 connected instance.
 

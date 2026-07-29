@@ -201,8 +201,9 @@ async fn secured_pipe_preserves_framing_size_and_first_instance() -> anyhow::Res
 
     let expected = vec![0x5a; MAX_EVENT_BYTES];
     let reader = tokio::spawn(read_one_event(server));
-    let mut client = ClientOptions::new()
-        .write(true)
+    let mut client_options = ClientOptions::new();
+    client_options.read(false).write(true);
+    let mut client = client_options
         .open(&pipe_name)
         .context("open maximum-size payload client")?;
     client.write_all(&expected).await?;
@@ -213,8 +214,9 @@ async fn secured_pipe_preserves_framing_size_and_first_instance() -> anyhow::Res
     let mut attributes = security.attributes();
     let oversized_server = unsafe { create_server(&pipe_name, true, &mut attributes)? };
     let reader = tokio::spawn(read_one_event(oversized_server));
-    let mut client = ClientOptions::new()
-        .write(true)
+    let mut client_options = ClientOptions::new();
+    client_options.read(false).write(true);
+    let mut client = client_options
         .open(&pipe_name)
         .context("open oversized payload client")?;
     client.write_all(&vec![0x7b; MAX_EVENT_BYTES + 1]).await?;
@@ -234,8 +236,9 @@ async fn next_listener_exists_before_connected_event_is_processed() -> anyhow::R
 
     let first = unsafe { create_server(&pipe_name, true, &mut attributes) }
         .context("create first concurrent server instance")?;
-    let mut client_one = ClientOptions::new()
-        .write(true)
+    let mut client_options = ClientOptions::new();
+    client_options.read(false).write(true);
+    let mut client_one = client_options
         .open(&pipe_name)
         .context("open first concurrent client")?;
     first
@@ -245,8 +248,7 @@ async fn next_listener_exists_before_connected_event_is_processed() -> anyhow::R
 
     let next = unsafe { create_server(&pipe_name, false, &mut attributes) }
         .context("create next concurrent server instance")?;
-    let mut client_two = ClientOptions::new()
-        .write(true)
+    let mut client_two = client_options
         .open(&pipe_name)
         .context("open second concurrent client")?;
     next.connect()

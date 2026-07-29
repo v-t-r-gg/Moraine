@@ -181,13 +181,26 @@ Production management uses Task Scheduler 2.0 COM interfaces through the
 pub struct WindowsTaskSchedulerRuntime {
     suite: SuitePaths,
     task_identity: WindowsTaskIdentity,
+    operation_lock: Mutex<()>,
 }
 ```
 
-It must not retain COM interface pointers. Each manager method initializes COM
-on its calling thread, connects, performs one bounded operation & releases all
-interfaces before returning. This preserves the runtime manager's `Send + Sync`
-contract without crossing COM apartment boundaries.
+It must not retain COM interface pointers. Each manager method locks
+`operation_lock`, starts a dedicated worker thread, initializes that worker as
+MTA with `COINIT_MULTITHREADED`, performs one bounded COM transaction & joins
+the worker before returning. Every Task Scheduler interface is created, used &
+released on that worker. Successful COM initialization is balanced with
+`CoUninitialize`.
+
+This boundary avoids depending on the caller's apartment. In particular, Tauri
+may call the synchronous runtime trait from a desktop thread already initialized
+as STA; initializing that same thread as MTA can fail with
+`RPC_E_CHANGED_MODE`. A persistent worker is unnecessary because Task Scheduler
+operations are infrequent.
+
+COM pointers must never cross threads. Worker startup failure, panic & HRESULT
+failure become structured provisioning errors. The ordinary Rust fields plus
+the operation mutex preserve the runtime manager's `Send + Sync` contract.
 
 ### Lifecycle mapping
 

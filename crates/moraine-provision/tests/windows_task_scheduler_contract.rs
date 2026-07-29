@@ -5,15 +5,16 @@ use std::thread;
 use std::time::Duration;
 
 use uuid::Uuid;
-use windows::core::{BSTR, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL};
+use windows::core::{Error, BSTR, PWSTR};
+use windows::Win32::Foundation::{CloseHandle, LocalFree, E_FAIL, HANDLE, HLOCAL};
 use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows::Win32::Security::{
     GetTokenInformation, TokenUser, DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
     TOKEN_QUERY, TOKEN_USER,
 };
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT,
+    COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED,
 };
 use windows::Win32::System::TaskScheduler::{
     ITaskFolder, ITaskService, TaskScheduler, TASK_CREATE_OR_UPDATE, TASK_LOGON_INTERACTIVE_TOKEN,
@@ -25,9 +26,9 @@ use windows::Win32::System::Variant::VARIANT;
 struct ComApartment;
 
 impl ComApartment {
-    fn initialize() -> windows::core::Result<Self> {
+    fn initialize(mode: COINIT) -> windows::core::Result<Self> {
         unsafe {
-            CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
+            CoInitializeEx(None, mode).ok()?;
         }
         Ok(Self)
     }
@@ -184,9 +185,22 @@ fn sddl_names_current_account(sddl: &str, sid: &str) -> bool {
             && (sddl.contains("O:LA") || sddl.contains(";;;LA)")))
 }
 
-#[test]
-fn current_user_task_can_run_restore_and_preserve_demand_start() -> windows::core::Result<()> {
-    let _com = ComApartment::initialize()?;
+fn assert_task_acl_excludes_broad_principals(sddl: &str) {
+    for (principal, alias) in [
+        ("Everyone", "WD"),
+        ("Anonymous", "AN"),
+        ("Builtin Users", "BU"),
+        ("Authenticated Users", "AU"),
+    ] {
+        assert!(
+            !sddl.contains(&format!(";;;{alias})")),
+            "{principal} must be absent from task SDDL {sddl}"
+        );
+    }
+}
+
+fn run_task_contract_on_mta_worker() -> windows::core::Result<()> {
+    let _com = ComApartment::initialize(COINIT_MULTITHREADED)?;
     let sid = current_account_sid()?;
     let (_service, folder) = connect_scheduler()?;
     let name = BSTR::from(format!("Moraine W2 Contract {}", Uuid::new_v4()));
@@ -214,6 +228,7 @@ fn current_user_task_can_run_restore_and_preserve_demand_start() -> windows::cor
         original_sddl.contains("SY"),
         "LocalSystem is absent from returned task SDDL {original_sddl}"
     );
+    assert_task_acl_excludes_broad_principals(&original_sddl);
     unsafe {
         let principal = original.Definition()?.Principal()?;
         let mut run_level = TASK_RUNLEVEL_LUA;
@@ -254,5 +269,14 @@ fn current_user_task_can_run_restore_and_preserve_demand_start() -> windows::cor
         folder.DeleteTask(&name, 0)?;
         assert!(folder.GetTask(&name).is_err());
     }
+    Ok(())
+}
+
+#[test]
+fn sta_caller_dispatches_task_contract_to_mta_worker() -> windows::core::Result<()> {
+    let _caller_com = ComApartment::initialize(COINIT_APARTMENTTHREADED)?;
+    thread::spawn(run_task_contract_on_mta_worker)
+        .join()
+        .map_err(|_| Error::new(E_FAIL, "Task Scheduler contract worker panicked"))??;
     Ok(())
 }

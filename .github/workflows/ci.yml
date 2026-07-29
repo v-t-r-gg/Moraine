@@ -130,7 +130,7 @@ jobs:
           tar -tzf "$ARCHIVE" | grep -E 'bin/moraine-app$'
           tar -tzf "$ARCHIVE" | grep -E 'bin/moraine$'
           tar -tzf "$ARCHIVE" | grep -E 'bin/moraine-service$'
-          DOCS=$(tar -tzf "$ARCHIVE" | sed -n 's#^[^/]*/share/documentation/##p' | sort)
+          DOCS=$(tar -tzf "$ARCHIVE" | sed -n 's#^[^/]*/share/documentation/\(.\+\)$#\1#p' | sort)
           test "$DOCS" = "$(printf '%s\n' CODEX.md INSTALL.md LICENSE README.md SECURITY.md TROUBLESHOOTING.md)"
           # Install smoke (user prefix)
           CLEAN=$(mktemp -d)

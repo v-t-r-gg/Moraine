@@ -132,7 +132,7 @@ impl WindowsNamedPipeCaptureListener {
             if clients.len() >= MAX_PIPE_INSTANCES - 1 {
                 tokio::select! {
                     joined = clients.join_next() => {
-                        supervise_client(joined)?;
+                        supervise_client(joined, false)?;
                     }
                     _ = shutdown.notified() => break,
                 }
@@ -150,7 +150,7 @@ impl WindowsNamedPipeCaptureListener {
                     clients.spawn(async move { process_client(connected, spool).await });
                 }
                 joined = clients.join_next(), if !clients.is_empty() => {
-                    supervise_client(joined)?;
+                    supervise_client(joined, false)?;
                 }
                 _ = shutdown.notified() => break,
             }
@@ -159,13 +159,15 @@ impl WindowsNamedPipeCaptureListener {
         drop(pending);
         let drain = async {
             while let Some(joined) = clients.join_next().await {
-                supervise_client(Some(joined))?;
+                supervise_client(Some(joined), true)?;
             }
             Ok::<(), anyhow::Error>(())
         };
         if tokio::time::timeout(SHUTDOWN_GRACE, drain).await.is_err() {
             clients.abort_all();
-            while clients.join_next().await.is_some() {}
+            while let Some(joined) = clients.join_next().await {
+                supervise_client(Some(joined), true)?;
+            }
         }
         info!(
             pipe = self.pipe_name,
@@ -175,12 +177,22 @@ impl WindowsNamedPipeCaptureListener {
     }
 }
 
-fn supervise_client(joined: Option<Result<Result<()>, tokio::task::JoinError>>) -> Result<()> {
+fn supervise_client(
+    joined: Option<Result<Result<()>, tokio::task::JoinError>>,
+    shutting_down: bool,
+) -> Result<()> {
     let Some(joined) = joined else {
         return Ok(());
     };
-    joined.context("Windows capture client task failed")??;
-    Ok(())
+    match joined {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => {
+            error!(error = %error, "Windows capture client event failed");
+            Ok(())
+        }
+        Err(error) if shutting_down && error.is_cancelled() => Ok(()),
+        Err(error) => Err(error).context("Windows capture client task failed"),
+    }
 }
 
 async fn process_client(server: NamedPipeServer, spool_dir: std::path::PathBuf) -> Result<()> {
@@ -378,6 +390,63 @@ mod tests {
         shutdown.notify_waiters();
         task.await??;
         assert!(write_only_client(&pipe_name).is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn client_spool_failure_does_not_stop_the_next_capture() -> Result<()> {
+        let pipe_name = format!(r"\\.\pipe\moraine.capture.test.{}", Uuid::new_v4());
+        let listener = WindowsNamedPipeCaptureListener::bind(&pipe_name)?;
+        let temp = tempfile::tempdir()?;
+        let spool = temp.path().join("spool");
+        let shutdown = Arc::new(Notify::new());
+        let task = tokio::spawn(listener.run(spool.clone(), shutdown.clone()));
+
+        for _ in 0..100 {
+            if spool.join("processed").is_dir() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(spool.join("processed").is_dir());
+        std::fs::remove_dir_all(&spool)?;
+        std::fs::write(&spool, b"blocks spool directory creation")?;
+
+        let mut failed = write_only_client(&pipe_name)?;
+        failed
+            .write_all(br#"{"eventId":"windows-spool-failure"}"#)
+            .await?;
+        drop(failed);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        std::fs::remove_file(&spool)?;
+        std::fs::create_dir_all(&spool)?;
+        let mut next = None;
+        for _ in 0..100 {
+            match write_only_client(&pipe_name) {
+                Ok(client) => {
+                    next = Some(client);
+                    break;
+                }
+                Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+            }
+        }
+        let mut next = next.context("listener stopped after a client spool failure")?;
+        next.write_all(br#"{"eventId":"windows-after-failure"}"#)
+            .await?;
+        drop(next);
+
+        let expected = spool.join("event-id-windows-after-failure.json");
+        for _ in 0..200 {
+            if expected.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(expected.exists());
+
+        shutdown.notify_waiters();
+        task.await??;
         Ok(())
     }
 }

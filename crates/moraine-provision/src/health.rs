@@ -184,8 +184,29 @@ pub fn health_default(project: Option<&Path>, agent: Option<AgentKind>) -> Resul
 }
 
 pub fn repair(action: &RepairAction, service: &dyn ServiceManager) -> Result<RepairResult> {
+    if matches!(action.kind, RepairKind::InitProject) {
+        let path = action.project.clone().unwrap_or_else(|| PathBuf::from("."));
+        return match moraine_core::init_project(Some(&path)).and_then(|result| {
+            moraine_core::register_project_root(&result.project_root)?;
+            Ok(result)
+        }) {
+            Ok(_) => Ok(RepairResult {
+                ok: true,
+                action_id: action.id.clone(),
+                user_message: "Project is ready".into(),
+                technical_detail: None,
+            }),
+            Err(e) => Ok(RepairResult {
+                ok: false,
+                action_id: action.id.clone(),
+                user_message: "Could not prepare project".into(),
+                technical_detail: Some(e.to_string()),
+            }),
+        };
+    }
+
     let runtime_state = service.inspect()?;
-    if !matches!(action.kind, RepairKind::InitProject) && !runtime_state.supported {
+    if !runtime_state.supported {
         return Ok(RepairResult {
             ok: false,
             action_id: action.id.clone(),
@@ -232,11 +253,7 @@ pub fn repair(action: &RepairAction, service: &dyn ServiceManager) -> Result<Rep
                 })
             });
             match bin {
-                Some(b) => match crate::runtime::RuntimeInstallSpec::try_discover(b)
-                    .and_then(|spec| service.install_runtime(&spec))
-                    .and_then(|_| service.start())
-                    .and_then(|_| require_runtime_ready(service))
-                {
+                Some(b) => match repair_runtime_registration(service, &b) {
                     Ok(()) => Ok(RepairResult {
                         ok: true,
                         action_id: action.id.clone(),
@@ -246,7 +263,11 @@ pub fn repair(action: &RepairAction, service: &dyn ServiceManager) -> Result<Rep
                     Err(e) => Ok(RepairResult {
                         ok: false,
                         action_id: action.id.clone(),
-                        user_message: "Could not install background capture".into(),
+                        user_message: if e.to_string().contains("manual restoration required") {
+                            "Background capture repair requires manual restoration".into()
+                        } else {
+                            "Could not install background capture".into()
+                        },
                         technical_detail: Some(e.to_string()),
                     }),
                 },
@@ -276,24 +297,7 @@ pub fn repair(action: &RepairAction, service: &dyn ServiceManager) -> Result<Rep
             }),
         },
         RepairKind::InitProject => {
-            let path = action.project.clone().unwrap_or_else(|| PathBuf::from("."));
-            match moraine_core::init_project(Some(&path)).and_then(|result| {
-                moraine_core::register_project_root(&result.project_root)?;
-                Ok(result)
-            }) {
-                Ok(_) => Ok(RepairResult {
-                    ok: true,
-                    action_id: action.id.clone(),
-                    user_message: "Project is ready".into(),
-                    technical_detail: None,
-                }),
-                Err(e) => Ok(RepairResult {
-                    ok: false,
-                    action_id: action.id.clone(),
-                    user_message: "Could not prepare project".into(),
-                    technical_detail: Some(e.to_string()),
-                }),
-            }
+            unreachable!("portable project repair returns before inspection")
         }
         RepairKind::RepairAgentIntegration => {
             let path = action.project.clone().unwrap_or_else(|| PathBuf::from("."));
@@ -359,13 +363,52 @@ pub fn repair(action: &RepairAction, service: &dyn ServiceManager) -> Result<Rep
     }
 }
 
+fn repair_runtime_registration(service: &dyn ServiceManager, executable: &Path) -> Result<()> {
+    let probe = crate::service_ready::default_service_probe();
+    repair_runtime_registration_with_probe(service, executable, probe.as_ref())
+}
+
+fn repair_runtime_registration_with_probe(
+    service: &dyn ServiceManager,
+    executable: &Path,
+    probe: &dyn crate::service_ready::ServiceProbe,
+) -> Result<()> {
+    let prestate = crate::runtime::capture_runtime_prestate(service)?;
+    let result = (|| {
+        let spec = crate::runtime::RuntimeInstallSpec::try_discover(executable)?;
+        service.install_runtime(&spec)?;
+        if prestate.state.autostart_enabled {
+            service.enable_autostart()?;
+        }
+        service.start()?;
+        require_runtime_ready_with_probe(service, probe)
+    })();
+
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) => match crate::runtime::restore_runtime_prestate(service, &prestate) {
+            Ok(()) => Err(error),
+            Err(restoration) => Err(crate::ProvisionError::Service(format!(
+                "{error}; manual restoration required: {restoration}"
+            ))),
+        },
+    }
+}
+
 fn require_runtime_ready(service: &dyn ServiceManager) -> Result<()> {
+    let probe = crate::service_ready::default_service_probe();
+    require_runtime_ready_with_probe(service, probe.as_ref())
+}
+
+fn require_runtime_ready_with_probe(
+    service: &dyn ServiceManager,
+    probe: &dyn crate::service_ready::ServiceProbe,
+) -> Result<()> {
     let state = service.inspect()?;
     if state.diagnostics_ready && state.capture_ready {
         return Ok(());
     }
-    let readiness = crate::service_ready::default_service_probe()
-        .wait_ready(crate::service_ready::default_service_ready_timeout_ms());
+    let readiness = probe.wait_ready(crate::service_ready::default_service_ready_timeout_ms());
     if readiness.ready {
         Ok(())
     } else {
@@ -376,4 +419,61 @@ fn require_runtime_ready(service: &dyn ServiceManager) -> Result<()> {
 pub fn repair_default(action: &RepairAction) -> Result<RepairResult> {
     let svc = crate::service::default_service_manager();
     repair(action, svc.as_ref())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::MemoryRuntimeManager;
+    use crate::service_ready::AlwaysOfflineProbe;
+
+    #[test]
+    fn failed_registration_repair_restores_exact_prestate() {
+        let temp = tempfile::tempdir().unwrap();
+        let unit = temp.path().join("moraine.service");
+        let executable = temp.path().join("moraine-service");
+        std::fs::write(&executable, b"service").unwrap();
+        let runtime = MemoryRuntimeManager::with_unit_path(unit.clone());
+        runtime.install(&executable).unwrap();
+        runtime.enable_autostart().unwrap();
+        runtime.stop().unwrap();
+        runtime.set_endpoint_ready_override(Some(false));
+        std::fs::write(&unit, b"exact registration before repair").unwrap();
+        let fingerprint = runtime.registration_fingerprint().unwrap();
+
+        let error =
+            repair_runtime_registration_with_probe(&runtime, &executable, &AlwaysOfflineProbe)
+                .unwrap_err();
+
+        assert!(error.to_string().contains("not ready"));
+        assert_eq!(runtime.registration_fingerprint().unwrap(), fingerprint);
+        let restored = runtime.inspect().unwrap();
+        assert!(!restored.running);
+        assert!(restored.autostart_enabled);
+    }
+
+    #[test]
+    fn project_initialization_does_not_inspect_runtime() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let runtime = MemoryRuntimeManager::new();
+        runtime.fail_inspect_after(0, "runtime must not be inspected");
+        let action = RepairAction {
+            id: "init".into(),
+            label: "Fix".into(),
+            kind: RepairKind::InitProject,
+            project: Some(project.clone()),
+            agent: None,
+        };
+
+        let result = moraine_core::project_registry::with_project_registry_path_override(
+            temp.path().join("projects.json"),
+            || repair(&action, &runtime).unwrap(),
+        );
+
+        assert!(result.ok);
+        assert_eq!(runtime.inspect_count(), 0);
+        assert!(project.join(".moraine").is_dir());
+    }
 }

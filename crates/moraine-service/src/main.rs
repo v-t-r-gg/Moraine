@@ -1,3 +1,5 @@
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 use anyhow::Result;
 use axum::{
     extract::{Path as AxumPath, State},
@@ -49,6 +51,10 @@ struct Args {
     /// Spool directory for undelivered events
     #[arg(long)]
     spool_dir: Option<PathBuf>,
+
+    /// Windows application log directory.
+    #[arg(long)]
+    log_dir: Option<PathBuf>,
 }
 
 #[derive(Serialize)]
@@ -58,15 +64,24 @@ struct Health {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
-
     let Args {
         http,
         unix_socket,
         named_pipe,
         spool_dir,
+        log_dir,
     } = Args::parse();
     let runtime_layout = moraine_platform::RuntimeLayout::try_discover()?;
+    #[cfg(target_os = "windows")]
+    {
+        let log_dir = log_dir.unwrap_or_else(|| runtime_layout.log_dir.clone());
+        moraine_service::logging::init_windows_file_logging(&log_dir)?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = log_dir;
+        tracing_subscriber::fmt::init();
+    }
     let capture_endpoint = resolve_capture_endpoint(
         unix_socket.as_deref(),
         named_pipe.as_deref(),
@@ -477,6 +492,7 @@ mod tests {
     fn layout(endpoint: moraine_platform::CaptureEndpoint) -> moraine_platform::RuntimeLayout {
         moraine_platform::RuntimeLayout {
             spool_dir: "/tmp/spool".into(),
+            log_dir: "/tmp/logs".into(),
             project_registry: "/tmp/projects.json".into(),
             transaction_journals: "/tmp/journals".into(),
             diagnostics_endpoint: "127.0.0.1:33111".parse().unwrap(),

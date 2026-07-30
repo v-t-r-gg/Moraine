@@ -5,6 +5,7 @@
 //! operating-system registration or desktop state.
 
 pub mod capture;
+pub mod logging;
 pub mod service;
 
 pub use service::{

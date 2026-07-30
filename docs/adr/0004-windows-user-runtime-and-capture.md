@@ -271,9 +271,10 @@ SHA-256(UTF-8(returned XML) + NUL + UTF-8(returned SDDL))
 
 Always re-read the registered task before hashing; Task Scheduler may normalize
 the supplied definition. In particular, returned XML may omit
-`RunLevel=LeastPrivilege` because it is Task Scheduler's default. Validation
-accepts that omission, accepts an explicit `LeastPrivilege` value & rejects any
-other run level.
+`RunLevel=LeastPrivilege` & false-valued settings when they are Task Scheduler
+defaults. Validation accepts those omissions, requires every non-default
+contract value & rejects inverse values that would elevate or constrain the
+runtime.
 
 Restoration must stop & delete the current registration, then register the
 captured Task Scheduler-returned XML without separately overriding its embedded

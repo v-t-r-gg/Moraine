@@ -450,11 +450,6 @@ fn validate_registration(
         "<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>",
         "<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>",
         "<StartWhenAvailable>true</StartWhenAvailable>",
-        "<RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>",
-        "<AllowStartOnDemand>true</AllowStartOnDemand>",
-        "<Hidden>false</Hidden>",
-        "<RunOnlyIfIdle>false</RunOnlyIfIdle>",
-        "<WakeToRun>false</WakeToRun>",
         "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>",
         "<Interval>PT1M</Interval>",
         "<Count>3</Count>",
@@ -469,6 +464,19 @@ fn validate_registration(
         return Err(ProvisionError::Service(
             "Task Scheduler registration requests a non-default run level".into(),
         ));
+    }
+    for prohibited in [
+        "<RunOnlyIfNetworkAvailable>true</RunOnlyIfNetworkAvailable>",
+        "<AllowStartOnDemand>false</AllowStartOnDemand>",
+        "<Hidden>true</Hidden>",
+        "<RunOnlyIfIdle>true</RunOnlyIfIdle>",
+        "<WakeToRun>true</WakeToRun>",
+    ] {
+        if xml.contains(prohibited) {
+            return Err(ProvisionError::Service(format!(
+                "Task Scheduler registration contains prohibited contract {prohibited}"
+            )));
+        }
     }
     if !xml.contains(&xml_escape(&identity.account_sid))
         || !xml.contains(&xml_escape(&identity.task_uri))
@@ -958,6 +966,41 @@ mod tests {
             quote_windows_argument(r#"C:\two words\"#),
             r#""C:\two words\\""#
         );
+    }
+
+    #[test]
+    fn normalized_default_omissions_remain_valid_but_inverse_values_fail() {
+        let identity = identity();
+        let mut xml = render_task_xml(&identity, &spec()).unwrap();
+        for omitted in [
+            "<RunLevel>LeastPrivilege</RunLevel>",
+            "<RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>",
+            "<AllowStartOnDemand>true</AllowStartOnDemand>",
+            "<Hidden>false</Hidden>",
+            "<RunOnlyIfIdle>false</RunOnlyIfIdle>",
+            "<WakeToRun>false</WakeToRun>",
+        ] {
+            xml = xml.replace(omitted, "");
+        }
+        let registration = TaskRegistration {
+            xml: xml.clone(),
+            sddl: format!(
+                "O:{sid}D:P(A;;FA;;;SY)(A;;FA;;;{sid})",
+                sid = identity.account_sid
+            ),
+            running: false,
+            last_result: None,
+        };
+        validate_registration(&identity, &registration, Some(&spec())).unwrap();
+
+        let elevated = TaskRegistration {
+            xml: xml.replace(
+                "</Principal>",
+                "<RunLevel>HighestAvailable</RunLevel></Principal>",
+            ),
+            ..registration
+        };
+        assert!(validate_registration(&identity, &elevated, Some(&spec())).is_err());
     }
 
     #[test]

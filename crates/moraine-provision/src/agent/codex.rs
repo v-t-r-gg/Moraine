@@ -323,11 +323,13 @@ args = ["mcp", "--project", "{project}"]
 fn which_codex() -> Option<PathBuf> {
     // Desktop apps often have a leaner PATH than interactive shells.
     let mut candidates: Vec<PathBuf> = Vec::new();
+    let executable_name = if cfg!(windows) { "codex.exe" } else { "codex" };
     if let Some(path) = std::env::var_os("PATH") {
         for dir in std::env::split_paths(&path) {
-            candidates.push(dir.join("codex"));
+            candidates.push(dir.join(executable_name));
         }
     }
+    #[cfg(not(windows))]
     if let Some(home) = dirs::home_dir() {
         for rel in [
             ".local/bin/codex",

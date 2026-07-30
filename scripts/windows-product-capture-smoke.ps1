@@ -138,8 +138,19 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "moraine service stop returned $LASTEXITCODE"
     }
-    $stopped = Invoke-MoraineJson service status --json
-    if ($stopped.service.running) {
+    $stopped = $null
+    for ($attempt = 0; $attempt -lt 100; $attempt++) {
+        $stopped = Invoke-MoraineJson service status --json
+        if (!$stopped.service.running -and
+            !$stopped.service.diagnosticsReady -and
+            !$stopped.service.captureReady) {
+            break
+        }
+        Start-Sleep -Milliseconds 50
+    }
+    if ($stopped.service.running -or
+        $stopped.service.diagnosticsReady -or
+        $stopped.service.captureReady) {
         throw "runtime remained running after stop"
     }
 

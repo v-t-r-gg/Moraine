@@ -9,8 +9,8 @@ use moraine_provision::{
     apply, apply_with_options, enable_project, health, plan, rollback, verify, verify_with_options,
     AgentKind, AlwaysOfflineProbe, AlwaysReadyProbe, ApplyOutcome, ControlledCapture, FileSnapshot,
     MemoryServiceManager, ProvisionOpKind, ProvisionOperation, Readiness, RepairAction, RepairKind,
-    ServiceLog, ServiceManager, ServiceState, SetupIntent, SetupPlan, UnsupportedRuntimeManager,
-    VecBackupRecorder, VerificationMode, VerifyOptions,
+    ServiceLog, ServiceManager, ServiceState, SetupIntent, SetupPlan, UnavailableRuntimeManager,
+    UnsupportedRuntimeManager, VecBackupRecorder, VerificationMode, VerifyOptions,
 };
 use tempfile::tempdir;
 
@@ -198,14 +198,14 @@ fn direct_verify_never_product_ready() {
 }
 
 #[test]
-fn windows_capabilities_fail_closed_across_product_capture_boundaries() {
+fn unsupported_capabilities_fail_closed_across_product_capture_boundaries() {
     let dir = tempdir().unwrap();
     let project = dir.path().join("unsupported-product");
     fs::create_dir_all(&project).unwrap();
     moraine_core::init_project(Some(&project)).unwrap();
     let service = MemoryServiceManager::new();
     let capabilities =
-        moraine_platform::PlatformCapabilities::for_host(moraine_platform::HostPlatform::Windows);
+        moraine_platform::PlatformCapabilities::for_host(moraine_platform::HostPlatform::MacOs);
 
     let plan_error = moraine_provision::plan::plan_with_capabilities(
         product_intent(project.clone()),
@@ -299,7 +299,7 @@ fn forged_skip_service_plan_is_rejected_before_inspection_or_journaling() {
     moraine_core::init_project(Some(&project)).unwrap();
     let service = MemoryServiceManager::new();
     let capabilities =
-        moraine_platform::PlatformCapabilities::for_host(moraine_platform::HostPlatform::Windows);
+        moraine_platform::PlatformCapabilities::for_host(moraine_platform::HostPlatform::MacOs);
     let fake_cli = dir.path().join("moraine");
     fs::write(&fake_cli, b"fake").unwrap();
 
@@ -342,11 +342,70 @@ fn forged_skip_service_plan_is_rejected_before_inspection_or_journaling() {
 }
 
 #[test]
+fn unavailable_windows_runtime_rejects_plan_and_apply_before_journaling() {
+    let dir = tempdir().unwrap();
+    let project = dir.path().join("runtime-unavailable");
+    fs::create_dir_all(&project).unwrap();
+    moraine_core::init_project(Some(&project)).unwrap();
+    let capabilities =
+        moraine_platform::PlatformCapabilities::for_host(moraine_platform::HostPlatform::Windows);
+    let unavailable = UnavailableRuntimeManager::new(
+        moraine_platform::HostPlatform::Windows,
+        moraine_provision::BackgroundRuntimeBackend::WindowsTaskScheduler,
+        "Task Scheduler service is unavailable",
+    );
+
+    let plan_error = moraine_provision::plan::plan_with_capabilities(
+        product_intent(project.clone()),
+        &unavailable,
+        &capabilities,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        plan_error,
+        moraine_provision::ProvisionError::RuntimeUnavailable {
+            operation: "product_capture_plan",
+            ..
+        }
+    ));
+
+    let healthy = MemoryServiceManager::new();
+    let fake_cli = dir.path().join("moraine");
+    fs::write(&fake_cli, b"fake").unwrap();
+    let approved = plan_with_operations(
+        product_intent(project),
+        &healthy,
+        &fake_cli,
+        &[ProvisionOpKind::InstallService],
+    );
+    let journal_dir = dir.path().join("journals");
+    let apply_error =
+        moraine_provision::journal::with_journal_dir_override(journal_dir.clone(), || {
+            moraine_provision::apply::apply_with_options_and_capabilities(
+                approved,
+                &unavailable,
+                None,
+                None,
+                &capabilities,
+            )
+            .unwrap_err()
+        });
+    assert!(matches!(
+        apply_error,
+        moraine_provision::ProvisionError::RuntimeUnavailable {
+            operation: "product_capture_apply",
+            ..
+        }
+    ));
+    assert!(!journal_dir.exists());
+}
+
+#[test]
 fn unsupported_health_exposes_only_portable_project_repair() {
     let dir = tempdir().unwrap();
     let project = dir.path().join("unsupported-health");
     fs::create_dir_all(&project).unwrap();
-    let service = UnsupportedRuntimeManager::new(moraine_platform::HostPlatform::Windows);
+    let service = UnsupportedRuntimeManager::new(moraine_platform::HostPlatform::MacOs);
 
     let report = health(&service, Some(&project), Some(AgentKind::Codex)).unwrap();
 
@@ -1208,8 +1267,8 @@ fn service_prestate_failure_after_agent_mutation_rolls_back_files() {
             ProvisionOpKind::InstallService,
         ],
     );
-    // apply's stale-plan witness inspect succeeds; InstallService prestate inspect fails.
-    svc.fail_inspect_after(1, "injected prestate capture failure");
+    // Availability and stale-plan witness inspections succeed; service prestate fails.
+    svc.fail_inspect_after(2, "injected prestate capture failure");
 
     let outcome = apply(plan, &svc).unwrap();
 

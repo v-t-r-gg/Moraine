@@ -2,12 +2,14 @@
 
 pub mod linux_systemd;
 mod memory;
+mod unavailable;
 mod unsupported;
 #[cfg(target_os = "windows")]
 pub mod windows_task_scheduler;
 
 pub use linux_systemd::LinuxSystemdUserRuntime;
 pub use memory::MemoryRuntimeManager;
+pub use unavailable::UnavailableRuntimeManager;
 pub use unsupported::UnsupportedRuntimeManager;
 #[cfg(target_os = "windows")]
 pub use windows_task_scheduler::WindowsTaskSchedulerRuntime;
@@ -92,7 +94,13 @@ pub fn background_runtime_manager_for_host(
         #[cfg(target_os = "windows")]
         HostPlatform::Windows => WindowsTaskSchedulerRuntime::new()
             .map(|runtime| Arc::new(runtime) as Arc<dyn BackgroundRuntimeManager>)
-            .unwrap_or_else(|_| Arc::new(UnsupportedRuntimeManager::new(host))),
+            .unwrap_or_else(|error| {
+                Arc::new(UnavailableRuntimeManager::new(
+                    host,
+                    crate::types::BackgroundRuntimeBackend::WindowsTaskScheduler,
+                    error.to_string(),
+                ))
+            }),
         #[cfg(not(target_os = "windows"))]
         HostPlatform::Windows => Arc::new(UnsupportedRuntimeManager::new(host)),
         HostPlatform::MacOs | HostPlatform::Other => Arc::new(UnsupportedRuntimeManager::new(host)),

@@ -91,6 +91,11 @@ pub fn plan_with_capabilities(
 
     let svc_state = service.inspect()?;
     if !intent.skip_service {
+        crate::platform_support::ensure_background_runtime_available(
+            &svc_state,
+            capabilities.host,
+            "product_capture_plan",
+        )?;
         // Install/repair when registration missing or invalid (wrong ExecStart).
         if !svc_state.registration_present || !svc_state.registration_valid || !svc_state.installed
         {

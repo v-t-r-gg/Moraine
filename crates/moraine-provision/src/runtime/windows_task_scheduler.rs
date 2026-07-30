@@ -276,7 +276,8 @@ impl TaskSchedulerSession {
             .map(|value| VARIANT::from(BSTR::from(value)))
             .unwrap_or_default();
         unsafe {
-            self.root
+            let task = self
+                .root
                 .RegisterTask(
                     &BSTR::from(&identity.task_name),
                     &BSTR::from(xml),
@@ -286,7 +287,16 @@ impl TaskSchedulerSession {
                     TASK_LOGON_INTERACTIVE_TOKEN,
                     &security,
                 )
-                .map_err(task_error("register current-user Task Scheduler task"))
+                .map_err(task_error("register current-user Task Scheduler task"))?;
+            if let Some(sddl) = sddl {
+                // Registration inherits an additional scheduler ACE even when
+                // a descriptor is supplied. Reapply the allowlist to the task
+                // object so the effective DACL contains only Moraine's two
+                // principals; Task Scheduler still normalizes away `D:P`.
+                task.SetSecurityDescriptor(&BSTR::from(sddl), 0)
+                    .map_err(task_error("apply Task Scheduler task allowlist"))?;
+            }
+            Ok(task)
         }
     }
 

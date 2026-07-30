@@ -137,6 +137,17 @@ impl WindowsTaskSchedulerRuntime {
         self.run_com_operation(operation, move |session| session.read(&identity))
     }
 
+    fn expected_install_spec(&self) -> RuntimeInstallSpec {
+        RuntimeInstallSpec {
+            executable: self.suite.service.clone(),
+            working_directory: self.suite.prefix.clone(),
+            capture_endpoint: self.runtime_layout.capture_endpoint.clone(),
+            diagnostics_endpoint: self.runtime_layout.diagnostics_endpoint,
+            spool_dir: self.runtime_layout.spool_dir.clone(),
+            log_dir: Some(self.runtime_layout.log_dir.clone()),
+        }
+    }
+
     fn mutate_trigger(&self, enabled: bool) -> Result<()> {
         let identity = self.task_identity.clone();
         self.run_com_operation("set_autostart", move |session| {
@@ -439,10 +450,19 @@ fn validate_registration(
 ) -> Result<()> {
     let xml = &registration.xml;
     for required in [
+        "<Author>Moraine</Author>",
+        "<Source>Moraine</Source>",
         "<LogonType>InteractiveToken</LogonType>",
         "<RunLevel>LeastPrivilege</RunLevel>",
         "<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>",
+        "<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>",
+        "<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>",
+        "<StartWhenAvailable>true</StartWhenAvailable>",
+        "<RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>",
         "<AllowStartOnDemand>true</AllowStartOnDemand>",
+        "<Hidden>false</Hidden>",
+        "<RunOnlyIfIdle>false</RunOnlyIfIdle>",
+        "<WakeToRun>false</WakeToRun>",
         "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>",
         "<Interval>PT1M</Interval>",
         "<Count>3</Count>",
@@ -458,6 +478,11 @@ fn validate_registration(
     {
         return Err(ProvisionError::Service(
             "Task Scheduler identity does not match the current account".into(),
+        ));
+    }
+    if xml.matches("<LogonTrigger").count() != 1 {
+        return Err(ProvisionError::Service(
+            "Task Scheduler registration must contain exactly one logon trigger".into(),
         ));
     }
     validate_sddl(identity, &registration.sddl)?;
@@ -584,6 +609,7 @@ fn read_application_logs(log_dir: &Path, limit: usize) -> Result<Vec<ServiceLog>
 impl BackgroundRuntimeManager for WindowsTaskSchedulerRuntime {
     fn inspect(&self) -> Result<BackgroundRuntimeState> {
         let registration = self.read_task("inspect")?;
+        let expected_spec = self.expected_install_spec();
         let binary = self.suite.absolute_service();
         let binary_present = binary.as_ref().is_some_and(|path| path.is_file());
         let (diagnostics_ready, capture_ready, version) = match crate::diagnostics::probe_default()
@@ -594,7 +620,9 @@ impl BackgroundRuntimeManager for WindowsTaskSchedulerRuntime {
         let (registration_present, registration_valid, running, autostart_enabled, state) =
             match registration {
                 Some(task) => {
-                    let valid = validate_registration(&self.task_identity, &task, None).is_ok();
+                    let valid =
+                        validate_registration(&self.task_identity, &task, Some(&expected_spec))
+                            .is_ok();
                     let fingerprint = registration_fingerprint(&task.xml, &task.sddl);
                     let _last_result = task.last_result;
                     (
@@ -675,9 +703,9 @@ impl BackgroundRuntimeManager for WindowsTaskSchedulerRuntime {
                 spec.executable.display()
             )));
         }
-        if !spec.working_directory.is_absolute() {
+        if !spec.working_directory.is_absolute() || !spec.working_directory.is_dir() {
             return Err(ProvisionError::Service(
-                "Windows runtime working directory must be absolute".into(),
+                "Windows runtime working directory must be an existing absolute directory".into(),
             ));
         }
         let expected_pipe = match &self.runtime_layout.capture_endpoint {
@@ -693,6 +721,18 @@ impl BackgroundRuntimeManager for WindowsTaskSchedulerRuntime {
                 "Windows task endpoint does not match the current account".into(),
             ));
         }
+        let expected = self.expected_install_spec();
+        if !paths_equal(&spec.executable, &expected.executable)
+            || !paths_equal(&spec.working_directory, &expected.working_directory)
+            || spec.diagnostics_endpoint != expected.diagnostics_endpoint
+            || spec.spool_dir != expected.spool_dir
+            || spec.log_dir != expected.log_dir
+        {
+            return Err(ProvisionError::Service(
+                "Windows runtime install specification differs from the authoritative suite layout"
+                    .into(),
+            ));
+        }
         let xml = render_task_xml(&self.task_identity, spec)?;
         let sddl = task_sddl(&self.task_identity);
         let identity = self.task_identity.clone();
@@ -702,7 +742,13 @@ impl BackgroundRuntimeManager for WindowsTaskSchedulerRuntime {
             let installed = session
                 .read(&identity)?
                 .ok_or_else(|| ProvisionError::Service("task absent after registration".into()))?;
-            validate_registration(&identity, &installed, Some(&spec))
+            validate_registration(&identity, &installed, Some(&spec))?;
+            if logon_trigger_enabled(&installed.xml)? {
+                return Err(ProvisionError::Service(
+                    "new Task Scheduler registration must start with autostart disabled".into(),
+                ));
+            }
+            Ok(())
         })
     }
 
@@ -825,6 +871,13 @@ impl BackgroundRuntimeManager for WindowsTaskSchedulerRuntime {
 
     fn logs(&self, limit: usize) -> Result<Vec<ServiceLog>> {
         read_application_logs(&self.runtime_layout.log_dir, limit)
+    }
+}
+
+fn paths_equal(left: &Path, right: &Path) -> bool {
+    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
     }
 }
 

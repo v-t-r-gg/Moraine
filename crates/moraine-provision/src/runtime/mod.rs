@@ -115,11 +115,7 @@ mod tests {
 
     #[test]
     fn production_factory_never_uses_memory_for_unsupported_hosts() {
-        for host in [
-            HostPlatform::Windows,
-            HostPlatform::MacOs,
-            HostPlatform::Other,
-        ] {
+        for host in [HostPlatform::MacOs, HostPlatform::Other] {
             let runtime = background_runtime_manager_for_host(host);
             let state = runtime.inspect().unwrap();
             assert_eq!(state.backend, BackgroundRuntimeBackend::Unsupported);
@@ -129,6 +125,32 @@ mod tests {
                 Err(crate::ProvisionError::UnsupportedPlatform { .. })
             ));
         }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn modeled_windows_host_remains_unsupported_off_windows() {
+        let runtime = background_runtime_manager_for_host(HostPlatform::Windows);
+        assert_eq!(
+            runtime.inspect().unwrap().backend,
+            BackgroundRuntimeBackend::Unsupported
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_host_selects_task_scheduler_without_promoting_capabilities() {
+        let runtime = background_runtime_manager_for_host(HostPlatform::Windows);
+        let state = runtime.inspect().unwrap();
+        assert_eq!(
+            state.backend,
+            BackgroundRuntimeBackend::WindowsTaskScheduler
+        );
+        assert!(!state.supported);
+        assert!(
+            !moraine_platform::PlatformCapabilities::for_host(HostPlatform::Windows)
+                .runtime_capture_supported()
+        );
     }
 
     #[test]

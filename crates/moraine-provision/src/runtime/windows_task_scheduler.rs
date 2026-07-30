@@ -533,9 +533,20 @@ fn validate_registration(
             single_child(expected_document.root_element(), "Actions")?,
             "Exec",
         )?;
-        for field in ["Command", "Arguments", "WorkingDirectory"] {
-            expect_text(action, field, child_text(expected_action, field)?)?;
+        for field in ["Command", "WorkingDirectory"] {
+            let actual = child_text(action, field)?;
+            let expected = child_text(expected_action, field)?;
+            if !paths_equal(Path::new(actual), Path::new(expected)) {
+                return Err(ProvisionError::Service(format!(
+                    "Task Scheduler {field} differs: expected {expected:?}, got {actual:?}"
+                )));
+            }
         }
+        expect_text(
+            action,
+            "Arguments",
+            child_text(expected_action, "Arguments")?,
+        )?;
     }
 
     let settings = single_child(task, "Settings")?;
@@ -1216,9 +1227,26 @@ impl BackgroundRuntimeManager for WindowsTaskSchedulerRuntime {
 
 fn paths_equal(left: &Path, right: &Path) -> bool {
     match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+        #[cfg(windows)]
+        (Ok(left), Ok(right)) => left
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&right.to_string_lossy()),
+        #[cfg(not(windows))]
         (Ok(left), Ok(right)) => left == right,
+        #[cfg(windows)]
+        _ => windows_path_key(left) == windows_path_key(right),
+        #[cfg(not(windows))]
         _ => left == right,
     }
+}
+
+#[cfg(windows)]
+fn windows_path_key(path: &Path) -> String {
+    let raw = path.to_string_lossy();
+    raw.strip_prefix(r"\\?\")
+        .unwrap_or(&raw)
+        .replace('/', r"\")
+        .to_lowercase()
 }
 
 #[cfg(test)]
@@ -1243,6 +1271,15 @@ mod tests {
                 r#"C:\Users\A "Quoted"\AppData\Local\Moraine\logs\"#,
             )),
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_path_identity_ignores_verbatim_prefix_and_case() {
+        assert!(paths_equal(
+            Path::new(r"\\?\C:\Program Files\Moraine\moraine-service.exe"),
+            Path::new(r"c:\program files\moraine\MORAINE-SERVICE.EXE"),
+        ));
     }
 
     fn registration(xml: String) -> TaskRegistration {

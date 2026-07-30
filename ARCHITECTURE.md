@@ -59,10 +59,12 @@ Owns system inspection, setup plans, approved-plan application, transaction
 journals, rollback, health, repair, agent integration & background-runtime
 lifecycle.
 
-The transaction engine is platform-neutral. Runtime backends capture &
-restore their own registration state. Linux uses a systemd user backend;
-unsupported production hosts use an explicit unsupported backend. The memory
-runtime is available only through test injection.
+The transaction engine is platform-neutral. Runtime backends capture & restore
+their own registration state. Linux uses a systemd user backend. Windows uses a
+current-user Task Scheduler 2.0 backend with dedicated MTA workers; no COM
+interface crosses a worker boundary. macOS & unknown production hosts use an
+explicit unsupported backend. The memory runtime is available only through
+test injection.
 
 Provisioning guards ProductCapture before planning, witness calculation,
 journal creation or mutation. A serialized plan is validated from both its
@@ -89,6 +91,10 @@ Startup binds capture before publishing diagnostics readiness. Unexpected
 listener failure stops truthful readiness. Linux Unix-socket & Windows
 named-pipe behavior live in separate backends; the service executable does not
 install or control its operating-system registration.
+
+On Windows, the service runs without a console window & writes size-bounded
+UTF-8 application logs below the user runtime layout. Task Scheduler controls
+registration & lifecycle; it is not used as an application-log source.
 
 ### `moraine-mcp`
 
@@ -182,6 +188,11 @@ state, prior running state & prior autostart state. Restoration errors return a
 manual-recovery outcome. Newly initialized project ledgers are retained to
 avoid deleting records; the receipt reports that retained state.
 
+The Windows backend snapshots Task Scheduler-returned XML plus its effective
+security descriptor. Restoration re-registers that normalized definition &
+requires the combined fingerprint to match. Task absence is also an explicit
+restorable state.
+
 ## Readiness
 
 Product readiness requires:
@@ -215,10 +226,11 @@ Linux is the supported runtime: Unix capture, systemd user registration &
 archive installation.
 
 The full Rust workspace compiles on Windows in required CI. The SID-scoped
-named-pipe client & protected service listener are implemented and tested, but
-Windows background registration, desktop product operation, installation &
-ProductCapture readiness remain unsupported. Capability values stay
-unsupported until the remaining runtime paths close.
+named-pipe transport, current-user Task Scheduler backend & rotating service
+logs are implemented & production-tested on the hosted runner. Windows desktop
+product operation, setup closure, real standard-user acceptance, installation
+& ProductCapture readiness remain unsupported. Capability values stay
+unsupported until W2-D & W2-E close those paths.
 
 ## Protocol & operations
 

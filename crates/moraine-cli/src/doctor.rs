@@ -196,6 +196,10 @@ fn run_supported_doctor(project: Option<&Path>, integration: Option<&str>) -> Do
     let ver = collect_version_report();
     let mut checks = Vec::new();
     let current = current_exe_path();
+    let runtime = moraine_provision::default_background_runtime_manager();
+    let runtime_state = runtime.inspect().ok();
+    let windows =
+        moraine_platform::HostPlatform::current() == moraine_platform::HostPlatform::Windows;
 
     checks.push(check(
         "suite.cli_path",
@@ -218,7 +222,11 @@ fn run_supported_doctor(project: Option<&Path>, integration: Option<&str>) -> Do
         },
         Some(&suite.manifest.display().to_string()),
         Some("present manifest.json under share/moraine"),
-        Some("Install with the release bundle: ./install.sh (see docs/INSTALL.md)"),
+        Some(if windows {
+            "A coherent Windows suite is required. A supported Windows installer is not available yet."
+        } else {
+            "Install with the release bundle: ./install.sh (see docs/INSTALL.md)"
+        }),
     ));
     let suite_service = suite.service.is_file();
     if !manifest_ok {
@@ -227,8 +235,12 @@ fn run_supported_doctor(project: Option<&Path>, integration: Option<&str>) -> Do
             "fail",
             "no installed suite under the discovered prefix; doctor cannot claim product health",
             Some(&suite.prefix.display().to_string()),
-            Some("~/.local/share/moraine/manifest.json (or MORAINE_PREFIX)"),
-            Some("Extract the release bundle and run ./install.sh"),
+            Some("suite manifest under the authoritative Moraine prefix"),
+            Some(if windows {
+                "Stage a coherent Windows suite; a supported Windows installer is not available yet"
+            } else {
+                "Extract the release bundle and run ./install.sh"
+            }),
         ));
     }
 
@@ -300,7 +312,8 @@ fn run_supported_doctor(project: Option<&Path>, integration: Option<&str>) -> Do
             ),
             Some(&p.display().to_string()),
             Some("single authoritative suite CLI first on PATH"),
-            is_cargo.then_some("Deprioritize ~/.cargo/bin; prefer ~/.local/bin; run: hash -r"),
+            (is_cargo && !windows)
+                .then_some("Deprioritize ~/.cargo/bin; prefer ~/.local/bin; run: hash -r"),
         ));
     }
     checks.push(check(
@@ -315,7 +328,7 @@ fn run_supported_doctor(project: Option<&Path>, integration: Option<&str>) -> Do
         format!("{} moraine executable(s) on PATH", path_exes.len()),
         Some(&path_exes.len().to_string()),
         Some("1 preferred"),
-        cargo_shadow.then_some("Remove or deprioritize ~/.cargo/bin on PATH"),
+        (cargo_shadow && !windows).then_some("Remove or deprioritize ~/.cargo/bin on PATH"),
     ));
 
     // Service binary + unit ExecStart
@@ -330,59 +343,171 @@ fn run_supported_doctor(project: Option<&Path>, integration: Option<&str>) -> Do
             "no installed service binary".into()
         },
         Some(&suite.service.display().to_string()),
-        Some("libexec/moraine/moraine-service present"),
-        Some("Re-run install.sh or moraine service install"),
+        Some("Moraine background-runtime binary present"),
+        Some(if windows {
+            "A coherent Windows suite is required. A supported Windows installer is not available yet."
+        } else {
+            "Re-run install.sh or moraine service install"
+        }),
     ));
 
-    let unit = suite.service_registration.as_deref();
-    let unit_exists = unit.is_some_and(Path::is_file);
-    let unit_body = unit_exists
-        .then(|| unit.and_then(|path| fs::read_to_string(path).ok()))
-        .flatten();
-    let unit_points_cargo = unit_body
-        .as_ref()
-        .map(|s| s.contains(".cargo/bin"))
-        .unwrap_or(false);
-    let unit_exec = unit_body.as_ref().and_then(|s| {
-        s.lines()
-            .find(|l| l.starts_with("ExecStart="))
-            .map(|l| l.trim_start_matches("ExecStart=").to_string())
-    });
-    let unit_matches_suite = unit_exec
-        .as_ref()
-        .map(|e| e.contains(&suite.service.display().to_string()) || e.contains("libexec/moraine"))
-        .unwrap_or(false);
+    let runtime_supported = runtime_state.as_ref().is_some_and(|state| state.supported);
     checks.push(check(
-        "service.unit",
-        if !unit_exists {
-            "warn"
-        } else if unit_points_cargo {
-            "fail"
-        } else if unit_matches_suite {
-            "pass"
-        } else {
-            "warn"
-        },
-        if !unit_exists {
-            "systemd user unit not installed".into()
-        } else if unit_points_cargo {
-            format!(
-                "unit {} points at ~/.cargo/bin (development drift)",
-                unit.map(|path| path.display().to_string())
-                    .unwrap_or_else(|| "unavailable".into())
-            )
-        } else {
-            format!(
-                "unit {} ExecStart={}",
-                unit.map(|path| path.display().to_string())
-                    .unwrap_or_else(|| "unavailable".into()),
-                unit_exec.as_deref().unwrap_or("?")
-            )
-        },
-        unit_exec.as_deref(),
-        Some(&suite.service.display().to_string()),
-        Some("moraine service install"),
+        "runtime.backend",
+        if runtime_supported { "pass" } else { "fail" },
+        runtime_state
+            .as_ref()
+            .map(|state| state.status_message.clone())
+            .unwrap_or_else(|| "Background runtime inspection failed".into()),
+        runtime_state
+            .as_ref()
+            .map(|state| format!("{:?}", state.backend).to_lowercase())
+            .as_deref(),
+        Some("available platform background runtime"),
+        (!runtime_supported).then_some("Check Moraine runtime diagnostics"),
     ));
+    if let Some(state) = &runtime_state {
+        checks.push(check(
+            "runtime.registration",
+            if state.registration_valid {
+                "pass"
+            } else if state.registration_present {
+                "fail"
+            } else {
+                "warn"
+            },
+            if state.registration_valid {
+                "Background capture registration is valid"
+            } else if state.registration_present {
+                "Background capture registration needs repair"
+            } else {
+                "Background capture is not registered"
+            },
+            state
+                .registration
+                .as_ref()
+                .and_then(|registration| registration.location.as_deref()),
+            Some("valid per-user background runtime registration"),
+            Some("moraine service install"),
+        ));
+        checks.push(check(
+            "runtime.capture",
+            if state.diagnostics_ready && state.capture_ready {
+                "pass"
+            } else if state.running {
+                "fail"
+            } else {
+                "warn"
+            },
+            if state.diagnostics_ready && state.capture_ready {
+                "Background capture is accepting events"
+            } else if state.running {
+                "Background runtime is running but capture is unavailable"
+            } else {
+                "Background runtime is not running"
+            },
+            Some(&format!(
+                "running={} diagnostics={} capture={}",
+                state.running, state.diagnostics_ready, state.capture_ready
+            )),
+            Some("diagnostics & capture ready"),
+            Some(if state.running {
+                "moraine service restart"
+            } else {
+                "moraine service start"
+            }),
+        ));
+        if let Some(result) = state.last_result {
+            checks.push(check(
+                "runtime.last_result",
+                "info",
+                format!("Previous background-runtime result: {result}"),
+                Some(&result.to_string()),
+                None,
+                None,
+            ));
+        }
+    } else {
+        checks.push(check(
+            "runtime.registration",
+            "fail",
+            "Background runtime state is unavailable",
+            None,
+            None,
+            None,
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let unit = suite.service_registration.as_deref();
+        let unit_exists = unit.is_some_and(Path::is_file);
+        let unit_body = unit_exists
+            .then(|| unit.and_then(|path| fs::read_to_string(path).ok()))
+            .flatten();
+        let unit_points_cargo = unit_body
+            .as_ref()
+            .map(|s| s.contains(".cargo/bin"))
+            .unwrap_or(false);
+        checks.push(check(
+            "linux.systemd_unit",
+            if !unit_exists {
+                "warn"
+            } else if unit_points_cargo {
+                "fail"
+            } else {
+                "pass"
+            },
+            if unit_exists {
+                format!(
+                    "systemd user registration {}",
+                    unit.map(|path| path.display().to_string())
+                        .unwrap_or_default()
+                )
+            } else {
+                "systemd user registration is absent".into()
+            },
+            None,
+            Some(&suite.service.display().to_string()),
+            Some("moraine service install"),
+        ));
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Some(state) = &runtime_state {
+        checks.push(check(
+            "windows.task_registration",
+            if state.registration_valid {
+                "pass"
+            } else {
+                "warn"
+            },
+            "Per-user background capture registration",
+            state
+                .registration
+                .as_ref()
+                .and_then(|registration| registration.location.as_deref()),
+            Some("SID-scoped per-user registration"),
+            Some("moraine service install"),
+        ));
+        checks.push(check(
+            "windows.application_logs",
+            if moraine_platform::RuntimeLayout::discover().log_dir.is_dir() {
+                "pass"
+            } else {
+                "info"
+            },
+            "Moraine background-runtime application logs",
+            Some(
+                &moraine_platform::RuntimeLayout::discover()
+                    .log_dir
+                    .display()
+                    .to_string(),
+            ),
+            None,
+            None,
+        ));
+    }
 
     // Service online + version
     checks.push(check(

@@ -4,6 +4,7 @@
 //! Prefer `moraine enable --project <path>` for a strict transactional setup.
 
 use anyhow::Result;
+use moraine_provision::BackgroundRuntimeManager;
 use serde_json::json;
 
 use crate::doctor;
@@ -37,6 +38,31 @@ pub fn setup_post_install(json: bool) -> Result<i32> {
         return Ok(1);
     }
 
+    let runtime = moraine_provision::default_background_runtime_manager();
+    let initial_state = runtime.inspect()?;
+    if let Err(error) = moraine_provision::ensure_background_runtime_available(
+        &initial_state,
+        capabilities.host,
+        "product_setup",
+    ) {
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "ok": false,
+                    "code": "runtime_unavailable",
+                    "platform": capabilities.host,
+                    "operation": "product_setup",
+                    "message": error.to_string(),
+                    "capabilities": capabilities,
+                }))?
+            );
+        } else {
+            eprintln!("{error}");
+        }
+        return Ok(1);
+    }
+
     let suite = SuitePaths::discover();
     let ver = collect_version_report();
     let mut actions = Vec::new();
@@ -44,9 +70,21 @@ pub fn setup_post_install(json: bool) -> Result<i32> {
 
     // Install/repair unit when suite service binary exists
     if suite.service.is_file() {
-        let runtime = moraine_provision::default_background_runtime_manager();
-        let spec = moraine_provision::RuntimeInstallSpec::discover(suite.service.clone());
-        match runtime.install_runtime(&spec) {
+        let registration = runtime.capture_registration()?;
+        let spec = moraine_provision::RuntimeInstallSpec::try_discover(suite.service.clone())?;
+        let setup_result = (|| -> moraine_provision::Result<()> {
+            runtime.install_runtime(&spec)?;
+            runtime.start()?;
+            let readiness = moraine_provision::default_service_probe()
+                .wait_ready(moraine_provision::default_service_ready_timeout_ms());
+            if !readiness.ready {
+                return Err(moraine_provision::ProvisionError::Service(
+                    readiness.message,
+                ));
+            }
+            Ok(())
+        })();
+        match setup_result {
             Ok(()) => actions.push(
                 suite
                     .service_registration
@@ -54,12 +92,33 @@ pub fn setup_post_install(json: bool) -> Result<i32> {
                     .map(|path| format!("service unit → {}", path.display()))
                     .unwrap_or_else(|| "background runtime registration installed".into()),
             ),
-            Err(e) => warnings.push(format!("service install: {e:#}")),
+            Err(error) => {
+                let restoration =
+                    restore_runtime_prestate(runtime.as_ref(), &registration, &initial_state);
+                warnings.push(format!("background runtime setup: {error}"));
+                if let Err(restore_error) = restoration {
+                    warnings.push(format!(
+                        "runtime restoration requires attention: {restore_error}"
+                    ));
+                }
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&json!({
+                            "ok": false,
+                            "code": "runtime_setup_failed",
+                            "operation": "product_setup",
+                            "message": error.to_string(),
+                            "warnings": warnings,
+                        }))?
+                    );
+                } else {
+                    eprintln!("Background runtime setup failed: {error}");
+                }
+                return Ok(1);
+            }
         }
-        match runtime.start() {
-            Ok(()) => actions.push("service start requested".into()),
-            Err(e) => warnings.push(format!("service start: {e:#}")),
-        }
+        actions.push("background capture is ready".into());
     } else {
         warnings.push(format!(
             "suite service binary missing at {}; install a release bundle first",
@@ -157,4 +216,22 @@ Automation:\n  moraine enable --project /path/to/repo\n  moraine self-test --pro
     } else {
         1
     })
+}
+
+fn restore_runtime_prestate(
+    runtime: &dyn BackgroundRuntimeManager,
+    registration: &moraine_provision::RuntimeRegistrationSnapshot,
+    state: &moraine_provision::BackgroundRuntimeState,
+) -> moraine_provision::Result<()> {
+    runtime.stop()?;
+    runtime.restore_registration(registration)?;
+    if state.autostart_enabled {
+        runtime.enable_autostart()?;
+    } else if state.registration_present {
+        runtime.disable_autostart()?;
+    }
+    if state.running {
+        runtime.start()?;
+    }
+    Ok(())
 }

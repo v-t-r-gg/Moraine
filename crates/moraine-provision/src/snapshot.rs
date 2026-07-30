@@ -42,6 +42,7 @@ pub fn durable_backup(source: &Path) -> Result<FileSnapshot> {
         f.sync_all()
             .map_err(|e| ProvisionError::msg(format!("fsync backup {}: {e}", bak.display())))?;
     }
+    #[cfg(unix)]
     if let Some(parent) = bak.parent() {
         File::open(parent)
             .and_then(|dir| dir.sync_all())
@@ -130,13 +131,19 @@ pub fn atomic_write_durable(path: &Path, data: &[u8]) -> Result<()> {
         f.sync_all()?;
     }
     fs::rename(&tmp, path)?;
-    File::open(path)
+    OpenOptions::new()
+        .read(true)
+        .write(cfg!(windows))
+        .open(path)
         .and_then(|f| f.sync_all())
         .map_err(|e| ProvisionError::msg(format!("fsync write {}: {e}", path.display())))?;
-    File::open(parent)
-        .and_then(|dir| dir.sync_all())
-        .map_err(|e| {
-            ProvisionError::msg(format!("fsync write parent {}: {e}", parent.display()))
-        })?;
+    #[cfg(unix)]
+    {
+        File::open(parent)
+            .and_then(|dir| dir.sync_all())
+            .map_err(|e| {
+                ProvisionError::msg(format!("fsync write parent {}: {e}", parent.display()))
+            })?;
+    }
     Ok(())
 }

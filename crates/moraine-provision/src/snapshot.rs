@@ -1,6 +1,8 @@
 //! Durable file snapshots for write-ahead recovery.
 
-use std::fs::{self, File, OpenOptions};
+#[cfg(unix)]
+use std::fs::File;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -24,6 +26,15 @@ pub fn optional_file_sha256(path: &Path) -> Option<String> {
     }
 }
 
+fn sync_file(path: &Path) -> Result<()> {
+    OpenOptions::new()
+        .read(true)
+        .write(cfg!(windows))
+        .open(path)
+        .and_then(|file| file.sync_all())
+        .map_err(Into::into)
+}
+
 /// Create a durable on-disk backup of an existing file (fsync data + parent dir).
 pub fn durable_backup(source: &Path) -> Result<FileSnapshot> {
     if !source.is_file() {
@@ -36,12 +47,8 @@ pub fn durable_backup(source: &Path) -> Result<FileSnapshot> {
     let ts = chrono::Utc::now().format("%Y%m%d%H%M%S%.3f");
     let bak = source.with_extension(format!("bak.{ts}"));
     fs::copy(source, &bak)?;
-    {
-        let f = File::open(&bak)
-            .map_err(|e| ProvisionError::msg(format!("open backup {}: {e}", bak.display())))?;
-        f.sync_all()
-            .map_err(|e| ProvisionError::msg(format!("fsync backup {}: {e}", bak.display())))?;
-    }
+    sync_file(&bak)
+        .map_err(|e| ProvisionError::msg(format!("fsync backup {}: {e}", bak.display())))?;
     #[cfg(unix)]
     if let Some(parent) = bak.parent() {
         File::open(parent)
@@ -85,14 +92,9 @@ pub fn restore_snapshot(snap: &FileSnapshot) -> Result<()> {
             // Durable restore: copy to temp then rename.
             let tmp = original.with_extension("rollback.tmp");
             fs::copy(&backup, &tmp)?;
-            {
-                let f = File::open(&tmp)?;
-                f.sync_all()?;
-            }
+            sync_file(&tmp)?;
             fs::rename(&tmp, &original)?;
-            if let Ok(f) = File::open(&original) {
-                let _ = f.sync_all();
-            }
+            sync_file(&original)?;
             Ok(())
         }
         FileSnapshot::Absent { path, .. } => {
@@ -131,11 +133,7 @@ pub fn atomic_write_durable(path: &Path, data: &[u8]) -> Result<()> {
         f.sync_all()?;
     }
     fs::rename(&tmp, path)?;
-    OpenOptions::new()
-        .read(true)
-        .write(cfg!(windows))
-        .open(path)
-        .and_then(|f| f.sync_all())
+    sync_file(path)
         .map_err(|e| ProvisionError::msg(format!("fsync write {}: {e}", path.display())))?;
     #[cfg(unix)]
     {

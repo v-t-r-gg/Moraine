@@ -105,7 +105,7 @@ fn manually_staged_windows_suite_reaches_product_ready() -> moraine_provision::R
     }
 
     let outcome = outcome?;
-    assert!(matches!(outcome, ApplyOutcome::Applied { .. }));
+    assert!(matches!(outcome, ApplyOutcome::Ready { .. }));
     assert_eq!(outcome.receipt().readiness, Readiness::Ready);
     assert!(outcome.receipt().service_prestate.is_some());
     assert!(project.join(".moraine").is_dir());

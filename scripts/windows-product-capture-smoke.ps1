@@ -155,10 +155,14 @@ try {
     }
 
     $stoppedDoctorRaw = & $cli doctor --project $project --integration codex --json
+    $stoppedDoctorExit = $LASTEXITCODE
     $stoppedDoctor = $stoppedDoctorRaw | ConvertFrom-Json
-    if ($LASTEXITCODE -eq 0 -or
-        -not (($stoppedDoctor.checks.remediation -join "`n") -match "service start")) {
-        throw "doctor did not diagnose a stopped runtime with the start repair"
+    $runtimeCaptureCheck = @($stoppedDoctor.checks) |
+        Where-Object { $_.id -eq "runtime.capture" }
+    if ($stoppedDoctorExit -eq 0 -or
+        $runtimeCaptureCheck.Count -ne 1 -or
+        $runtimeCaptureCheck[0].remediation -ne "moraine service start") {
+        throw "doctor did not diagnose a stopped runtime with the start repair: $stoppedDoctorRaw"
     }
 
     $repaired = Invoke-MoraineJson service start --json

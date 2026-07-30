@@ -446,7 +446,6 @@ fn validate_registration(
         "<Author>Moraine</Author>",
         "<Source>Moraine</Source>",
         "<LogonType>InteractiveToken</LogonType>",
-        "<RunLevel>LeastPrivilege</RunLevel>",
         "<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>",
         "<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>",
         "<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>",
@@ -465,6 +464,11 @@ fn validate_registration(
                 "Task Scheduler registration is missing required contract {required}"
             )));
         }
+    }
+    if xml.contains("<RunLevel>") && !xml.contains("<RunLevel>LeastPrivilege</RunLevel>") {
+        return Err(ProvisionError::Service(
+            "Task Scheduler registration requests a non-default run level".into(),
+        ));
     }
     if !xml.contains(&xml_escape(&identity.account_sid))
         || !xml.contains(&xml_escape(&identity.task_uri))

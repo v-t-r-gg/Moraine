@@ -231,6 +231,15 @@ fn verify_product(
         capabilities,
         "product_capture_verify",
     )?;
+    if capabilities.host == moraine_platform::HostPlatform::current() {
+        let runtime = crate::runtime::default_background_runtime_manager();
+        let state = runtime.inspect()?;
+        crate::platform_support::ensure_background_runtime_available(
+            &state,
+            capabilities.host,
+            "product_capture_verify",
+        )?;
+    }
     let mut steps = Vec::new();
     let project = &intent.project;
     let suite = SuitePaths::discover();

@@ -1,6 +1,8 @@
 //! Write-ahead setup transaction journal (required, fsynced).
 
-use std::fs::{self, File, OpenOptions};
+#[cfg(unix)]
+use std::fs::File;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -85,11 +87,16 @@ pub fn write_journal_at(path: &Path, receipt: &SetupReceipt) -> Result<()> {
     }
     fs::rename(&tmp, path)
         .map_err(|e| ProvisionError::msg(format!("journal rename {}: {e}", path.display())))?;
-    // Required: fsync final file.
-    File::open(path)
+    // Windows requires a write-capable handle for FlushFileBuffers; opening the
+    // renamed journal read-only makes sync_all fail with ERROR_ACCESS_DENIED.
+    OpenOptions::new()
+        .read(true)
+        .write(cfg!(windows))
+        .open(path)
         .and_then(|f| f.sync_all())
         .map_err(|e| ProvisionError::msg(format!("journal final fsync {}: {e}", path.display())))?;
     // Required on Unix when supported: fsync parent directory after rename.
+    #[cfg(unix)]
     if let Some(parent) = path.parent() {
         File::open(parent)
             .and_then(|dir| dir.sync_all())

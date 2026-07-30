@@ -33,6 +33,13 @@ pub enum ProvisionError {
         operation: &'static str,
     },
 
+    #[error("runtime_unavailable: {operation} is unavailable on {platform:?}: {detail}")]
+    RuntimeUnavailable {
+        platform: moraine_platform::HostPlatform,
+        operation: &'static str,
+        detail: String,
+    },
+
     #[error("service manager: {0}")]
     Service(String),
 

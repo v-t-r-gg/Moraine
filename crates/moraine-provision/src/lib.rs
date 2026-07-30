@@ -38,17 +38,18 @@ pub use error::{ProvisionError, Result};
 pub use health::{health, health_default, repair, repair_default};
 pub use inspect::{detect_agent, inspect, inspect_default, inspect_suite};
 pub use plan::plan;
-pub use platform_support::ensure_product_capture_supported;
+pub use platform_support::{ensure_background_runtime_available, ensure_product_capture_supported};
 pub use runtime::linux_systemd::render_systemd_unit;
 #[cfg(target_os = "windows")]
 pub use runtime::windows_task_scheduler::{
     registration_fingerprint, render_task_xml, WindowsTaskIdentity, WindowsTaskSchedulerRuntime,
 };
 pub use runtime::{
-    background_runtime_manager_for_host, default_background_runtime_manager,
-    default_service_manager, BackgroundRuntimeManager, LinuxSystemdUserRuntime,
-    LinuxSystemdUserService, MemoryRuntimeManager, MemoryServiceManager, RuntimeInstallSpec,
-    ServiceManager, UnsupportedRuntimeManager,
+    background_runtime_manager_for_host, capture_runtime_prestate,
+    default_background_runtime_manager, default_service_manager, restore_runtime_prestate,
+    BackgroundRuntimeManager, LinuxSystemdUserRuntime, LinuxSystemdUserService,
+    MemoryRuntimeManager, MemoryServiceManager, RuntimeInstallSpec, RuntimePrestate,
+    ServiceManager, UnavailableRuntimeManager, UnsupportedRuntimeManager,
 };
 pub use service_ready::{
     default_service_probe, default_service_ready_timeout_ms, wait_for_service_ready,

@@ -78,6 +78,14 @@ pub fn apply_with_options_and_capabilities(
             "invalid setup plan: skipService cannot include background runtime operations",
         ));
     }
+    if plan.requires_product_capture() {
+        let runtime_state = service.inspect()?;
+        crate::platform_support::ensure_background_runtime_available(
+            &runtime_state,
+            capabilities.host,
+            "product_capture_apply",
+        )?;
+    }
     let current = compute_witness(&plan.intent, service, &plan.absolute_cli)?;
     if current != plan.state_witness {
         return Err(ProvisionError::msg(
@@ -239,7 +247,18 @@ pub fn apply_with_options_and_capabilities(
                     {
                         Ok(report.user_message)
                     } else {
-                        Err(ProvisionError::msg(report.user_message))
+                        let failed = report
+                            .steps
+                            .iter()
+                            .filter(|step| !step.passed)
+                            .map(|step| format!("{}: {}", step.id, step.message))
+                            .collect::<Vec<_>>()
+                            .join("; ");
+                        Err(ProvisionError::msg(if failed.is_empty() {
+                            report.user_message
+                        } else {
+                            format!("{} ({failed})", report.user_message)
+                        }))
                     }
                 }
             }

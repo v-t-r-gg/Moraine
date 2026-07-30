@@ -20,6 +20,20 @@ fn ensure_mutation_supported(operation: &'static str) -> Result<()> {
     .map_err(Into::into)
 }
 
+fn available_runtime(
+    operation: &'static str,
+) -> Result<std::sync::Arc<dyn BackgroundRuntimeManager>> {
+    ensure_mutation_supported(operation)?;
+    let runtime = runtime();
+    let state = runtime.inspect()?;
+    moraine_provision::ensure_background_runtime_available(
+        &state,
+        moraine_platform::HostPlatform::current(),
+        operation,
+    )?;
+    Ok(runtime)
+}
+
 fn service_binary() -> Result<std::path::PathBuf> {
     let suite = SuitePaths::discover();
     if suite.service.is_file() {
@@ -44,27 +58,24 @@ fn service_binary() -> Result<std::path::PathBuf> {
 }
 
 pub fn service_install(json: bool) -> Result<()> {
-    ensure_mutation_supported("background_runtime_install")?;
+    let runtime = available_runtime("background_runtime_install")?;
     let executable = service_binary()?;
-    runtime().install_runtime(&RuntimeInstallSpec::discover(executable))?;
+    runtime.install_runtime(&RuntimeInstallSpec::try_discover(executable)?)?;
     print_state(json, "install")
 }
 
 pub fn service_start(json: bool) -> Result<()> {
-    ensure_mutation_supported("background_runtime_start")?;
-    runtime().start()?;
+    available_runtime("background_runtime_start")?.start()?;
     print_state(json, "start")
 }
 
 pub fn service_stop(json: bool) -> Result<()> {
-    ensure_mutation_supported("background_runtime_stop")?;
-    runtime().stop()?;
+    available_runtime("background_runtime_stop")?.stop()?;
     print_state(json, "stop")
 }
 
 pub fn service_restart(json: bool) -> Result<()> {
-    ensure_mutation_supported("background_runtime_restart")?;
-    runtime().restart()?;
+    available_runtime("background_runtime_restart")?.restart()?;
     print_state(json, "restart")
 }
 
@@ -92,8 +103,7 @@ pub fn service_logs(json_output: bool) -> Result<()> {
 }
 
 pub fn service_uninstall(json: bool) -> Result<()> {
-    ensure_mutation_supported("background_runtime_uninstall")?;
-    runtime().uninstall()?;
+    available_runtime("background_runtime_uninstall")?.uninstall()?;
     print_state(json, "uninstall")
 }
 

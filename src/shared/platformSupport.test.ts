@@ -13,22 +13,25 @@ const linux: PlatformCapabilitiesDto = {
 };
 
 describe("deriveDesktopProductSupport", () => {
-  it("requires every product and desktop capability", () => {
+  it("requires runtime and desktop capabilities but not distribution", () => {
     expect(deriveDesktopProductSupport(linux).desktopSupported).toBe(true);
-    for (const field of [
-      "captureTransport",
-      "backgroundRuntime",
-      "userInstallation",
-      "desktopHost",
-    ] as const) {
+    for (const field of ["captureTransport", "backgroundRuntime", "desktopHost"] as const) {
       expect(
         deriveDesktopProductSupport({ ...linux, [field]: "degraded" })
           .desktopSupported,
       ).toBe(false);
     }
+    const staged = deriveDesktopProductSupport({
+      ...linux,
+      host: "windows",
+      userInstallation: "unsupported",
+    });
+    expect(staged.supported).toBe(true);
+    expect(staged.desktopSupported).toBe(true);
+    expect(staged.distributionSupported).toBe(false);
   });
 
-  it("models Windows as described but product unsupported", () => {
+  it("fails closed for unsupported runtime capabilities", () => {
     const support = deriveDesktopProductSupport({
       ...linux,
       host: "windows",
@@ -40,5 +43,13 @@ describe("deriveDesktopProductSupport", () => {
     expect(support.supported).toBe(false);
     expect(support.desktopSupported).toBe(false);
     expect(support.reason).toBe("capture_unsupported");
+
+    expect(
+      deriveDesktopProductSupport({
+        ...linux,
+        host: "mac_os",
+        backgroundRuntime: "unsupported",
+      }).desktopSupported,
+    ).toBe(false);
   });
 });

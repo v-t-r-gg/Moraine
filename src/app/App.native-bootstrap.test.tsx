@@ -34,6 +34,9 @@ vi.mock("@/features/shell/StatusBar", () => ({
 vi.mock("@/features/onboarding/HealthPanel", () => ({
   HealthPanel: () => <div />,
 }));
+vi.mock("@/features/onboarding/OnboardingWizard", () => ({
+  OnboardingWizard: () => <div data-testid="onboarding">Onboarding</div>,
+}));
 
 import { App } from "./App";
 
@@ -104,5 +107,34 @@ describe("App native bootstrap", () => {
 
     expect(await screen.findByTestId("workspace")).toBeInTheDocument();
     expect(screen.queryByTestId("product-loading")).not.toBeInTheDocument();
+  });
+
+  it("routes a manually staged Windows runtime to onboarding", async () => {
+    mocks.provisionInspect.mockResolvedValueOnce({
+      ...supportedLinux,
+      platform: {
+        ...supportedLinux.platform,
+        host: "windows",
+        userInstallation: "unsupported",
+      },
+      service: {
+        ...supportedLinux.service,
+        backend: "windows_task_scheduler",
+        platform: "windows",
+        installed: false,
+        running: false,
+        registrationPresent: false,
+        registrationValid: false,
+        endpointReady: false,
+        diagnosticsReady: false,
+        captureReady: false,
+      },
+      projects: [],
+      readiness: "not_configured",
+    });
+
+    render(<App />);
+    expect(await screen.findByTestId("onboarding")).toBeInTheDocument();
+    expect(screen.queryByText(/not available on Windows yet/i)).not.toBeInTheDocument();
   });
 });

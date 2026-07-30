@@ -27,6 +27,7 @@ struct Inner {
     stop_count: u32,
     /// Count of reload_registration calls (tests assert daemon-reload equivalent).
     reload_count: u32,
+    endpoint_ready_override: Option<bool>,
 }
 
 /// Deterministic service manager for unit tests and non-Linux stubs.
@@ -83,6 +84,10 @@ impl MemoryRuntimeManager {
     pub fn reload_count(&self) -> u32 {
         self.inner.lock().unwrap().reload_count
     }
+
+    pub fn set_endpoint_ready_override(&self, ready: Option<bool>) {
+        self.inner.lock().unwrap().endpoint_ready_override = ready;
+    }
 }
 
 impl super::BackgroundRuntimeManager for MemoryRuntimeManager {
@@ -106,6 +111,7 @@ impl super::BackgroundRuntimeManager for MemoryRuntimeManager {
         } else {
             g.installed
         };
+        let endpoint_ready = g.endpoint_ready_override.unwrap_or(g.running);
         Ok(BackgroundRuntimeState {
             backend: BackgroundRuntimeBackend::MemoryTest,
             supported: true,
@@ -115,9 +121,9 @@ impl super::BackgroundRuntimeManager for MemoryRuntimeManager {
             registration_present,
             registration_valid: registration_present && binary_present,
             autostart_enabled: g.autostart,
-            endpoint_ready: g.running,
-            diagnostics_ready: g.running,
-            capture_ready: g.running,
+            endpoint_ready,
+            diagnostics_ready: endpoint_ready,
+            capture_ready: endpoint_ready,
             binary_path: g.binary.as_ref().map(|p| p.display().to_string()),
             unit_path,
             version: None,

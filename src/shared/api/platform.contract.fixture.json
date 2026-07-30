@@ -44,19 +44,20 @@
       "host": "windows",
       "userPaths": "supported",
       "suiteLayout": "supported",
-      "captureTransport": "unsupported",
-      "backgroundRuntime": "unsupported",
-      "desktopHost": "unsupported",
+      "captureTransport": "supported",
+      "backgroundRuntime": "supported",
+      "desktopHost": "supported",
       "userInstallation": "unsupported"
     },
     "serviceRegistration": null,
     "desktopRegistration": null,
     "captureEndpoint": {
-      "kind": "unsupported"
+      "kind": "windows_named_pipe",
+      "value": "\\\\.\\pipe\\moraine.capture.v1.0123456789ab"
     },
     "runtime": {
-      "backend": "unsupported",
-      "supported": false,
+      "backend": "windows_task_scheduler",
+      "supported": true,
       "installed": false,
       "binaryPresent": false,
       "registrationPresent": false,
@@ -66,7 +67,7 @@
       "endpointReady": false,
       "diagnosticsReady": false,
       "captureReady": false,
-      "statusMessage": "Background capture is not supported on Windows yet",
+      "statusMessage": "Background capture is not set up",
       "platform": "windows",
       "registration": null
     }

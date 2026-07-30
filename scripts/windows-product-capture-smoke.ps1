@@ -27,6 +27,25 @@ function Invoke-MoraineJson {
     return ($raw | ConvertFrom-Json)
 }
 
+function Wait-DisposableServiceExit {
+    for ($attempt = 0; $attempt -lt 100; $attempt++) {
+        $running = Get-Process -Name "moraine-service" -ErrorAction SilentlyContinue |
+            Where-Object {
+                try {
+                    [System.IO.Path]::GetFullPath($_.Path) -eq
+                        [System.IO.Path]::GetFullPath($script:service)
+                } catch {
+                    $false
+                }
+            }
+        if (!$running) {
+            return
+        }
+        Start-Sleep -Milliseconds 50
+    }
+    throw "runtime uninstall did not terminate the staged moraine-service process"
+}
+
 New-Item -ItemType Directory -Force -Path $prefix, $project, $spool | Out-Null
 Copy-Item $builtCli $cli
 Copy-Item $builtService $service
@@ -148,6 +167,7 @@ try {
 
     Invoke-MoraineJson service uninstall --json | Out-Null
     $taskInstalled = $false
+    Wait-DisposableServiceExit
     $removed = Invoke-MoraineJson service status --json
     if ($removed.service.registrationPresent) {
         throw "runtime registration remains after uninstall"
@@ -159,6 +179,7 @@ try {
     if ($taskInstalled) {
         try {
             & $cli service uninstall --json | Out-Null
+            Wait-DisposableServiceExit
         } catch {
             Write-Warning "failed to remove disposable Moraine task: $_"
         }
@@ -168,7 +189,17 @@ try {
     $env:MORAINE_PROJECT_REGISTRY = $priorRegistry
     $env:PATH = $priorPath
     if (Test-Path $temp) {
-        Remove-Item -Recurse -Force $temp
+        for ($attempt = 0; $attempt -lt 20; $attempt++) {
+            try {
+                Remove-Item -Recurse -Force $temp
+                break
+            } catch {
+                if ($attempt -eq 19) {
+                    throw
+                }
+                Start-Sleep -Milliseconds 100
+            }
+        }
     }
 }
 

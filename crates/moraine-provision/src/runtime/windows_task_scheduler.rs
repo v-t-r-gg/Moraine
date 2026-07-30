@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use sha2::{Digest, Sha256};
-use windows::core::{BSTR, HRESULT};
+use windows::core::{BSTR, HRESULT, HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
     LocalFree, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, HLOCAL, SCHED_E_TASK_NOT_RUNNING,
 };
@@ -19,9 +19,9 @@ use windows::Win32::Security::Authorization::{
 };
 use windows::Win32::Security::{
     AclSizeInformation, EqualSid, GetAce, GetAclInformation, GetSecurityDescriptorControl,
-    GetSecurityDescriptorDacl, GetSecurityDescriptorOwner, ACL_SIZE_INFORMATION,
-    DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
-    SE_DACL_PROTECTED,
+    GetSecurityDescriptorDacl, GetSecurityDescriptorOwner, LookupAccountNameW,
+    ACL_SIZE_INFORMATION, DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
+    PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED, SID_NAME_USE,
 };
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
@@ -502,13 +502,13 @@ fn validate_registration(
 
     let principals = single_child(task, "Principals")?;
     let principal = only_element_child(principals, "Principal")?;
-    expect_text(principal, "UserId", &identity.account_sid)?;
+    expect_account_sid(principal, "UserId", &identity.account_sid)?;
     expect_text(principal, "LogonType", "InteractiveToken")?;
     expect_optional_text(principal, "RunLevel", "LeastPrivilege")?;
 
     let triggers = single_child(task, "Triggers")?;
     let trigger = only_element_child(triggers, "LogonTrigger")?;
-    expect_text(trigger, "UserId", &identity.account_sid)?;
+    expect_account_sid(trigger, "UserId", &identity.account_sid)?;
     expect_text(trigger, "Delay", "PT5S")?;
     validate_optional_boolean(trigger, "Enabled")?;
 
@@ -602,6 +602,20 @@ fn expect_text(parent: roxmltree::Node<'_, '_>, name: &str, expected: &str) -> R
     Ok(())
 }
 
+fn expect_account_sid(
+    parent: roxmltree::Node<'_, '_>,
+    name: &str,
+    expected_sid: &str,
+) -> Result<()> {
+    let identifier = child_text(parent, name)?;
+    if !account_identifier_matches_sid(identifier, expected_sid)? {
+        return Err(ProvisionError::Service(format!(
+            "Task Scheduler {name} does not resolve to the current account"
+        )));
+    }
+    Ok(())
+}
+
 fn expect_optional_text(parent: roxmltree::Node<'_, '_>, name: &str, expected: &str) -> Result<()> {
     let matches: Vec<_> = parent
         .children()
@@ -655,6 +669,51 @@ fn sid_from_string(value: &str) -> Result<(PSID, LocalAllocation)> {
             .map_err(task_error("parse Task Scheduler SID"))?;
     }
     Ok((sid, LocalAllocation(HLOCAL(sid.0))))
+}
+
+fn account_identifier_matches_sid(identifier: &str, expected_sid: &str) -> Result<bool> {
+    let (expected, _expected) = sid_from_string(expected_sid)?;
+    if identifier.starts_with("S-") {
+        let (actual, _actual) = sid_from_string(identifier)?;
+        return Ok(unsafe { EqualSid(actual, expected) }.is_ok());
+    }
+
+    let account = HSTRING::from(identifier);
+    let mut sid_bytes = 0u32;
+    let mut domain_chars = 0u32;
+    let mut use_kind = SID_NAME_USE::default();
+    let _ = unsafe {
+        LookupAccountNameW(
+            PCWSTR::null(),
+            &account,
+            None,
+            &mut sid_bytes,
+            None,
+            &mut domain_chars,
+            &mut use_kind,
+        )
+    };
+    if sid_bytes == 0 {
+        return Err(ProvisionError::Service(format!(
+            "resolve Task Scheduler account identifier {identifier:?}: no SID size returned"
+        )));
+    }
+    let mut sid_storage = vec![0u64; (sid_bytes as usize).div_ceil(std::mem::size_of::<u64>())];
+    let mut domain = vec![0u16; domain_chars.max(1) as usize];
+    let actual = PSID(sid_storage.as_mut_ptr().cast());
+    unsafe {
+        LookupAccountNameW(
+            PCWSTR::null(),
+            &account,
+            Some(actual),
+            &mut sid_bytes,
+            Some(PWSTR(domain.as_mut_ptr())),
+            &mut domain_chars,
+            &mut use_kind,
+        )
+        .map_err(task_error("resolve Task Scheduler account identifier"))?;
+    }
+    Ok(unsafe { EqualSid(actual, expected) }.is_ok())
 }
 
 fn validate_security_descriptor(identity: &WindowsTaskIdentity, sddl: &str) -> Result<()> {

@@ -783,8 +783,8 @@ fn validate_security_descriptor(identity: &WindowsTaskIdentity, sddl: &str) -> R
     }
     if information.AceCount != 2 {
         return Err(ProvisionError::Service(format!(
-            "Task Scheduler descriptor must contain exactly two ACEs, found {}",
-            information.AceCount
+            "Task Scheduler descriptor must contain exactly two ACEs, found {}: {sddl}",
+            information.AceCount,
         )));
     }
 

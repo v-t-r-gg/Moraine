@@ -71,13 +71,7 @@ pub struct WindowsTaskSchedulerRuntime {
 }
 
 impl WindowsTaskSchedulerRuntime {
-    pub fn new() -> Self {
-        Self::try_new().unwrap_or_else(|error| {
-            panic!("Windows Task Scheduler runtime identity unavailable: {error}")
-        })
-    }
-
-    pub fn try_new() -> Result<Self> {
+    pub fn new() -> Result<Self> {
         Ok(Self {
             suite: SuitePaths::discover(),
             runtime_layout: RuntimeLayout::try_discover()
@@ -162,6 +156,11 @@ impl WindowsTaskSchedulerRuntime {
             let restored = session
                 .read(&identity)?
                 .ok_or_else(|| ProvisionError::Service("task disappeared after update".into()))?;
+            if restored.xml != xml || restored.sddl != current.sddl {
+                return Err(ProvisionError::Service(
+                    "Task Scheduler trigger update changed unrelated registration state".into(),
+                ));
+            }
             validate_registration(&identity, &restored, None)?;
             if logon_trigger_enabled(&restored.xml)? != enabled {
                 return Err(ProvisionError::Service(
@@ -170,12 +169,6 @@ impl WindowsTaskSchedulerRuntime {
             }
             Ok(())
         })
-    }
-}
-
-impl Default for WindowsTaskSchedulerRuntime {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -502,10 +495,12 @@ fn validate_registration(
 }
 
 fn validate_sddl(identity: &WindowsTaskIdentity, sddl: &str) -> Result<()> {
-    let owns_current = sddl.contains(&identity.account_sid)
-        || (identity.account_sid.ends_with("-500")
-            && (sddl.contains("O:LA") || sddl.contains(";;;LA)")));
-    if !owns_current || !sddl.contains("SY") {
+    let administrator_alias = identity.account_sid.ends_with("-500");
+    let owns_current = sddl.contains(&format!("O:{}", identity.account_sid))
+        || (administrator_alias && sddl.contains("O:LA"));
+    let allows_current = sddl.contains(&format!(";;;{})", identity.account_sid))
+        || (administrator_alias && sddl.contains(";;;LA)"));
+    if !owns_current || !allows_current || !sddl.contains(";;;SY)") {
         return Err(ProvisionError::Service(
             "Task Scheduler ACL does not grant the current account and LocalSystem".into(),
         ));
@@ -617,28 +612,34 @@ impl BackgroundRuntimeManager for WindowsTaskSchedulerRuntime {
             Ok(status) => (status.online, status.capture_ready, status.version),
             Err(_) => (false, false, None),
         };
-        let (registration_present, registration_valid, running, autostart_enabled, state) =
-            match registration {
-                Some(task) => {
-                    let valid =
-                        validate_registration(&self.task_identity, &task, Some(&expected_spec))
-                            .is_ok();
-                    let fingerprint = registration_fingerprint(&task.xml, &task.sddl);
-                    let _last_result = task.last_result;
-                    (
-                        true,
-                        valid,
-                        task.running || diagnostics_ready,
-                        logon_trigger_enabled(&task.xml).unwrap_or(false),
-                        Some(RuntimeRegistrationState {
-                            kind: RuntimeRegistrationKind::WindowsTaskSchedulerTask,
-                            location: Some(self.task_identity.task_path.clone()),
-                            fingerprint: Some(fingerprint),
-                        }),
-                    )
-                }
-                None => (false, false, diagnostics_ready, false, None),
-            };
+        let (
+            registration_present,
+            registration_valid,
+            running,
+            autostart_enabled,
+            last_result,
+            state,
+        ) = match registration {
+            Some(task) => {
+                let valid =
+                    validate_registration(&self.task_identity, &task, Some(&expected_spec)).is_ok();
+                let fingerprint = registration_fingerprint(&task.xml, &task.sddl);
+                let _last_result = task.last_result;
+                (
+                    true,
+                    valid,
+                    task.running || diagnostics_ready,
+                    logon_trigger_enabled(&task.xml).unwrap_or(false),
+                    task.last_result,
+                    Some(RuntimeRegistrationState {
+                        kind: RuntimeRegistrationKind::WindowsTaskSchedulerTask,
+                        location: Some(self.task_identity.task_path.clone()),
+                        fingerprint: Some(fingerprint),
+                    }),
+                )
+            }
+            None => (false, false, diagnostics_ready, false, None, None),
+        };
         Ok(BackgroundRuntimeState {
             backend: BackgroundRuntimeBackend::WindowsTaskScheduler,
             supported: false,
@@ -654,6 +655,7 @@ impl BackgroundRuntimeManager for WindowsTaskSchedulerRuntime {
             binary_path: binary.map(|path| path.display().to_string()),
             unit_path: None,
             version,
+            last_result,
             status_message: if running {
                 "Background capture is running in an unsupported Windows preview".into()
             } else if registration_present {
@@ -766,7 +768,19 @@ impl BackgroundRuntimeManager for WindowsTaskSchedulerRuntime {
         }
         let identity = self.task_identity.clone();
         let state = snapshot.state.clone();
-        self.run_com_operation("restore_registration", move |session| {
+        if let WindowsTaskSnapshotState::Existing {
+            xml,
+            security_descriptor,
+            fingerprint,
+        } = &state
+        {
+            if registration_fingerprint(xml, security_descriptor) != *fingerprint {
+                return Err(ProvisionError::RollbackRequired(
+                    "Windows task snapshot fingerprint is corrupt".into(),
+                ));
+            }
+        }
+        let restored = self.run_com_operation("restore_registration", move |session| {
             session.delete(&identity)?;
             match state {
                 WindowsTaskSnapshotState::Absent => Ok(()),
@@ -775,11 +789,6 @@ impl BackgroundRuntimeManager for WindowsTaskSchedulerRuntime {
                     security_descriptor,
                     fingerprint,
                 } => {
-                    if registration_fingerprint(&xml, &security_descriptor) != fingerprint {
-                        return Err(ProvisionError::RollbackRequired(
-                            "Windows task snapshot fingerprint is corrupt".into(),
-                        ));
-                    }
                     // Returned Task Scheduler XML embeds the normalized descriptor.
                     // Reapplying a separate SDDL changes the returned XML.
                     session.register(&identity, &xml, None)?;
@@ -797,6 +806,10 @@ impl BackgroundRuntimeManager for WindowsTaskSchedulerRuntime {
                     Ok(())
                 }
             }
+        });
+        restored.map_err(|error| match error {
+            already @ ProvisionError::RollbackRequired(_) => already,
+            other => ProvisionError::RollbackRequired(other.to_string()),
         })
     }
 

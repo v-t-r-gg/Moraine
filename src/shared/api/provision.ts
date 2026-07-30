@@ -31,7 +31,11 @@ export interface ProjectCandidateDto {
 }
 
 export interface ServiceStateDto {
-  backend: "linux_systemd_user" | "unsupported" | "memory_test";
+  backend:
+    | "linux_systemd_user"
+    | "windows_task_scheduler"
+    | "unsupported"
+    | "memory_test";
   supported: boolean;
   installed: boolean;
   running: boolean;
@@ -45,10 +49,11 @@ export interface ServiceStateDto {
   binaryPath?: string | null;
   unitPath?: string | null;
   version?: string | null;
+  lastResult?: number | null;
   statusMessage: string;
   platform: string;
   registration?: {
-    kind: "systemd_user_unit";
+    kind: "systemd_user_unit" | "windows_task_scheduler_task";
     location?: string | null;
     fingerprint?: string | null;
   } | null;
@@ -184,8 +189,21 @@ export type FileSnapshotDto =
       createdAt: string;
     };
 
+export interface WindowsTaskSnapshotDto {
+  taskPath: string;
+  capturedAt: string;
+  state:
+    | {
+        kind: "existing";
+        xml: string;
+        securityDescriptor: string;
+        fingerprint: string;
+      }
+    | { kind: "absent" };
+}
+
 export interface ServiceSnapshotDto {
-  registration: FileSnapshotDto;
+  registration: FileSnapshotDto | WindowsTaskSnapshotDto;
   wasRunning: boolean;
   autostartWasEnabled: boolean;
 }

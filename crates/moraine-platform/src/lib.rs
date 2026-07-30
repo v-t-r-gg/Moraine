@@ -476,6 +476,7 @@ mod tests {
             runtime.spool_dir,
             users.cache_dir.join("moraine-service/spool")
         );
+        assert_eq!(runtime.log_dir, users.data_dir.join("moraine/logs"));
         assert_eq!(
             runtime.capture_endpoint,
             CaptureEndpoint::UnixSocket(users.runtime_dir.join("moraine-service.sock"))
@@ -500,6 +501,7 @@ mod tests {
         assert_eq!(suite.service_registration, None);
         assert_eq!(suite.desktop_registration, None);
         assert_eq!(runtime.capture_endpoint, CaptureEndpoint::Unsupported);
+        assert_eq!(runtime.log_dir, users.cache_dir.join("Moraine/logs"));
         for path in [&suite.cli, &suite.service, &suite.desktop] {
             let relative = path.strip_prefix(&prefix).unwrap().display().to_string();
             assert!(!relative.contains(".local"));

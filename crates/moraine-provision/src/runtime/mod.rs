@@ -90,7 +90,9 @@ pub fn background_runtime_manager_for_host(
     match host {
         HostPlatform::Linux => Arc::new(LinuxSystemdUserRuntime::new()),
         #[cfg(target_os = "windows")]
-        HostPlatform::Windows => Arc::new(WindowsTaskSchedulerRuntime::new()),
+        HostPlatform::Windows => WindowsTaskSchedulerRuntime::new()
+            .map(|runtime| Arc::new(runtime) as Arc<dyn BackgroundRuntimeManager>)
+            .unwrap_or_else(|_| Arc::new(UnsupportedRuntimeManager::new(host))),
         #[cfg(not(target_os = "windows"))]
         HostPlatform::Windows => Arc::new(UnsupportedRuntimeManager::new(host)),
         HostPlatform::MacOs | HostPlatform::Other => Arc::new(UnsupportedRuntimeManager::new(host)),

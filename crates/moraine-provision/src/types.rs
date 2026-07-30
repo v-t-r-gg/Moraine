@@ -97,6 +97,9 @@ pub struct BackgroundRuntimeState {
     pub unit_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// Platform runtime result code when the backend exposes one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_result: Option<i32>,
     /// Product-level status, never OS jargon in the normal UI.
     pub status_message: String,
     pub platform: String,

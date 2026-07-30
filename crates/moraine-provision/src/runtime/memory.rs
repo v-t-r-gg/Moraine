@@ -121,6 +121,7 @@ impl super::BackgroundRuntimeManager for MemoryRuntimeManager {
             binary_path: g.binary.as_ref().map(|p| p.display().to_string()),
             unit_path,
             version: None,
+            last_result: None,
             status_message: if g.running {
                 "Background capture is running".into()
             } else if registration_present {

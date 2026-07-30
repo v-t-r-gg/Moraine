@@ -152,6 +152,7 @@ impl super::BackgroundRuntimeManager for LinuxSystemdUserRuntime {
             binary_path: binary.map(|p| p.display().to_string()),
             unit_path: Some(unit.display().to_string()),
             version,
+            last_result: None,
             status_message,
             platform: "linux".into(),
             registration: registration_present.then(|| RuntimeRegistrationState {

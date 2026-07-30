@@ -20,6 +20,7 @@ struct RotatingMakeWriter {
 #[cfg(target_os = "windows")]
 struct RotatingWriter {
     inner: Arc<Mutex<RotatingFile>>,
+    buffer: Vec<u8>,
 }
 
 #[cfg(target_os = "windows")]
@@ -29,6 +30,7 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for RotatingMakeWriter {
     fn make_writer(&'a self) -> Self::Writer {
         RotatingWriter {
             inner: self.inner.clone(),
+            buffer: Vec::new(),
         }
     }
 }
@@ -36,17 +38,22 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for RotatingMakeWriter {
 #[cfg(target_os = "windows")]
 impl Write for RotatingWriter {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        self.inner
-            .lock()
-            .map_err(|_| io::Error::other("Windows log writer lock poisoned"))?
-            .write(buffer)
+        self.buffer.extend_from_slice(buffer);
+        Ok(buffer.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.inner
-            .lock()
-            .map_err(|_| io::Error::other("Windows log writer lock poisoned"))?
-            .flush()
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for RotatingWriter {
+    fn drop(&mut self) {
+        if let Ok(mut file) = self.inner.lock() {
+            let _ = file.write_all(&self.buffer);
+            let _ = file.flush();
+        }
     }
 }
 

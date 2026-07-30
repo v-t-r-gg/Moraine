@@ -11,8 +11,19 @@ use std::time::{Duration, Instant};
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 use windows::core::{BSTR, HRESULT};
-use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND};
-use windows::Win32::Security::{DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION};
+use windows::Win32::Foundation::{
+    LocalFree, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, GENERIC_ALL, HLOCAL,
+    SCHED_E_TASK_NOT_RUNNING,
+};
+use windows::Win32::Security::Authorization::{
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, ConvertStringSidToSidW, SDDL_REVISION_1,
+};
+use windows::Win32::Security::{
+    AclSizeInformation, EqualSid, GetAce, GetAclInformation, GetSecurityDescriptorControl,
+    GetSecurityDescriptorDacl, GetSecurityDescriptorOwner, ACL_SIZE_INFORMATION,
+    DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
+    SE_DACL_PROTECTED,
+};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
 };
@@ -280,9 +291,9 @@ impl TaskSchedulerSession {
     }
 
     fn delete(&self, identity: &WindowsTaskIdentity) -> Result<()> {
-        if let Some(task) = self.get(identity)? {
+        if self.get(identity)?.is_some() {
+            self.stop_and_wait(identity, STOP_BUDGET)?;
             unsafe {
-                let _ = task.Stop(0);
                 self.root
                     .DeleteTask(&BSTR::from(&identity.task_name), 0)
                     .map_err(task_error("delete Task Scheduler registration"))?;
@@ -294,6 +305,39 @@ impl TaskSchedulerSession {
             ));
         }
         Ok(())
+    }
+
+    fn stop_and_wait(&self, identity: &WindowsTaskIdentity, budget: Duration) -> Result<()> {
+        let Some(task) = self.get(identity)? else {
+            return Ok(());
+        };
+        let stop = unsafe { task.Stop(0) };
+        if let Err(error) = stop {
+            if error.code() != SCHED_E_TASK_NOT_RUNNING {
+                return Err(ProvisionError::Service(format!(
+                    "stop Task Scheduler runtime {}: {error}",
+                    identity.task_path
+                )));
+            }
+        }
+        let deadline = Instant::now() + budget;
+        loop {
+            let running = unsafe {
+                task.GetInstances(0)
+                    .and_then(|instances| instances.Count())
+                    .map_err(task_error("inspect running Task Scheduler instances"))?
+            };
+            if running == 0 {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(ProvisionError::Service(format!(
+                    "Task Scheduler runtime {} did not stop within five seconds",
+                    identity.task_path
+                )));
+            }
+            thread::sleep(STOP_POLL);
+        }
     }
 }
 
@@ -442,88 +486,283 @@ fn validate_registration(
     registration: &TaskRegistration,
     spec: Option<&RuntimeInstallSpec>,
 ) -> Result<()> {
-    let xml = &registration.xml;
-    for required in [
-        "<Author>Moraine</Author>",
-        "<Source>Moraine</Source>",
-        "<LogonType>InteractiveToken</LogonType>",
-        "<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>",
-        "<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>",
-        "<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>",
-        "<StartWhenAvailable>true</StartWhenAvailable>",
-        "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>",
-        "<Interval>PT1M</Interval>",
-        "<Count>3</Count>",
-    ] {
-        if !xml.contains(required) {
-            return Err(ProvisionError::Service(format!(
-                "Task Scheduler registration is missing required contract {required}"
-            )));
-        }
-    }
-    if xml.contains("<RunLevel>") && !xml.contains("<RunLevel>LeastPrivilege</RunLevel>") {
+    let document = roxmltree::Document::parse(&registration.xml).map_err(|error| {
+        ProvisionError::Service(format!("parse Task Scheduler registration XML: {error}"))
+    })?;
+    let task = document.root_element();
+    if task.tag_name().name() != "Task" {
         return Err(ProvisionError::Service(
-            "Task Scheduler registration requests a non-default run level".into(),
+            "Task Scheduler registration root must be Task".into(),
         ));
     }
-    for prohibited in [
-        "<RunOnlyIfNetworkAvailable>true</RunOnlyIfNetworkAvailable>",
-        "<AllowStartOnDemand>false</AllowStartOnDemand>",
-        "<Hidden>true</Hidden>",
-        "<RunOnlyIfIdle>true</RunOnlyIfIdle>",
-        "<WakeToRun>true</WakeToRun>",
-    ] {
-        if xml.contains(prohibited) {
-            return Err(ProvisionError::Service(format!(
-                "Task Scheduler registration contains prohibited contract {prohibited}"
-            )));
-        }
-    }
-    let contains_account_sid = xml.contains(&xml_escape(&identity.account_sid));
-    if !contains_account_sid {
-        return Err(ProvisionError::Service(format!(
-            "Task Scheduler identity does not match the current account \
-                 (account SID present: {contains_account_sid})"
-        )));
-    }
-    if xml.matches("<LogonTrigger").count() != 1 {
-        return Err(ProvisionError::Service(
-            "Task Scheduler registration must contain exactly one logon trigger".into(),
-        ));
-    }
-    validate_sddl(identity, &registration.sddl)?;
+
+    let registration_info = single_child(task, "RegistrationInfo")?;
+    expect_text(registration_info, "Author", "Moraine")?;
+    expect_text(registration_info, "Source", "Moraine")?;
+
+    let principals = single_child(task, "Principals")?;
+    let principal = only_element_child(principals, "Principal")?;
+    expect_text(principal, "UserId", &identity.account_sid)?;
+    expect_text(principal, "LogonType", "InteractiveToken")?;
+    expect_optional_text(principal, "RunLevel", "LeastPrivilege")?;
+
+    let triggers = single_child(task, "Triggers")?;
+    let trigger = only_element_child(triggers, "LogonTrigger")?;
+    expect_text(trigger, "UserId", &identity.account_sid)?;
+    expect_text(trigger, "Delay", "PT5S")?;
+    expect_optional_boolean(trigger, "Enabled", true)?;
+
+    let actions = single_child(task, "Actions")?;
+    let action = only_element_child(actions, "Exec")?;
     if let Some(spec) = spec {
         let expected = render_task_xml(identity, spec)?;
-        for section in ["<Command>", "<Arguments>", "<WorkingDirectory>"] {
-            let expected_value = element_value(&expected, section)?;
-            let actual_value = element_value(xml, section)?;
-            if expected_value != actual_value {
-                return Err(ProvisionError::Service(format!(
-                    "Task Scheduler action {section} does not match the install specification"
-                )));
-            }
+        let expected_document = roxmltree::Document::parse(&expected).map_err(|error| {
+            ProvisionError::Service(format!("parse expected Task Scheduler XML: {error}"))
+        })?;
+        let expected_action = only_element_child(
+            single_child(expected_document.root_element(), "Actions")?,
+            "Exec",
+        )?;
+        for field in ["Command", "Arguments", "WorkingDirectory"] {
+            expect_text(action, field, child_text(expected_action, field)?)?;
         }
+    }
+
+    let settings = single_child(task, "Settings")?;
+    for (name, value) in [
+        ("MultipleInstancesPolicy", "IgnoreNew"),
+        ("DisallowStartIfOnBatteries", "false"),
+        ("StopIfGoingOnBatteries", "false"),
+        ("StartWhenAvailable", "true"),
+        ("ExecutionTimeLimit", "PT0S"),
+    ] {
+        expect_text(settings, name, value)?;
+    }
+    for (name, default) in [
+        ("RunOnlyIfNetworkAvailable", false),
+        ("AllowStartOnDemand", true),
+        ("Enabled", true),
+        ("Hidden", false),
+        ("RunOnlyIfIdle", false),
+        ("WakeToRun", false),
+    ] {
+        expect_optional_boolean(settings, name, default)?;
+    }
+    let restart = single_child(settings, "RestartOnFailure")?;
+    expect_text(restart, "Interval", "PT1M")?;
+    expect_text(restart, "Count", "3")?;
+
+    validate_security_descriptor(identity, &registration.sddl)?;
+    Ok(())
+}
+
+fn single_child<'a, 'input>(
+    parent: roxmltree::Node<'a, 'input>,
+    name: &str,
+) -> Result<roxmltree::Node<'a, 'input>> {
+    let matches: Vec<_> = parent
+        .children()
+        .filter(|node| node.is_element() && node.tag_name().name() == name)
+        .collect();
+    if matches.len() != 1 {
+        return Err(ProvisionError::Service(format!(
+            "Task Scheduler registration requires exactly one {name}"
+        )));
+    }
+    Ok(matches[0])
+}
+
+fn only_element_child<'a, 'input>(
+    parent: roxmltree::Node<'a, 'input>,
+    expected_name: &str,
+) -> Result<roxmltree::Node<'a, 'input>> {
+    let children: Vec<_> = parent.children().filter(|node| node.is_element()).collect();
+    if children.len() != 1 || children[0].tag_name().name() != expected_name {
+        return Err(ProvisionError::Service(format!(
+            "Task Scheduler {} must contain exactly one {expected_name}",
+            parent.tag_name().name()
+        )));
+    }
+    Ok(children[0])
+}
+
+fn child_text<'a, 'input>(parent: roxmltree::Node<'a, 'input>, name: &str) -> Result<&'a str> {
+    single_child(parent, name)?
+        .text()
+        .ok_or_else(|| ProvisionError::Service(format!("Task Scheduler {name} value is missing")))
+}
+
+fn expect_text(parent: roxmltree::Node<'_, '_>, name: &str, expected: &str) -> Result<()> {
+    let actual = child_text(parent, name)?;
+    if actual != expected {
+        return Err(ProvisionError::Service(format!(
+            "Task Scheduler {name} differs: expected {expected:?}, got {actual:?}"
+        )));
     }
     Ok(())
 }
 
-fn validate_sddl(identity: &WindowsTaskIdentity, sddl: &str) -> Result<()> {
-    let administrator_alias = identity.account_sid.ends_with("-500");
-    let owns_current = sddl.contains(&format!("O:{}", identity.account_sid))
-        || (administrator_alias && sddl.contains("O:LA"));
-    let allows_current = sddl.contains(&format!(";;;{})", identity.account_sid))
-        || (administrator_alias && sddl.contains(";;;LA)"));
-    if !owns_current || !allows_current || !sddl.contains(";;;SY)") {
+fn expect_optional_text(parent: roxmltree::Node<'_, '_>, name: &str, expected: &str) -> Result<()> {
+    let matches: Vec<_> = parent
+        .children()
+        .filter(|node| node.is_element() && node.tag_name().name() == name)
+        .collect();
+    match matches.as_slice() {
+        [] => Ok(()),
+        [node] if node.text() == Some(expected) => Ok(()),
+        _ => Err(ProvisionError::Service(format!(
+            "Task Scheduler {name} must be absent or {expected}"
+        ))),
+    }
+}
+
+fn expect_optional_boolean(
+    parent: roxmltree::Node<'_, '_>,
+    name: &str,
+    default: bool,
+) -> Result<()> {
+    expect_optional_text(parent, name, if default { "true" } else { "false" })
+}
+
+struct LocalAllocation(HLOCAL);
+
+impl Drop for LocalAllocation {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = LocalFree(Some(self.0));
+        }
+    }
+}
+
+fn sid_from_string(value: &str) -> Result<(PSID, LocalAllocation)> {
+    let mut sid = PSID::default();
+    unsafe {
+        ConvertStringSidToSidW(&windows::core::HSTRING::from(value), &mut sid)
+            .map_err(task_error("parse Task Scheduler SID"))?;
+    }
+    Ok((sid, LocalAllocation(HLOCAL(sid.0))))
+}
+
+fn validate_security_descriptor(identity: &WindowsTaskIdentity, sddl: &str) -> Result<()> {
+    let mut descriptor = PSECURITY_DESCRIPTOR::default();
+    unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            &windows::core::HSTRING::from(sddl),
+            SDDL_REVISION_1,
+            &mut descriptor,
+            None,
+        )
+        .map_err(task_error("parse Task Scheduler security descriptor"))?;
+    }
+    let _descriptor = LocalAllocation(HLOCAL(descriptor.0));
+    let (current_sid, _current_sid) = sid_from_string(&identity.account_sid)?;
+    let (system_sid, _system_sid) = sid_from_string("S-1-5-18")?;
+
+    let mut owner = PSID::default();
+    let mut _owner_defaulted = windows::core::BOOL::default();
+    unsafe {
+        GetSecurityDescriptorOwner(descriptor, &mut owner, &mut _owner_defaulted)
+            .map_err(task_error("read Task Scheduler descriptor owner"))?;
+    }
+    if owner.0.is_null() || unsafe { EqualSid(owner, current_sid) }.is_err() {
         return Err(ProvisionError::Service(
-            "Task Scheduler ACL does not grant the current account and LocalSystem".into(),
+            "Task Scheduler descriptor owner is not the current account".into(),
         ));
     }
-    for broad in ["WD", "AN", "BU", "AU"] {
-        if sddl.contains(&format!(";;;{broad})")) {
-            return Err(ProvisionError::Service(format!(
-                "Task Scheduler ACL unexpectedly grants broad principal {broad}"
-            )));
+
+    let mut control = 0u16;
+    let mut _revision = 0u32;
+    unsafe {
+        GetSecurityDescriptorControl(descriptor, &mut control, &mut _revision)
+            .map_err(task_error("read Task Scheduler descriptor control"))?;
+    }
+    if control & SE_DACL_PROTECTED.0 == 0 {
+        return Err(ProvisionError::Service(
+            "Task Scheduler descriptor DACL is not protected".into(),
+        ));
+    }
+
+    let mut dacl_present = windows::core::BOOL::default();
+    let mut dacl = std::ptr::null_mut();
+    let mut _dacl_defaulted = windows::core::BOOL::default();
+    unsafe {
+        GetSecurityDescriptorDacl(
+            descriptor,
+            &mut dacl_present,
+            &mut dacl,
+            &mut _dacl_defaulted,
+        )
+        .map_err(task_error("read Task Scheduler descriptor DACL"))?;
+    }
+    if !dacl_present.as_bool() || dacl.is_null() {
+        return Err(ProvisionError::Service(
+            "Task Scheduler descriptor has no DACL".into(),
+        ));
+    }
+
+    let mut information = ACL_SIZE_INFORMATION::default();
+    unsafe {
+        GetAclInformation(
+            dacl,
+            (&mut information as *mut ACL_SIZE_INFORMATION).cast(),
+            std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
+            AclSizeInformation,
+        )
+        .map_err(task_error("inspect Task Scheduler descriptor DACL"))?;
+    }
+    if information.AceCount != 2 {
+        return Err(ProvisionError::Service(format!(
+            "Task Scheduler descriptor must contain exactly two ACEs, found {}",
+            information.AceCount
+        )));
+    }
+
+    let mut current_allowed = false;
+    let mut system_allowed = false;
+    for index in 0..information.AceCount {
+        let mut raw_ace = std::ptr::null_mut();
+        unsafe {
+            GetAce(dacl, index, &mut raw_ace)
+                .map_err(task_error("read Task Scheduler descriptor ACE"))?;
         }
+        let ace = raw_ace.cast::<windows::Win32::Security::ACCESS_ALLOWED_ACE>();
+        let header = unsafe { &(*ace).Header };
+        if header.AceType != 0 {
+            return Err(ProvisionError::Service(
+                "Task Scheduler descriptor contains a non-allow ACE".into(),
+            ));
+        }
+        if unsafe { (*ace).Mask } != GENERIC_ALL.0 {
+            return Err(ProvisionError::Service(
+                "Task Scheduler descriptor ACE does not grant full access".into(),
+            ));
+        }
+        let sid = PSID(unsafe { std::ptr::addr_of_mut!((*ace).SidStart).cast() });
+        if unsafe { EqualSid(sid, current_sid) }.is_ok() {
+            if current_allowed {
+                return Err(ProvisionError::Service(
+                    "Task Scheduler descriptor duplicates the current-account ACE".into(),
+                ));
+            }
+            current_allowed = true;
+        } else if unsafe { EqualSid(sid, system_sid) }.is_ok() {
+            if system_allowed {
+                return Err(ProvisionError::Service(
+                    "Task Scheduler descriptor duplicates the LocalSystem ACE".into(),
+                ));
+            }
+            system_allowed = true;
+        } else {
+            return Err(ProvisionError::Service(
+                "Task Scheduler descriptor grants an additional principal".into(),
+            ));
+        }
+    }
+    if !current_allowed || !system_allowed {
+        return Err(ProvisionError::Service(
+            "Task Scheduler descriptor must allow exactly the current account and LocalSystem"
+                .into(),
+        ));
     }
     Ok(())
 }
@@ -863,37 +1102,17 @@ impl BackgroundRuntimeManager for WindowsTaskSchedulerRuntime {
     fn stop(&self) -> Result<()> {
         let identity = self.task_identity.clone();
         self.run_com_operation("stop", move |session| {
-            if let Some(task) = session.get(&identity)? {
-                unsafe {
-                    let _ = task.Stop(0);
-                }
-            }
-            Ok(())
+            session.stop_and_wait(&identity, STOP_BUDGET)
         })
     }
 
     fn restart(&self) -> Result<()> {
         let identity = self.task_identity.clone();
         self.run_com_operation("restart", move |session| {
+            session.stop_and_wait(&identity, STOP_BUDGET)?;
             let task = session.get(&identity)?.ok_or_else(|| {
                 ProvisionError::Service(format!("task {} is absent", identity.task_path))
             })?;
-            unsafe {
-                let _ = task.Stop(0);
-            }
-            let deadline = Instant::now() + STOP_BUDGET;
-            while unsafe {
-                task.State()
-                    .map_err(task_error("read stopped task state"))?
-            } == TASK_STATE_RUNNING
-            {
-                if Instant::now() >= deadline {
-                    return Err(ProvisionError::Service(
-                        "Task Scheduler runtime did not stop within five seconds".into(),
-                    ));
-                }
-                thread::sleep(STOP_POLL);
-            }
             unsafe {
                 task.Run(&VARIANT::default())
                     .map_err(task_error("restart Task Scheduler runtime"))?;
@@ -943,6 +1162,16 @@ mod tests {
             log_dir: Some(PathBuf::from(
                 r#"C:\Users\A "Quoted"\AppData\Local\Moraine\logs\"#,
             )),
+        }
+    }
+
+    fn registration(xml: String) -> TaskRegistration {
+        let identity = identity();
+        TaskRegistration {
+            xml,
+            sddl: task_sddl(&identity),
+            running: false,
+            last_result: None,
         }
     }
 
@@ -998,15 +1227,7 @@ mod tests {
         ] {
             xml = xml.replace(omitted, "");
         }
-        let registration = TaskRegistration {
-            xml: xml.clone(),
-            sddl: format!(
-                "O:{sid}D:P(A;;FA;;;SY)(A;;FA;;;{sid})",
-                sid = identity.account_sid
-            ),
-            running: false,
-            last_result: None,
-        };
+        let registration = registration(xml.clone());
         validate_registration(&identity, &registration, Some(&spec())).unwrap();
 
         let elevated = TaskRegistration {
@@ -1017,6 +1238,86 @@ mod tests {
             ..registration
         };
         assert!(validate_registration(&identity, &elevated, Some(&spec())).is_err());
+    }
+
+    #[test]
+    fn complete_task_ownership_rejects_extra_structure_and_wrong_sids() {
+        let identity = identity();
+        let xml = render_task_xml(&identity, &spec()).unwrap();
+        let extra_principal = xml.replace(
+            "</Principals>",
+            "<Principal><UserId>S-1-5-18</UserId><LogonType>InteractiveToken</LogonType></Principal></Principals>",
+        );
+        assert!(
+            validate_registration(&identity, &registration(extra_principal), Some(&spec()))
+                .is_err()
+        );
+
+        let extra_trigger = xml.replace(
+            "</Triggers>",
+            "<TimeTrigger><StartBoundary>2026-01-01T00:00:00</StartBoundary></TimeTrigger></Triggers>",
+        );
+        assert!(
+            validate_registration(&identity, &registration(extra_trigger), Some(&spec())).is_err()
+        );
+
+        let extra_action = xml.replace(
+            "</Actions>",
+            "<Exec><Command>other.exe</Command></Exec></Actions>",
+        );
+        assert!(
+            validate_registration(&identity, &registration(extra_action), Some(&spec())).is_err()
+        );
+
+        let wrong_principal = xml.replacen(
+            &format!("<UserId>{}</UserId>", identity.account_sid),
+            "<UserId>S-1-5-18</UserId>",
+            1,
+        );
+        assert!(
+            validate_registration(&identity, &registration(wrong_principal), Some(&spec()))
+                .is_err()
+        );
+
+        let trigger_marker = format!(
+            "<LogonTrigger>\n      <Enabled>false</Enabled>\n      <UserId>{}</UserId>",
+            identity.account_sid
+        );
+        let wrong_trigger = xml.replace(
+            &trigger_marker,
+            "<LogonTrigger>\n      <Enabled>false</Enabled>\n      <UserId>S-1-5-18</UserId>",
+        );
+        assert!(
+            validate_registration(&identity, &registration(wrong_trigger), Some(&spec())).is_err()
+        );
+    }
+
+    #[test]
+    fn effective_acl_rejects_extra_unprotected_and_non_full_entries() {
+        let identity = identity();
+        let xml = render_task_xml(&identity, &spec()).unwrap();
+        for sddl in [
+            format!(
+                "O:{sid}D:P(A;;FA;;;SY)(A;;FA;;;{sid})(A;;FA;;;S-1-5-32-545)",
+                sid = identity.account_sid
+            ),
+            format!(
+                "O:{sid}D:(A;;FA;;;SY)(A;;FA;;;{sid})",
+                sid = identity.account_sid
+            ),
+            format!(
+                "O:{sid}D:P(A;;FR;;;SY)(A;;FA;;;{sid})",
+                sid = identity.account_sid
+            ),
+            format!(
+                "O:{sid}D:P(D;;FA;;;SY)(A;;FA;;;{sid})",
+                sid = identity.account_sid
+            ),
+        ] {
+            let mut candidate = registration(xml.clone());
+            candidate.sddl = sddl;
+            assert!(validate_registration(&identity, &candidate, Some(&spec())).is_err());
+        }
     }
 
     #[test]

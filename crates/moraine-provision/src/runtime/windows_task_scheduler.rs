@@ -144,6 +144,7 @@ impl WindowsTaskSchedulerRuntime {
 
     fn mutate_trigger(&self, enabled: bool) -> Result<()> {
         let identity = self.task_identity.clone();
+        let expected_spec = self.expected_install_spec();
         self.run_com_operation("set_autostart", move |session| {
             let Some(current) = session.read(&identity)? else {
                 return Err(ProvisionError::Service(format!(
@@ -156,15 +157,12 @@ impl WindowsTaskSchedulerRuntime {
             let restored = session
                 .read(&identity)?
                 .ok_or_else(|| ProvisionError::Service("task disappeared after update".into()))?;
-            if without_logon_trigger_enabled(&restored.xml)?
-                != without_logon_trigger_enabled(&current.xml)?
-                || restored.sddl != current.sddl
-            {
+            if restored.sddl != current.sddl {
                 return Err(ProvisionError::Service(
-                    "Task Scheduler trigger update changed unrelated registration state".into(),
+                    "Task Scheduler trigger update changed the registration ACL".into(),
                 ));
             }
-            validate_registration(&identity, &restored, None)?;
+            validate_registration(&identity, &restored, Some(&expected_spec))?;
             if logon_trigger_enabled(&restored.xml)? != enabled {
                 return Err(ProvisionError::Service(
                     "Task Scheduler did not preserve requested autostart state".into(),
@@ -598,21 +596,6 @@ fn logon_trigger_range(xml: &str) -> Result<(usize, usize)> {
         .map(|offset| start + offset)
         .ok_or_else(|| ProvisionError::Service("unclosed Moraine logon trigger".into()))?;
     Ok((start, end))
-}
-
-fn without_logon_trigger_enabled(xml: &str) -> Result<String> {
-    let (trigger_start, trigger_end) = logon_trigger_range(xml)?;
-    let Some(relative) = xml[trigger_start..trigger_end].find("<Enabled>") else {
-        return Ok(xml.to_owned());
-    };
-    let element_start = trigger_start + relative;
-    let element_end = xml[element_start..trigger_end]
-        .find("</Enabled>")
-        .map(|offset| element_start + offset + "</Enabled>".len())
-        .ok_or_else(|| ProvisionError::Service("unclosed trigger enabled state".into()))?;
-    let mut normalized = xml.to_owned();
-    normalized.replace_range(element_start..element_end, "");
-    Ok(normalized)
 }
 
 fn read_application_logs(log_dir: &Path, limit: usize) -> Result<Vec<ServiceLog>> {

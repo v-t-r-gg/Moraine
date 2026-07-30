@@ -156,7 +156,10 @@ impl WindowsTaskSchedulerRuntime {
             let restored = session
                 .read(&identity)?
                 .ok_or_else(|| ProvisionError::Service("task disappeared after update".into()))?;
-            if restored.xml != xml || restored.sddl != current.sddl {
+            if without_logon_trigger_enabled(&restored.xml)?
+                != without_logon_trigger_enabled(&current.xml)?
+                || restored.sddl != current.sddl
+            {
                 return Err(ProvisionError::Service(
                     "Task Scheduler trigger update changed unrelated registration state".into(),
                 ));
@@ -541,15 +544,12 @@ fn element_value<'a>(xml: &'a str, opening: &str) -> Result<&'a str> {
 }
 
 fn logon_trigger_enabled(xml: &str) -> Result<bool> {
-    let trigger_start = xml
-        .find("<LogonTrigger")
-        .ok_or_else(|| ProvisionError::Service("missing Moraine logon trigger".into()))?;
-    let trigger_end = xml[trigger_start..]
-        .find("</LogonTrigger>")
-        .map(|offset| trigger_start + offset)
-        .ok_or_else(|| ProvisionError::Service("unclosed Moraine logon trigger".into()))?;
+    let (trigger_start, trigger_end) = logon_trigger_range(xml)?;
     let trigger = &xml[trigger_start..trigger_end];
-    match element_value(trigger, "<Enabled>")? {
+    let Some(enabled_start) = trigger.find("<Enabled>") else {
+        return Ok(true);
+    };
+    match element_value(&trigger[enabled_start..], "<Enabled>")? {
         "true" => Ok(true),
         "false" => Ok(false),
         value => Err(ProvisionError::Service(format!(
@@ -559,16 +559,23 @@ fn logon_trigger_enabled(xml: &str) -> Result<bool> {
 }
 
 fn set_logon_trigger_enabled(xml: &str, enabled: bool) -> Result<String> {
-    let trigger_start = xml
-        .find("<LogonTrigger")
-        .ok_or_else(|| ProvisionError::Service("missing Moraine logon trigger".into()))?;
-    let trigger_end = xml[trigger_start..]
-        .find("</LogonTrigger>")
-        .map(|offset| trigger_start + offset)
-        .ok_or_else(|| ProvisionError::Service("unclosed Moraine logon trigger".into()))?;
-    let relative = xml[trigger_start..trigger_end]
-        .find("<Enabled>")
-        .ok_or_else(|| ProvisionError::Service("logon trigger has no enabled state".into()))?;
+    let (trigger_start, trigger_end) = logon_trigger_range(xml)?;
+    let Some(relative) = xml[trigger_start..trigger_end].find("<Enabled>") else {
+        let opening_end = xml[trigger_start..trigger_end]
+            .find('>')
+            .map(|offset| trigger_start + offset + 1)
+            .ok_or_else(|| ProvisionError::Service("invalid Moraine logon trigger".into()))?;
+        let mut updated = xml.to_owned();
+        updated.insert_str(
+            opening_end,
+            if enabled {
+                "<Enabled>true</Enabled>"
+            } else {
+                "<Enabled>false</Enabled>"
+            },
+        );
+        return Ok(updated);
+    };
     let value_start = trigger_start + relative + "<Enabled>".len();
     let value_end = xml[value_start..]
         .find("</Enabled>")
@@ -580,6 +587,32 @@ fn set_logon_trigger_enabled(xml: &str, enabled: bool) -> Result<String> {
         if enabled { "true" } else { "false" },
     );
     Ok(updated)
+}
+
+fn logon_trigger_range(xml: &str) -> Result<(usize, usize)> {
+    let start = xml
+        .find("<LogonTrigger")
+        .ok_or_else(|| ProvisionError::Service("missing Moraine logon trigger".into()))?;
+    let end = xml[start..]
+        .find("</LogonTrigger>")
+        .map(|offset| start + offset)
+        .ok_or_else(|| ProvisionError::Service("unclosed Moraine logon trigger".into()))?;
+    Ok((start, end))
+}
+
+fn without_logon_trigger_enabled(xml: &str) -> Result<String> {
+    let (trigger_start, trigger_end) = logon_trigger_range(xml)?;
+    let Some(relative) = xml[trigger_start..trigger_end].find("<Enabled>") else {
+        return Ok(xml.to_owned());
+    };
+    let element_start = trigger_start + relative;
+    let element_end = xml[element_start..trigger_end]
+        .find("</Enabled>")
+        .map(|offset| element_start + offset + "</Enabled>".len())
+        .ok_or_else(|| ProvisionError::Service("unclosed trigger enabled state".into()))?;
+    let mut normalized = xml.to_owned();
+    normalized.replace_range(element_start..element_end, "");
+    Ok(normalized)
 }
 
 fn read_application_logs(log_dir: &Path, limit: usize) -> Result<Vec<ServiceLog>> {

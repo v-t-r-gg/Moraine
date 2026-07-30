@@ -124,7 +124,7 @@ fn sta_caller_uses_production_mta_backend_for_exact_registration_restore(
     };
     assert_eq!(fingerprint, &original_fingerprint);
     assert!(xml.contains("<LogonType>InteractiveToken</LogonType>"));
-    assert!(xml.contains("<RunLevel>LeastPrivilege</RunLevel>"));
+    assert!(!xml.contains("<RunLevel>HighestAvailable</RunLevel>"));
     assert!(security_descriptor.contains("SY"));
     for broad in ["WD", "AN", "BU", "AU"] {
         assert!(!security_descriptor.contains(&format!(";;;{broad})")));

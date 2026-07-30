@@ -247,7 +247,18 @@ pub fn apply_with_options_and_capabilities(
                     {
                         Ok(report.user_message)
                     } else {
-                        Err(ProvisionError::msg(report.user_message))
+                        let failed = report
+                            .steps
+                            .iter()
+                            .filter(|step| !step.passed)
+                            .map(|step| format!("{}: {}", step.id, step.message))
+                            .collect::<Vec<_>>()
+                            .join("; ");
+                        Err(ProvisionError::msg(if failed.is_empty() {
+                            report.user_message
+                        } else {
+                            format!("{} ({failed})", report.user_message)
+                        }))
                     }
                 }
             }

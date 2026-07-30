@@ -510,7 +510,7 @@ fn validate_registration(
     let trigger = only_element_child(triggers, "LogonTrigger")?;
     expect_text(trigger, "UserId", &identity.account_sid)?;
     expect_text(trigger, "Delay", "PT5S")?;
-    expect_optional_boolean(trigger, "Enabled", true)?;
+    validate_optional_boolean(trigger, "Enabled")?;
 
     let actions = single_child(task, "Actions")?;
     let action = only_element_child(actions, "Exec")?;
@@ -622,6 +622,20 @@ fn expect_optional_boolean(
     default: bool,
 ) -> Result<()> {
     expect_optional_text(parent, name, if default { "true" } else { "false" })
+}
+
+fn validate_optional_boolean(parent: roxmltree::Node<'_, '_>, name: &str) -> Result<()> {
+    let matches: Vec<_> = parent
+        .children()
+        .filter(|node| node.is_element() && node.tag_name().name() == name)
+        .collect();
+    match matches.as_slice() {
+        [] => Ok(()),
+        [node] if matches!(node.text(), Some("true" | "false")) => Ok(()),
+        _ => Err(ProvisionError::Service(format!(
+            "Task Scheduler {name} must be a single boolean value"
+        ))),
+    }
 }
 
 struct LocalAllocation(HLOCAL);

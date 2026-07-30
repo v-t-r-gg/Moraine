@@ -41,7 +41,11 @@ pub fn health(
         checks.push(HealthCheck {
             id: "service.supported".into(),
             status: HealthStatus::Fail,
-            user_message: "Background capture is not available on this platform".into(),
+            user_message: if svc.backend == crate::types::BackgroundRuntimeBackend::Unsupported {
+                "Background capture is not available on this platform".into()
+            } else {
+                "Background capture runtime is unavailable".into()
+            },
             technical_detail: svc.status_message.clone(),
             repair: None,
         });
@@ -76,8 +80,22 @@ pub fn health(
                 agent: None,
             }),
         });
+    } else if svc.running {
+        checks.push(HealthCheck {
+            id: "service.capture".into(),
+            status: HealthStatus::Fail,
+            user_message: "Background capture is running but unhealthy".into(),
+            technical_detail: svc.status_message.clone(),
+            repair: Some(RepairAction {
+                id: "repair.restart_service".into(),
+                label: "Fix".into(),
+                kind: RepairKind::RestartService,
+                project: None,
+                agent: None,
+            }),
+        });
     } else {
-        // Valid registration but not running → Start.
+        // Valid registration but stopped → Start.
         checks.push(HealthCheck {
             id: "service.running".into(),
             status: HealthStatus::Fail,
@@ -166,29 +184,39 @@ pub fn health_default(project: Option<&Path>, agent: Option<AgentKind>) -> Resul
 }
 
 pub fn repair(action: &RepairAction, service: &dyn ServiceManager) -> Result<RepairResult> {
-    if !matches!(action.kind, RepairKind::InitProject) && !service.inspect()?.supported {
+    let runtime_state = service.inspect()?;
+    if !matches!(action.kind, RepairKind::InitProject) && !runtime_state.supported {
         return Ok(RepairResult {
             ok: false,
             action_id: action.id.clone(),
             user_message: "Background capture is not available on this platform".into(),
-            technical_detail: Some("unsupported_platform".into()),
+            technical_detail: Some(
+                if runtime_state.backend == crate::types::BackgroundRuntimeBackend::Unsupported {
+                    "unsupported_platform"
+                } else {
+                    "runtime_unavailable"
+                }
+                .into(),
+            ),
         });
     }
     match action.kind {
-        RepairKind::StartService => match service.start() {
-            Ok(()) => Ok(RepairResult {
-                ok: true,
-                action_id: action.id.clone(),
-                user_message: "Background capture started".into(),
-                technical_detail: None,
-            }),
-            Err(e) => Ok(RepairResult {
-                ok: false,
-                action_id: action.id.clone(),
-                user_message: "Could not start background capture".into(),
-                technical_detail: Some(e.to_string()),
-            }),
-        },
+        RepairKind::StartService => {
+            match service.start().and_then(|_| require_runtime_ready(service)) {
+                Ok(()) => Ok(RepairResult {
+                    ok: true,
+                    action_id: action.id.clone(),
+                    user_message: "Background capture started".into(),
+                    technical_detail: None,
+                }),
+                Err(e) => Ok(RepairResult {
+                    ok: false,
+                    action_id: action.id.clone(),
+                    user_message: "Could not start background capture".into(),
+                    technical_detail: Some(e.to_string()),
+                }),
+            }
+        }
         RepairKind::InstallService => {
             let suite = SuitePaths::discover();
             let bin = suite.absolute_service().or_else(|| {
@@ -207,6 +235,7 @@ pub fn repair(action: &RepairAction, service: &dyn ServiceManager) -> Result<Rep
                 Some(b) => match crate::runtime::RuntimeInstallSpec::try_discover(b)
                     .and_then(|spec| service.install_runtime(&spec))
                     .and_then(|_| service.start())
+                    .and_then(|_| require_runtime_ready(service))
                 {
                     Ok(()) => Ok(RepairResult {
                         ok: true,
@@ -229,7 +258,10 @@ pub fn repair(action: &RepairAction, service: &dyn ServiceManager) -> Result<Rep
                 }),
             }
         }
-        RepairKind::RestartService => match service.restart() {
+        RepairKind::RestartService => match service
+            .restart()
+            .and_then(|_| require_runtime_ready(service))
+        {
             Ok(()) => Ok(RepairResult {
                 ok: true,
                 action_id: action.id.clone(),
@@ -324,6 +356,20 @@ pub fn repair(action: &RepairAction, service: &dyn ServiceManager) -> Result<Rep
                 }),
             }
         }
+    }
+}
+
+fn require_runtime_ready(service: &dyn ServiceManager) -> Result<()> {
+    let state = service.inspect()?;
+    if state.diagnostics_ready && state.capture_ready {
+        return Ok(());
+    }
+    let readiness = crate::service_ready::default_service_probe()
+        .wait_ready(crate::service_ready::default_service_ready_timeout_ms());
+    if readiness.ready {
+        Ok(())
+    } else {
+        Err(crate::ProvisionError::Service(readiness.message))
     }
 }
 

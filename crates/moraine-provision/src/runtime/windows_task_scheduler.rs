@@ -3,7 +3,7 @@
 //! COM objects are created, used & released on a dedicated MTA worker for every
 //! operation. The manager stores only owned Rust data & serializes mutations.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 use windows::core::{BSTR, HRESULT};
-use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, VARIANT_BOOL};
+use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND};
 use windows::Win32::Security::{DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
@@ -831,6 +831,7 @@ impl BackgroundRuntimeManager for WindowsTaskSchedulerRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn identity() -> WindowsTaskIdentity {
         WindowsTaskIdentity::for_scope("S-1-5-21-1000-2000-3000-1001".into(), "d07be4ed3160".into())

@@ -295,8 +295,9 @@ normalized current-account read ACE. Deny ACEs, inherited ACEs & additional
 principals are invalid.
 
 Restoration must stop & delete the current registration, then register the
-captured Task Scheduler-returned XML with its captured effective security
-descriptor. Re-read XML & SDDL, verify the combined fingerprint, then restore prior
+captured Task Scheduler-returned XML without separately applying the captured
+SDDL; the normalized XML already embeds it, while supplying both changes the
+returned XML. Re-read XML & SDDL, verify the combined fingerprint, then restore prior
 autostart & running state. Exact absence is restored by deletion. Any unproven
 restoration yields `RollbackRequired`.
 

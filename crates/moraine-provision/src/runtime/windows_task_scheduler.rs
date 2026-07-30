@@ -1132,10 +1132,13 @@ impl BackgroundRuntimeManager for WindowsTaskSchedulerRuntime {
                 WindowsTaskSnapshotState::Absent => Ok(()),
                 WindowsTaskSnapshotState::Existing {
                     xml,
-                    security_descriptor,
+                    security_descriptor: _,
                     fingerprint,
                 } => {
-                    session.register(&identity, &xml, Some(&security_descriptor))?;
+                    // Returned XML embeds the scheduler-normalized descriptor.
+                    // Applying the captured SDDL separately changes the
+                    // scheduler's returned XML and breaks exact restoration.
+                    session.register(&identity, &xml, None)?;
                     let restored = session.read(&identity)?.ok_or_else(|| {
                         ProvisionError::RollbackRequired(
                             "restored Windows task is absent".into(),

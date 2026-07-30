@@ -288,9 +288,11 @@ executable action. Moraine supplies a protected DACL, but Task Scheduler
 normalizes the returned descriptor without retaining that control bit, even
 when it is reapplied through `SetSecurityDescriptor`. Initial registration also
 adds a scheduler ACE, so the backend reapplies the explicit allowlist to the
-registered task. Validation requires the resulting observable contract:
-exactly two full-access allow ACEs; one for the current account & one for
-LocalSystem. Deny ACEs, inherited ACEs & additional principals are invalid.
+registered task. Task Scheduler then adds one read-only ACE for the task owner;
+the COM task security API does not remove it. Validation requires exactly two
+principals: full access for the current account & LocalSystem, plus at most that
+normalized current-account read ACE. Deny ACEs, inherited ACEs & additional
+principals are invalid.
 
 Restoration must stop & delete the current registration, then register the
 captured Task Scheduler-returned XML with its captured effective security

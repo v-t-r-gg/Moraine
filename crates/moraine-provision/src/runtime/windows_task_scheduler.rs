@@ -781,14 +781,15 @@ fn validate_security_descriptor(identity: &WindowsTaskIdentity, sddl: &str) -> R
         )
         .map_err(task_error("inspect Task Scheduler descriptor DACL"))?;
     }
-    if information.AceCount != 2 {
+    if !(2..=3).contains(&information.AceCount) {
         return Err(ProvisionError::Service(format!(
-            "Task Scheduler descriptor must contain exactly two ACEs, found {}: {sddl}",
+            "Task Scheduler descriptor has an unexpected ACE count {}: {sddl}",
             information.AceCount,
         )));
     }
 
-    let mut current_allowed = false;
+    let mut current_full = false;
+    let mut scheduler_current_read = false;
     let mut system_allowed = false;
     for index in 0..information.AceCount {
         let mut raw_ace = std::ptr::null_mut();
@@ -803,23 +804,30 @@ fn validate_security_descriptor(identity: &WindowsTaskIdentity, sddl: &str) -> R
                 "Task Scheduler descriptor contains a non-allow ACE".into(),
             ));
         }
-        if unsafe { (*ace).Mask } != TASK_FULL_ACCESS_MASK {
+        if header.AceFlags & 0x10 != 0 {
             return Err(ProvisionError::Service(
-                "Task Scheduler descriptor ACE does not grant full access".into(),
+                "Task Scheduler descriptor contains an inherited ACE".into(),
             ));
         }
+        let mask = unsafe { (*ace).Mask };
         let sid = PSID(unsafe { std::ptr::addr_of_mut!((*ace).SidStart).cast() });
         if unsafe { EqualSid(sid, current_sid) }.is_ok() {
-            if current_allowed {
+            if mask == TASK_FULL_ACCESS_MASK && !current_full {
+                current_full = true;
+            } else if mask != 0 && mask & !TASK_FULL_ACCESS_MASK == 0 && !scheduler_current_read {
+                // Task Scheduler adds a second, read-only ACE for the task
+                // owner after SetSecurityDescriptor. It cannot be removed
+                // through the COM task security API.
+                scheduler_current_read = true;
+            } else {
                 return Err(ProvisionError::Service(
-                    "Task Scheduler descriptor duplicates the current-account ACE".into(),
+                    "Task Scheduler descriptor has an unexpected current-account ACE".into(),
                 ));
             }
-            current_allowed = true;
         } else if unsafe { EqualSid(sid, system_sid) }.is_ok() {
-            if system_allowed {
+            if system_allowed || mask != TASK_FULL_ACCESS_MASK {
                 return Err(ProvisionError::Service(
-                    "Task Scheduler descriptor duplicates the LocalSystem ACE".into(),
+                    "Task Scheduler descriptor has an invalid LocalSystem ACE".into(),
                 ));
             }
             system_allowed = true;
@@ -829,7 +837,7 @@ fn validate_security_descriptor(identity: &WindowsTaskIdentity, sddl: &str) -> R
             ));
         }
     }
-    if !current_allowed || !system_allowed {
+    if !current_full || !system_allowed {
         return Err(ProvisionError::Service(
             "Task Scheduler descriptor must allow exactly the current account and LocalSystem"
                 .into(),
@@ -1383,6 +1391,18 @@ mod tests {
             candidate.sddl = sddl;
             assert!(validate_registration(&identity, &candidate, Some(&spec())).is_err());
         }
+    }
+
+    #[test]
+    fn effective_acl_accepts_scheduler_normalized_owner_read_ace() {
+        let identity = identity();
+        let xml = render_task_xml(&identity, &spec()).unwrap();
+        let mut candidate = registration(xml);
+        candidate.sddl = format!(
+            "O:{sid}D:(A;;FA;;;SY)(A;;FA;;;{sid})(A;;FR;;;{sid})",
+            sid = identity.account_sid
+        );
+        validate_registration(&identity, &candidate, Some(&spec())).unwrap();
     }
 
     #[test]

@@ -284,15 +284,16 @@ ACL rather than by URI preservation.
 Registration validity parses the returned task definition & effective security
 descriptor. A valid Moraine registration has exactly one current-account
 interactive-token principal, one current-account logon trigger & one direct
-executable action. Its protected DACL has exactly two full-access allow ACEs;
-one for the current account & one for LocalSystem. Deny ACEs, inherited access
-& additional principals are invalid.
+executable action. Moraine supplies a protected DACL, but Task Scheduler
+normalizes the returned descriptor without retaining that control bit, even
+when it is reapplied through `SetSecurityDescriptor`. Validation therefore
+requires the stronger observable allowlist: exactly two full-access allow ACEs;
+one for the current account & one for LocalSystem. Deny ACEs, inherited ACEs &
+additional principals are invalid.
 
 Restoration must stop & delete the current registration, then register the
-captured Task Scheduler-returned XML without separately overriding its embedded
-security descriptor. Passing both captured XML & SDDL makes Task Scheduler
-rewrite the XML representation even when the effective ACL is unchanged.
-Re-read XML & SDDL, verify the combined fingerprint, then restore prior
+captured Task Scheduler-returned XML with its captured effective security
+descriptor. Re-read XML & SDDL, verify the combined fingerprint, then restore prior
 autostart & running state. Exact absence is restored by deletion. Any unproven
 restoration yields `RollbackRequired`.
 

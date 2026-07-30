@@ -18,10 +18,9 @@ use windows::Win32::Security::Authorization::{
     ConvertStringSecurityDescriptorToSecurityDescriptorW, ConvertStringSidToSidW, SDDL_REVISION_1,
 };
 use windows::Win32::Security::{
-    AclSizeInformation, EqualSid, GetAce, GetAclInformation, GetSecurityDescriptorControl,
-    GetSecurityDescriptorDacl, GetSecurityDescriptorOwner, LookupAccountNameW,
-    ACL_SIZE_INFORMATION, DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
-    PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED,
+    AclSizeInformation, EqualSid, GetAce, GetAclInformation, GetSecurityDescriptorDacl,
+    GetSecurityDescriptorOwner, LookupAccountNameW, ACL_SIZE_INFORMATION,
+    DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
     SID_NAME_USE,
 };
 use windows::Win32::System::Com::{
@@ -249,12 +248,8 @@ impl TaskSchedulerSession {
         let Some(task) = self.get(identity)? else {
             return Ok(None);
         };
-        // Task Scheduler returns the descriptor control bits only when the
-        // protected-DACL information class is requested explicitly.
-        let security_information = (OWNER_SECURITY_INFORMATION
-            | DACL_SECURITY_INFORMATION
-            | PROTECTED_DACL_SECURITY_INFORMATION)
-            .0 as i32;
+        let security_information =
+            (OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION).0 as i32;
         unsafe {
             Ok(Some(TaskRegistration {
                 xml: task
@@ -281,8 +276,7 @@ impl TaskSchedulerSession {
             .map(|value| VARIANT::from(BSTR::from(value)))
             .unwrap_or_default();
         unsafe {
-            let task = self
-                .root
+            self.root
                 .RegisterTask(
                     &BSTR::from(&identity.task_name),
                     &BSTR::from(xml),
@@ -292,15 +286,7 @@ impl TaskSchedulerSession {
                     TASK_LOGON_INTERACTIVE_TOKEN,
                     &security,
                 )
-                .map_err(task_error("register current-user Task Scheduler task"))?;
-            if let Some(sddl) = sddl {
-                // RegisterTask normalizes the task definition and may discard
-                // descriptor control bits. Apply the protected descriptor to
-                // the registered object before validating its effective ACL.
-                task.SetSecurityDescriptor(&BSTR::from(sddl), 0)
-                    .map_err(task_error("protect Task Scheduler task descriptor"))?;
-            }
-            Ok(task)
+                .map_err(task_error("register current-user Task Scheduler task"))
         }
     }
 
@@ -754,18 +740,6 @@ fn validate_security_descriptor(identity: &WindowsTaskIdentity, sddl: &str) -> R
     if owner.0.is_null() || unsafe { EqualSid(owner, current_sid) }.is_err() {
         return Err(ProvisionError::Service(
             "Task Scheduler descriptor owner is not the current account".into(),
-        ));
-    }
-
-    let mut control = 0u16;
-    let mut _revision = 0u32;
-    unsafe {
-        GetSecurityDescriptorControl(descriptor, &mut control, &mut _revision)
-            .map_err(task_error("read Task Scheduler descriptor control"))?;
-    }
-    if control & SE_DACL_PROTECTED.0 == 0 {
-        return Err(ProvisionError::Service(
-            "Task Scheduler descriptor DACL is not protected".into(),
         ));
     }
 
@@ -1378,16 +1352,12 @@ mod tests {
     }
 
     #[test]
-    fn effective_acl_rejects_extra_unprotected_and_non_full_entries() {
+    fn effective_acl_rejects_extra_non_full_and_deny_entries() {
         let identity = identity();
         let xml = render_task_xml(&identity, &spec()).unwrap();
         for sddl in [
             format!(
                 "O:{sid}D:P(A;;FA;;;SY)(A;;FA;;;{sid})(A;;FA;;;S-1-5-32-545)",
-                sid = identity.account_sid
-            ),
-            format!(
-                "O:{sid}D:(A;;FA;;;SY)(A;;FA;;;{sid})",
                 sid = identity.account_sid
             ),
             format!(

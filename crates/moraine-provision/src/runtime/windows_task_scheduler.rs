@@ -479,14 +479,11 @@ fn validate_registration(
         }
     }
     let contains_account_sid = xml.contains(&xml_escape(&identity.account_sid));
-    let contains_task_uri = xml.contains(&xml_escape(&identity.task_uri));
-    if !contains_account_sid || !contains_task_uri {
-        return Err(ProvisionError::Service(
-            format!(
-                "Task Scheduler identity does not match the current account \
-                 (account SID present: {contains_account_sid}, task URI present: {contains_task_uri})"
-            ),
-        ));
+    if !contains_account_sid {
+        return Err(ProvisionError::Service(format!(
+            "Task Scheduler identity does not match the current account \
+                 (account SID present: {contains_account_sid})"
+        )));
     }
     if xml.matches("<LogonTrigger").count() != 1 {
         return Err(ProvisionError::Service(

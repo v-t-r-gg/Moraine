@@ -276,6 +276,11 @@ defaults. Validation accepts those omissions, requires every non-default
 contract value & rejects inverse values that would elevate or constrain the
 runtime.
 
+Task Scheduler may also omit the optional registration URI from returned XML.
+Moraine still supplies the URI as metadata, but returned-state identity is
+proved by the exact SID-qualified task path, current-account principal & task
+ACL rather than by URI preservation.
+
 Restoration must stop & delete the current registration, then register the
 captured Task Scheduler-returned XML without separately overriding its embedded
 security descriptor. Passing both captured XML & SDDL makes Task Scheduler

@@ -65,12 +65,26 @@ jobs:
         run: cargo test -p moraine-service --all-targets
       - name: Test production Task Scheduler runtime
         run: cargo test -p moraine-provision --all-targets
+      - name: Test desktop command boundary
+        run: cargo test -p moraine-app
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Test frontend platform closure
+        run: |
+          npm run check
+          npm test
       - name: Prove hook-to-spool named-pipe flow
         shell: pwsh
         run: ./scripts/windows-named-pipe-smoke.ps1
       - name: Prove scheduled runtime capture flow
         shell: pwsh
         run: ./scripts/windows-task-scheduler-smoke.ps1
+      - name: Prove Windows ProductCapture closure
+        shell: pwsh
+        run: ./scripts/windows-product-capture-smoke.ps1
       - name: Check desktop host
         run: cargo check -p moraine-app
 

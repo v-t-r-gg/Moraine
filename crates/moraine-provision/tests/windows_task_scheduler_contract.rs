@@ -98,7 +98,7 @@ fn sta_caller_uses_production_mta_backend_for_exact_registration_restore(
         installed.backend,
         BackgroundRuntimeBackend::WindowsTaskScheduler
     );
-    assert!(!installed.supported);
+    assert!(installed.supported);
     assert!(installed.registration_present);
     assert!(installed.registration_valid);
     assert!(!installed.autostart_enabled);

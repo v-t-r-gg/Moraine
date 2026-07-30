@@ -12,8 +12,7 @@ use chrono::Utc;
 use sha2::{Digest, Sha256};
 use windows::core::{BSTR, HRESULT};
 use windows::Win32::Foundation::{
-    LocalFree, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, GENERIC_ALL, HLOCAL,
-    SCHED_E_TASK_NOT_RUNNING,
+    LocalFree, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, HLOCAL, SCHED_E_TASK_NOT_RUNNING,
 };
 use windows::Win32::Security::Authorization::{
     ConvertStringSecurityDescriptorToSecurityDescriptorW, ConvertStringSidToSidW, SDDL_REVISION_1,
@@ -45,6 +44,7 @@ use moraine_platform::{CaptureEndpoint, RuntimeLayout};
 
 const STOP_BUDGET: Duration = Duration::from_secs(5);
 const STOP_POLL: Duration = Duration::from_millis(100);
+const TASK_FULL_ACCESS_MASK: u32 = 0x001f_01ff;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowsTaskIdentity {
@@ -746,7 +746,7 @@ fn validate_security_descriptor(identity: &WindowsTaskIdentity, sddl: &str) -> R
                 "Task Scheduler descriptor contains a non-allow ACE".into(),
             ));
         }
-        if unsafe { (*ace).Mask } != GENERIC_ALL.0 {
+        if unsafe { (*ace).Mask } != TASK_FULL_ACCESS_MASK {
             return Err(ProvisionError::Service(
                 "Task Scheduler descriptor ACE does not grant full access".into(),
             ));

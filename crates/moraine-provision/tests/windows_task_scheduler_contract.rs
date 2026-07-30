@@ -304,6 +304,17 @@ fn scheduled_real_service_accepts_a_real_hook_and_writes_logs() -> moraine_provi
         .unwrap_or_default()
         .contains("starting moraine-service"));
 
+    let running_snapshot = runtime.capture_registration()?;
+    let running_fingerprint = runtime.registration_fingerprint()?.unwrap();
+    runtime.restore_registration(&running_snapshot)?;
+    wait_for_status(runtime_layout.diagnostics_endpoint.port(), false)?;
+    assert_eq!(
+        runtime.registration_fingerprint()?.as_deref(),
+        Some(running_fingerprint.as_str())
+    );
+
+    runtime.start()?;
+    wait_for_status(runtime_layout.diagnostics_endpoint.port(), true)?;
     runtime.stop()?;
     wait_for_status(runtime_layout.diagnostics_endpoint.port(), false)?;
     runtime.enable_autostart()?;
@@ -312,8 +323,8 @@ fn scheduled_real_service_accepts_a_real_hook_and_writes_logs() -> moraine_provi
     assert!(!runtime.inspect()?.autostart_enabled);
     runtime.start()?;
     wait_for_status(runtime_layout.diagnostics_endpoint.port(), true)?;
-    runtime.stop()?;
     runtime.uninstall()?;
+    wait_for_status(runtime_layout.diagnostics_endpoint.port(), false)?;
     assert!(!runtime.inspect()?.registration_present);
     Ok(())
 }

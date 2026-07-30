@@ -13,9 +13,14 @@ use tempfile::tempdir;
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn with_fake_cli<R>(f: impl FnOnce(std::path::PathBuf) -> R) -> R {
-    let _g = ENV_LOCK.lock().unwrap();
+    let _g = ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let dir = tempdir().unwrap();
-    let cli = dir.path().join("moraine");
+    let cli = dir.path().join(moraine_platform::executable_name(
+        moraine_platform::HostPlatform::current(),
+        moraine_platform::SuiteComponent::Cli,
+    ));
     fs::write(&cli, b"#!/bin/true\n").unwrap();
     #[cfg(unix)]
     {
@@ -69,7 +74,7 @@ fn shared_provision_apis_usable_from_desktop_crate() {
             .iter()
             .any(|o| o.kind == ProvisionOpKind::SelfTest));
         assert!(!p.plan_id.is_nil());
-        assert!(p.absolute_cli.starts_with('/'));
+        assert!(std::path::Path::new(&p.absolute_cli).is_absolute());
         let outcome = apply(p, &svc).expect("apply");
         assert!(matches!(outcome, ApplyOutcome::DirectVerified { .. }));
         assert_eq!(outcome.receipt().readiness, Readiness::DirectVerified);

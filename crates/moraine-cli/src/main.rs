@@ -285,7 +285,7 @@ On delivery failure, events are written to the local spool (exit 0)."
         json: bool,
     },
 
-    /// Per-user moraine-service lifecycle (systemd --user on Linux)
+    /// Per-user Moraine background-runtime lifecycle
     Service {
         #[command(subcommand)]
         cmd: ServiceSub,

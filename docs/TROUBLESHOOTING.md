@@ -8,27 +8,30 @@ moraine doctor --json
 moraine service status --json
 ```
 
-## Unsupported platform
+## Platform support
 
-Windows, macOS & unknown hosts can inspect Moraine but cannot run
-ProductCapture. Setup, runtime mutation, agent repair & desktop onboarding fail
-closed. A present executable or initialized project does not change that state.
+macOS & unknown hosts can inspect Moraine but cannot run ProductCapture. Setup,
+runtime mutation, agent repair & desktop onboarding fail closed.
 
-Windows compilation is tested; runtime support begins with W2.
+Windows runtime mechanisms work only from a coherent manually staged suite
+until W3 provides installation. Hosted CI exercises setup, Task Scheduler,
+named-pipe capture, repair & rollback; standard-user graphical acceptance
+remains pending.
 
 ## Suite is incomplete
 
 If `doctor` reports missing or incoherent components:
 
 1. Check that `PATH` resolves the CLI from the installed prefix.
-2. Re-run `install.sh` from one release archive.
+2. On Linux, re-run `install.sh` from one release archive. On Windows, stage a
+   coherent suite; no supported installer exists yet.
 3. Run `moraine version --json` & compare suite component versions/hashes.
 
 Do not mix Cargo-built binaries with a release suite.
 
 ## Background capture is unavailable
 
-On supported Linux:
+On Linux or a manually staged Windows suite:
 
 ```bash
 moraine service status --json

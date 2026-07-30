@@ -227,10 +227,11 @@ archive installation.
 
 The full Rust workspace compiles on Windows in required CI. The SID-scoped
 named-pipe transport, current-user Task Scheduler backend & rotating service
-logs are implemented & production-tested on the hosted runner. Windows desktop
-product operation, setup closure, real standard-user acceptance, installation
-& ProductCapture readiness remain unsupported. Capability values stay
-unsupported until W2-D & W2-E close those paths.
+logs are implemented & production-tested on the hosted runner. Shared setup,
+doctor, health, repair, rollback, verification & desktop onboarding now use
+those Windows backends for coherent manually staged suites. Windows
+installation & real standard-user graphical acceptance remain unsupported;
+public runtime support waits for W2-E.
 
 ## Protocol & operations
 

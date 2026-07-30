@@ -9,7 +9,8 @@ Moraine records review activity; it does not render a verdict.
 * Append-only observations, amendments, supersessions & target redaction.
 * Codex hooks plus MCP integration.
 * Background capture, durable spool & rebuildable project discovery.
-* Transactional Linux provisioning, rollback, repair & self-verification.
+* Transactional Linux & staged-Windows provisioning, rollback, repair &
+  self-verification.
 * Linux archive installation with a user-scoped systemd runtime.
 * Platform, path, capture & runtime boundaries.
 * Required Windows workspace compilation with fail-closed product behavior.
@@ -18,13 +19,12 @@ Moraine records review activity; it does not render a verdict.
 
 ### W2; native Windows 11 runtime
 
-Implement the concrete Windows backends already isolated by the platform
-boundary:
+Complete real Windows 11 acceptance for the implemented runtime:
 
-* per-user named-pipe capture sender & listener;
-* user-scoped background-runtime registration;
-* Windows diagnostics, repair, rollback & ProductCapture verification;
 * native desktop lifecycle acceptance on Windows 11.
+* standard non-administrator setup, capture, restart, repair & rollback;
+* cross-account named-pipe denial;
+* sign-out/restart autostart behavior.
 
 W2 does not include a signed installer or WinGet publication.
 

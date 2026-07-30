@@ -17,9 +17,9 @@ Moraine has a supported Linux product with:
 * fail-closed unsupported-host behavior.
 
 Windows paths, SID-scoped named-pipe capture, current-user Task Scheduler
-lifecycle & rotating service logs are implemented. Desktop setup, capability
-promotion, real standard-user acceptance & installation remain unsupported.
-Product capability promotion waits for W2 product closure.
+lifecycle, rotating service logs & shared product control paths are
+implemented. Runtime capabilities are enabled for coherent manually staged
+suites. Real standard-user acceptance & installation remain unsupported.
 
 ## Product invariant
 

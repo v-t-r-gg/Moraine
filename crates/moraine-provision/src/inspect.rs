@@ -284,9 +284,8 @@ mod tests {
             integration_configured: true,
             integration_needs_repair: false,
         }];
-        let platform = moraine_platform::PlatformCapabilities::for_host(
-            moraine_platform::HostPlatform::Windows,
-        );
+        let platform =
+            moraine_platform::PlatformCapabilities::for_host(moraine_platform::HostPlatform::MacOs);
 
         assert_eq!(
             derive_platform_readiness(&platform, &suite, &service, &agents, &projects),

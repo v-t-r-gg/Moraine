@@ -43,10 +43,11 @@ describe("platform Rust/TypeScript contract", () => {
       }
     }
     expect(states[1].serviceRegistration).toBeNull();
-    expect(states[1].captureEndpoint.kind).toBe("unsupported");
-    expect(states[1].capabilities.backgroundRuntime).not.toBe("supported");
+    expect(states[1].captureEndpoint.kind).toBe("windows_named_pipe");
+    expect(states[1].capabilities.backgroundRuntime).toBe("supported");
+    expect(states[1].capabilities.userInstallation).toBe("unsupported");
     expect(states[0].runtime.captureReady).toBe(true);
-    expect(states[1].runtime.backend).toBe("unsupported");
-    expect(states[1].runtime.supported).toBe(false);
+    expect(states[1].runtime.backend).toBe("windows_task_scheduler");
+    expect(states[1].runtime.supported).toBe(true);
   });
 });

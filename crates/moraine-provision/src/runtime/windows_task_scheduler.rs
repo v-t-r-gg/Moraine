@@ -988,7 +988,7 @@ impl BackgroundRuntimeManager for WindowsTaskSchedulerRuntime {
         };
         Ok(BackgroundRuntimeState {
             backend: BackgroundRuntimeBackend::WindowsTaskScheduler,
-            supported: false,
+            supported: true,
             installed: registration_present,
             binary_present,
             registration_present,
@@ -1003,13 +1003,13 @@ impl BackgroundRuntimeManager for WindowsTaskSchedulerRuntime {
             version,
             last_result,
             status_message: if running {
-                "Background capture is running in an unsupported Windows preview".into()
+                "Background capture is running".into()
+            } else if registration_present && !registration_valid {
+                "Background capture registration needs repair".into()
             } else if registration_present {
-                "Background capture is registered but Windows product setup remains unsupported"
-                    .into()
+                "Background capture is registered but not running".into()
             } else {
-                "Background capture is not registered; Windows product setup remains unsupported"
-                    .into()
+                "Background capture is not set up".into()
             },
             platform: "windows".into(),
             registration: state,

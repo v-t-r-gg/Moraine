@@ -6,11 +6,8 @@ import type {
 
 export interface ProductCaptureSupport {
   supported: boolean;
-  reason:
-    | "supported"
-    | "capture_unsupported"
-    | "runtime_unsupported"
-    | "installation_unsupported";
+  reason: "supported" | "capture_unsupported" | "runtime_unsupported";
+  distributionSupported: boolean;
 }
 
 export interface DesktopProductSupport extends ProductCaptureSupport {
@@ -30,15 +27,14 @@ export function deriveDesktopProductSupport(
     ? "capture_unsupported"
     : !isSupported(capabilities.backgroundRuntime)
       ? "runtime_unsupported"
-      : !isSupported(capabilities.userInstallation)
-        ? "installation_unsupported"
-        : "supported";
+      : "supported";
   const supported = reason === "supported";
   const desktopSupported = supported && isSupported(capabilities.desktopHost);
   return {
     host: capabilities.host,
     supported,
     desktopSupported,
+    distributionSupported: isSupported(capabilities.userInstallation),
     reason,
     message: desktopSupported
       ? "Moraine background capture is supported."

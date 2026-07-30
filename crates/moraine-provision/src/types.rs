@@ -667,7 +667,10 @@ mod compatibility_tests {
             BackgroundRuntimeBackend::LinuxSystemdUser
         );
         assert!(states[0].capture_ready);
-        assert_eq!(states[1].backend, BackgroundRuntimeBackend::Unsupported);
-        assert!(!states[1].supported);
+        assert_eq!(
+            states[1].backend,
+            BackgroundRuntimeBackend::WindowsTaskScheduler
+        );
+        assert!(states[1].supported);
     }
 }

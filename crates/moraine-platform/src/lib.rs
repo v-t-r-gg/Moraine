@@ -101,9 +101,9 @@ impl PlatformCapabilities {
                 host,
                 user_paths: CapabilityStatus::Supported,
                 suite_layout: CapabilityStatus::Supported,
-                capture_transport: CapabilityStatus::Unsupported,
-                background_runtime: CapabilityStatus::Unsupported,
-                desktop_host: CapabilityStatus::Unsupported,
+                capture_transport: CapabilityStatus::Supported,
+                background_runtime: CapabilityStatus::Supported,
+                desktop_host: CapabilityStatus::Supported,
                 user_installation: CapabilityStatus::Unsupported,
             },
             HostPlatform::MacOs | HostPlatform::Other => Self {
@@ -510,7 +510,10 @@ mod tests {
             assert!(!relative.contains(".desktop"));
             assert!(!relative.contains("moraine-service.sock"));
         }
-        assert!(!PlatformCapabilities::for_host(HostPlatform::Windows).product_ready_supported());
+        let capabilities = PlatformCapabilities::for_host(HostPlatform::Windows);
+        assert!(capabilities.product_ready_supported());
+        assert!(capabilities.desktop_runtime_supported());
+        assert!(!capabilities.distribution_supported());
     }
 
     #[test]
@@ -528,7 +531,7 @@ mod tests {
         );
         assert_eq!(
             PlatformCapabilities::for_host(HostPlatform::Windows).capture_transport,
-            CapabilityStatus::Unsupported
+            CapabilityStatus::Supported
         );
     }
 
@@ -589,8 +592,12 @@ mod tests {
         ));
         assert_eq!(states[1].capabilities.host, HostPlatform::Windows);
         assert_eq!(states[1].service_registration, None);
-        assert_eq!(states[1].capture_endpoint, CaptureEndpoint::Unsupported);
-        assert!(!states[1].capabilities.product_ready_supported());
+        assert!(matches!(
+            states[1].capture_endpoint,
+            CaptureEndpoint::WindowsNamedPipe(_)
+        ));
+        assert!(states[1].capabilities.product_ready_supported());
+        assert!(!states[1].capabilities.distribution_supported());
         assert_eq!(states[2].capabilities.host, HostPlatform::Other);
     }
 

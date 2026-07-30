@@ -141,16 +141,16 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
-    fn windows_host_selects_task_scheduler_without_promoting_capabilities() {
+    fn windows_host_selects_supported_task_scheduler_runtime() {
         let runtime = background_runtime_manager_for_host(HostPlatform::Windows);
         let state = runtime.inspect().unwrap();
         assert_eq!(
             state.backend,
             BackgroundRuntimeBackend::WindowsTaskScheduler
         );
-        assert!(!state.supported);
+        assert!(state.supported);
         assert!(
-            !moraine_platform::PlatformCapabilities::for_host(HostPlatform::Windows)
+            moraine_platform::PlatformCapabilities::for_host(HostPlatform::Windows)
                 .runtime_capture_supported()
         );
     }

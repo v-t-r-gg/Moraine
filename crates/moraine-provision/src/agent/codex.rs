@@ -366,7 +366,12 @@ fn extract_command_from_toml(cfg: &str) -> Option<String> {
         }
         if in_block && t.starts_with("command") {
             if let Some(rest) = t.split_once('=') {
-                let v = rest.1.trim().trim_matches('"').to_string();
+                let encoded = rest.1.trim();
+                // Moraine writes a TOML basic string whose escaping is compatible
+                // with a JSON string. Decode it before treating Windows
+                // backslashes as a filesystem path.
+                let v = serde_json::from_str::<String>(encoded)
+                    .unwrap_or_else(|_| encoded.trim_matches('"').to_string());
                 if !v.is_empty() {
                     return Some(v);
                 }
@@ -527,5 +532,18 @@ mod tests {
         assert!(out.contains("foo = 1"));
         assert!(out.contains("bar = 2"));
         assert!(!out.contains("mcp_servers.moraine"));
+    }
+
+    #[test]
+    fn extracts_escaped_windows_command_as_a_path() {
+        let config = r#"
+[mcp_servers.moraine]
+command = "\\\\?\\C:\\Program Files\\Moraine\\moraine.exe"
+args = ["mcp"]
+"#;
+        assert_eq!(
+            extract_command_from_toml(config).as_deref(),
+            Some(r"\\?\C:\Program Files\Moraine\moraine.exe")
+        );
     }
 }

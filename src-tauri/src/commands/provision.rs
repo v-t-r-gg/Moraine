@@ -179,8 +179,18 @@ mod tests {
     use moraine_platform::{HostPlatform, PlatformCapabilities};
 
     #[test]
-    fn desktop_product_mutations_fail_closed_on_unsupported_hosts() {
+    fn windows_desktop_product_mutations_are_enabled() {
         let capabilities = PlatformCapabilities::for_host(HostPlatform::Windows);
+        ensure_desktop_product_setup_supported_with_capabilities(
+            "desktop_provision_apply",
+            &capabilities,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn desktop_product_mutations_fail_closed_on_unsupported_hosts() {
+        let capabilities = PlatformCapabilities::for_host(HostPlatform::MacOs);
         let error = ensure_desktop_product_setup_supported_with_capabilities(
             "desktop_provision_apply",
             &capabilities,

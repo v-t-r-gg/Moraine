@@ -238,6 +238,7 @@ mod tests {
                 binary_path: Some("/tmp/moraine-service".into()),
                 unit_path: Some("/tmp/moraine-service.service".into()),
                 version: Some("0.1.0".into()),
+                last_result: None,
                 status_message: "ready".into(),
                 platform: "test".into(),
                 registration: None,

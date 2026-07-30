@@ -298,6 +298,7 @@ pub fn default_prefix(host: HostPlatform) -> PathBuf {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeLayout {
     pub spool_dir: PathBuf,
+    pub log_dir: PathBuf,
     pub project_registry: PathBuf,
     pub transaction_journals: PathBuf,
     pub diagnostics_endpoint: SocketAddr,
@@ -324,8 +325,15 @@ impl RuntimeLayout {
                 .unwrap_or(CaptureEndpoint::Unsupported),
             HostPlatform::MacOs | HostPlatform::Other => CaptureEndpoint::Unsupported,
         };
+        let log_dir = match host {
+            HostPlatform::Windows => users.cache_dir.join("Moraine/logs"),
+            HostPlatform::Linux | HostPlatform::MacOs | HostPlatform::Other => {
+                users.data_dir.join("moraine/logs")
+            }
+        };
         Self {
             spool_dir: users.cache_dir.join("moraine-service/spool"),
+            log_dir,
             project_registry: users.data_dir.join("moraine/projects.json"),
             transaction_journals: users.data_dir.join("moraine/setup-transactions"),
             diagnostics_endpoint: SocketAddr::new(
@@ -468,6 +476,7 @@ mod tests {
             runtime.spool_dir,
             users.cache_dir.join("moraine-service/spool")
         );
+        assert_eq!(runtime.log_dir, users.data_dir.join("moraine/logs"));
         assert_eq!(
             runtime.capture_endpoint,
             CaptureEndpoint::UnixSocket(users.runtime_dir.join("moraine-service.sock"))
@@ -492,6 +501,7 @@ mod tests {
         assert_eq!(suite.service_registration, None);
         assert_eq!(suite.desktop_registration, None);
         assert_eq!(runtime.capture_endpoint, CaptureEndpoint::Unsupported);
+        assert_eq!(runtime.log_dir, users.cache_dir.join("Moraine/logs"));
         for path in [&suite.cli, &suite.service, &suite.desktop] {
             let relative = path.strip_prefix(&prefix).unwrap().display().to_string();
             assert!(!relative.contains(".local"));

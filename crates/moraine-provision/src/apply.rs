@@ -168,9 +168,9 @@ pub fn apply_with_options_and_capabilities(
                     // still return an error, so rollback must treat the attempt as real.
                     receipt.transaction_wrote_unit = true;
                     journal::write_journal(&receipt)?;
-                    service.install_runtime(&crate::runtime::RuntimeInstallSpec::discover(
+                    service.install_runtime(&crate::runtime::RuntimeInstallSpec::try_discover(
                         bin.clone(),
-                    ))?;
+                    )?)?;
                     Ok(format!("installed service from {}", bin.display()))
                 }
                 ProvisionOpKind::EnableAutostart => {

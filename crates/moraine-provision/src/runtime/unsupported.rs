@@ -42,6 +42,7 @@ impl super::BackgroundRuntimeManager for UnsupportedRuntimeManager {
             binary_path: None,
             unit_path: None,
             version: None,
+            last_result: None,
             status_message: format!("Background capture is not supported on {:?} yet", self.host),
             platform: format!("{:?}", self.host).to_lowercase(),
         })

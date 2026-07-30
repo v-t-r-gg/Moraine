@@ -121,6 +121,7 @@ impl super::BackgroundRuntimeManager for MemoryRuntimeManager {
             binary_path: g.binary.as_ref().map(|p| p.display().to_string()),
             unit_path,
             version: None,
+            last_result: None,
             status_message: if g.running {
                 "Background capture is running".into()
             } else if registration_present {
@@ -197,7 +198,11 @@ impl super::BackgroundRuntimeManager for MemoryRuntimeManager {
     }
 
     fn restore_registration(&self, snapshot: &RuntimeRegistrationSnapshot) -> Result<()> {
-        let RuntimeRegistrationSnapshot::File(snapshot) = snapshot;
+        let RuntimeRegistrationSnapshot::File(snapshot) = snapshot else {
+            return Err(crate::ProvisionError::Service(
+                "memory runtime cannot restore a non-file registration snapshot".into(),
+            ));
+        };
         crate::snapshot::restore_snapshot(snapshot)?;
         let mut inner = self.inner.lock().unwrap();
         inner.reload_count = inner.reload_count.saturating_add(1);

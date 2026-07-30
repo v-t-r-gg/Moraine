@@ -1,4 +1,5 @@
 //! Drive shipped provisioning APIs: product verify, write-ahead apply, rollback.
+#![cfg(target_os = "linux")]
 
 use std::fs;
 use std::path::{Path, PathBuf};

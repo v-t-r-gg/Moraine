@@ -204,8 +204,8 @@ pub fn repair(action: &RepairAction, service: &dyn ServiceManager) -> Result<Rep
                 })
             });
             match bin {
-                Some(b) => match service
-                    .install_runtime(&crate::runtime::RuntimeInstallSpec::discover(b))
+                Some(b) => match crate::runtime::RuntimeInstallSpec::try_discover(b)
+                    .and_then(|spec| service.install_runtime(&spec))
                     .and_then(|_| service.start())
                 {
                     Ok(()) => Ok(RepairResult {

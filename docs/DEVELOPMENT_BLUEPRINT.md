@@ -16,9 +16,10 @@ Moraine has a supported Linux product with:
 * required Windows workspace compilation;
 * fail-closed unsupported-host behavior.
 
-Windows paths are modeled. The SID-scoped named-pipe capture backend is
-implemented, but Windows runtime registration, desktop lifecycle & installation
-remain unsupported. Capture capability promotion waits for W2 product closure.
+Windows paths, SID-scoped named-pipe capture, current-user Task Scheduler
+lifecycle & rotating service logs are implemented. Desktop setup, capability
+promotion, real standard-user acceptance & installation remain unsupported.
+Product capability promotion waits for W2 product closure.
 
 ## Product invariant
 
@@ -59,11 +60,10 @@ W2 supplies concrete Windows backends without reopening shared orchestration.
 
 ### Background runtime
 
-* Use Task Scheduler 2.0 through native COM as the selected user-scoped,
-  no-admin registration mechanism.
-* Implement inspect, install, uninstall, start, stop, restart, autostart & logs
-  behind the existing runtime manager.
-* Capture & restore exact registration state transactionally.
+* Keep Task Scheduler 2.0 COM operations on dedicated MTA workers.
+* Retain production-backed inspect, install, uninstall, start, stop, restart,
+  trigger-based autostart & application-log behavior.
+* Preserve exact Task Scheduler-returned XML plus ACL restoration.
 * Preserve prior running & autostart state through failed setup.
 * Return stable unsupported or unavailable states when host facilities are
   missing.

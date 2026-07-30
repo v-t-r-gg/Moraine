@@ -270,15 +270,41 @@ SHA-256(UTF-8(returned XML) + NUL + UTF-8(returned SDDL))
 ```
 
 Always re-read the registered task before hashing; Task Scheduler may normalize
-the supplied definition.
+the supplied definition. In particular, returned XML may omit
+`RunLevel=LeastPrivilege` & false-valued settings when they are Task Scheduler
+defaults. Validation accepts those omissions, requires every non-default
+contract value & rejects inverse values that would elevate or constrain the
+runtime.
+
+Task Scheduler may also omit the optional registration URI from returned XML.
+Moraine still supplies the URI as metadata, but returned-state identity is
+proved by the exact SID-qualified task path, current-account principal & task
+ACL rather than by URI preservation.
+
+Registration validity parses the returned task definition & effective security
+descriptor. A valid Moraine registration has exactly one current-account
+interactive-token principal, one current-account logon trigger & one direct
+executable action. Moraine supplies a protected DACL, but Task Scheduler
+normalizes the returned descriptor without retaining that control bit, even
+when it is reapplied through `SetSecurityDescriptor`. Initial registration also
+adds a scheduler ACE, so the backend reapplies the explicit allowlist to the
+registered task. Task Scheduler then adds one read-only ACE for the task owner;
+the COM task security API does not remove it. Validation requires exactly two
+principals: full access for the current account & LocalSystem, plus at most that
+normalized current-account read ACE. Deny ACEs, inherited ACEs & additional
+principals are invalid.
 
 Restoration must stop & delete the current registration, then register the
-captured Task Scheduler-returned XML without separately overriding its embedded
-security descriptor. Passing both captured XML & SDDL makes Task Scheduler
-rewrite the XML representation even when the effective ACL is unchanged.
-Re-read XML & SDDL, verify the combined fingerprint, then restore prior
+captured Task Scheduler-returned XML without separately applying the captured
+SDDL; the normalized XML already embeds it, while supplying both changes the
+returned XML. Re-read XML & SDDL, verify the combined fingerprint, then restore prior
 autostart & running state. Exact absence is restored by deletion. Any unproven
 restoration yields `RollbackRequired`.
+
+Stopping is a bounded proof, not a best-effort request. Stop, restart, delete,
+uninstall & restoration all request termination of the exact task then poll its
+running-instance collection until empty. Registration deletion or replacement
+does not begin until termination is proven.
 
 ## Named-pipe capture
 

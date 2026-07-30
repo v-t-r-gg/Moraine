@@ -6,6 +6,7 @@
 use anyhow::Result;
 use moraine_provision::BackgroundRuntimeManager;
 use serde_json::json;
+use std::path::Path;
 
 use crate::doctor;
 use crate::suite::{collect_version_report, SuitePaths};
@@ -70,37 +71,22 @@ pub fn setup_post_install(json: bool) -> Result<i32> {
 
     // Install/repair unit when suite service binary exists
     if suite.service.is_file() {
-        let registration = runtime.capture_registration()?;
-        let spec = moraine_provision::RuntimeInstallSpec::try_discover(suite.service.clone())?;
-        let setup_result = (|| -> moraine_provision::Result<()> {
-            runtime.install_runtime(&spec)?;
-            runtime.start()?;
-            let readiness = moraine_provision::default_service_probe()
-                .wait_ready(moraine_provision::default_service_ready_timeout_ms());
-            if !readiness.ready {
-                return Err(moraine_provision::ProvisionError::Service(
-                    readiness.message,
-                ));
-            }
-            Ok(())
-        })();
-        match setup_result {
-            Ok(()) => actions.push(
-                suite
-                    .service_registration
-                    .as_ref()
-                    .map(|path| format!("service unit → {}", path.display()))
-                    .unwrap_or_else(|| "background runtime registration installed".into()),
-            ),
-            Err(error) => {
-                let restoration =
-                    restore_runtime_prestate(runtime.as_ref(), &registration, &initial_state);
-                warnings.push(format!("background runtime setup: {error}"));
-                if let Err(restore_error) = restoration {
-                    warnings.push(format!(
-                        "runtime restoration requires attention: {restore_error}"
-                    ));
+        match setup_runtime(runtime.as_ref(), &suite.service) {
+            Ok(registration_changed) => {
+                if registration_changed {
+                    actions.push(
+                        suite
+                            .service_registration
+                            .as_ref()
+                            .map(|path| format!("service unit → {}", path.display()))
+                            .unwrap_or_else(|| "background runtime registration installed".into()),
+                    );
+                } else {
+                    actions.push("background runtime registration already valid".into());
                 }
+            }
+            Err(error) => {
+                warnings.push(format!("background runtime setup: {error}"));
                 if json {
                     println!(
                         "{}",
@@ -218,20 +204,102 @@ Automation:\n  moraine enable --project /path/to/repo\n  moraine self-test --pro
     })
 }
 
-fn restore_runtime_prestate(
+fn setup_runtime(
     runtime: &dyn BackgroundRuntimeManager,
-    registration: &moraine_provision::RuntimeRegistrationSnapshot,
-    state: &moraine_provision::BackgroundRuntimeState,
-) -> moraine_provision::Result<()> {
-    runtime.stop()?;
-    runtime.restore_registration(registration)?;
-    if state.autostart_enabled {
-        runtime.enable_autostart()?;
-    } else if state.registration_present {
-        runtime.disable_autostart()?;
+    executable: &Path,
+) -> moraine_provision::Result<bool> {
+    let probe = moraine_provision::default_service_probe();
+    setup_runtime_with_probe(runtime, executable, probe.as_ref())
+}
+
+fn setup_runtime_with_probe(
+    runtime: &dyn BackgroundRuntimeManager,
+    executable: &Path,
+    probe: &dyn moraine_provision::ServiceProbe,
+) -> moraine_provision::Result<bool> {
+    let prestate = moraine_provision::capture_runtime_prestate(runtime)?;
+    let registration_changed = !prestate.state.registration_valid;
+    let result = (|| {
+        if registration_changed {
+            let spec = moraine_provision::RuntimeInstallSpec::try_discover(executable)?;
+            runtime.install_runtime(&spec)?;
+            if prestate.state.autostart_enabled {
+                runtime.enable_autostart()?;
+            }
+        }
+
+        if prestate.state.running {
+            if !(prestate.state.diagnostics_ready && prestate.state.capture_ready) {
+                runtime.restart()?;
+            }
+        } else {
+            runtime.start()?;
+        }
+
+        let readiness = probe.wait_ready(moraine_provision::default_service_ready_timeout_ms());
+        if !readiness.ready {
+            return Err(moraine_provision::ProvisionError::Service(
+                readiness.message,
+            ));
+        }
+        Ok(())
+    })();
+
+    match result {
+        Ok(()) => Ok(registration_changed),
+        Err(error) => match moraine_provision::restore_runtime_prestate(runtime, &prestate) {
+            Ok(()) => Err(error),
+            Err(restoration) => Err(moraine_provision::ProvisionError::Service(format!(
+                "{error}; manual restoration required: {restoration}"
+            ))),
+        },
     }
-    if state.running {
-        runtime.start()?;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use moraine_provision::{
+        AlwaysOfflineProbe, AlwaysReadyProbe, BackgroundRuntimeManager, MemoryRuntimeManager,
+    };
+
+    #[test]
+    fn setup_keeps_valid_registration_and_enabled_autostart() {
+        let temp = tempfile::tempdir().unwrap();
+        let executable = temp.path().join("moraine-service");
+        std::fs::write(&executable, b"service").unwrap();
+        let unit = temp.path().join("moraine.service");
+        let runtime = MemoryRuntimeManager::with_unit_path(unit);
+        runtime.install(&executable).unwrap();
+        runtime.enable_autostart().unwrap();
+        runtime.start().unwrap();
+        let before = runtime.registration_fingerprint().unwrap();
+        let counts_before = runtime.operation_counts();
+
+        let changed =
+            setup_runtime_with_probe(&runtime, &executable, &AlwaysReadyProbe { version: None })
+                .unwrap();
+
+        assert!(!changed);
+        assert!(runtime.inspect().unwrap().autostart_enabled);
+        assert_eq!(runtime.registration_fingerprint().unwrap(), before);
+        assert_eq!(runtime.operation_counts().0, counts_before.0);
     }
-    Ok(())
+
+    #[test]
+    fn failed_setup_restores_exact_registration_absence() {
+        let temp = tempfile::tempdir().unwrap();
+        let executable = temp.path().join("moraine-service");
+        std::fs::write(&executable, b"service").unwrap();
+        let unit = temp.path().join("moraine.service");
+        let runtime = MemoryRuntimeManager::with_unit_path(unit.clone());
+
+        let error =
+            setup_runtime_with_probe(&runtime, &executable, &AlwaysOfflineProbe).unwrap_err();
+
+        assert!(error.to_string().contains("not ready"));
+        assert!(!unit.exists());
+        assert_eq!(runtime.registration_fingerprint().unwrap(), None);
+        assert!(!runtime.inspect().unwrap().running);
+    }
 }

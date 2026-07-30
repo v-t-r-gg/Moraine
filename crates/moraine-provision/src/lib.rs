@@ -45,9 +45,10 @@ pub use runtime::windows_task_scheduler::{
     registration_fingerprint, render_task_xml, WindowsTaskIdentity, WindowsTaskSchedulerRuntime,
 };
 pub use runtime::{
-    background_runtime_manager_for_host, default_background_runtime_manager,
-    default_service_manager, BackgroundRuntimeManager, LinuxSystemdUserRuntime,
-    LinuxSystemdUserService, MemoryRuntimeManager, MemoryServiceManager, RuntimeInstallSpec,
+    background_runtime_manager_for_host, capture_runtime_prestate,
+    default_background_runtime_manager, default_service_manager, restore_runtime_prestate,
+    BackgroundRuntimeManager, LinuxSystemdUserRuntime, LinuxSystemdUserService,
+    MemoryRuntimeManager, MemoryServiceManager, RuntimeInstallSpec, RuntimePrestate,
     ServiceManager, UnavailableRuntimeManager, UnsupportedRuntimeManager,
 };
 pub use service_ready::{

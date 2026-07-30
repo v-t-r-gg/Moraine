@@ -86,6 +86,59 @@ pub trait BackgroundRuntimeManager: Send + Sync {
     fn logs(&self, limit: usize) -> Result<Vec<ServiceLog>>;
 }
 
+/// Exact registration plus lifecycle state captured before a runtime mutation.
+#[derive(Debug, Clone)]
+pub struct RuntimePrestate {
+    pub registration: RuntimeRegistrationSnapshot,
+    pub registration_fingerprint: Option<String>,
+    pub state: BackgroundRuntimeState,
+}
+
+pub fn capture_runtime_prestate(runtime: &dyn BackgroundRuntimeManager) -> Result<RuntimePrestate> {
+    let state = runtime.inspect()?;
+    let registration = runtime.capture_registration()?;
+    let registration_fingerprint = runtime.registration_fingerprint()?;
+    Ok(RuntimePrestate {
+        registration,
+        registration_fingerprint,
+        state,
+    })
+}
+
+/// Restore registration exactly, then restore lifecycle state that is not
+/// represented by the registration snapshot.
+pub fn restore_runtime_prestate(
+    runtime: &dyn BackgroundRuntimeManager,
+    prestate: &RuntimePrestate,
+) -> Result<()> {
+    runtime.stop()?;
+    runtime.restore_registration(&prestate.registration)?;
+
+    // systemd enablement is separate from the unit-file snapshot. The Windows
+    // logon trigger is part of the captured Task Scheduler XML and must not be
+    // rewritten after exact restoration.
+    if matches!(&prestate.registration, RuntimeRegistrationSnapshot::File(_)) {
+        if prestate.state.autostart_enabled {
+            runtime.enable_autostart()?;
+        } else if prestate.state.registration_present {
+            runtime.disable_autostart()?;
+        }
+    }
+
+    let restored_fingerprint = runtime.registration_fingerprint()?;
+    if restored_fingerprint != prestate.registration_fingerprint {
+        return Err(crate::ProvisionError::Service(format!(
+            "manual restoration required: runtime registration fingerprint differs after restore (expected {:?}, got {:?})",
+            prestate.registration_fingerprint, restored_fingerprint
+        )));
+    }
+
+    if prestate.state.running {
+        runtime.start()?;
+    }
+    Ok(())
+}
+
 pub fn background_runtime_manager_for_host(
     host: HostPlatform,
 ) -> Arc<dyn BackgroundRuntimeManager> {
@@ -171,5 +224,46 @@ mod tests {
             runtime.inspect().unwrap().backend,
             BackgroundRuntimeBackend::LinuxSystemdUser
         );
+    }
+
+    #[test]
+    fn runtime_prestate_restores_existing_registration_fingerprint() {
+        let temp = tempfile::tempdir().unwrap();
+        let unit = temp.path().join("runtime.registration");
+        let executable = temp.path().join("moraine-service");
+        std::fs::write(&unit, b"exact prior registration").unwrap();
+        std::fs::write(&executable, b"service").unwrap();
+        let runtime = MemoryRuntimeManager::with_unit_path(unit.clone());
+        let prestate = capture_runtime_prestate(&runtime).unwrap();
+
+        runtime.install(&executable).unwrap();
+        assert_ne!(
+            runtime.registration_fingerprint().unwrap(),
+            prestate.registration_fingerprint
+        );
+        restore_runtime_prestate(&runtime, &prestate).unwrap();
+
+        assert_eq!(
+            runtime.registration_fingerprint().unwrap(),
+            prestate.registration_fingerprint
+        );
+        assert_eq!(std::fs::read(&unit).unwrap(), b"exact prior registration");
+    }
+
+    #[test]
+    fn runtime_prestate_restores_registration_absence() {
+        let temp = tempfile::tempdir().unwrap();
+        let unit = temp.path().join("runtime.registration");
+        let executable = temp.path().join("moraine-service");
+        std::fs::write(&executable, b"service").unwrap();
+        let runtime = MemoryRuntimeManager::with_unit_path(unit.clone());
+        let prestate = capture_runtime_prestate(&runtime).unwrap();
+
+        runtime.install(&executable).unwrap();
+        assert!(unit.exists());
+        restore_runtime_prestate(&runtime, &prestate).unwrap();
+
+        assert!(!unit.exists());
+        assert_eq!(runtime.registration_fingerprint().unwrap(), None);
     }
 }

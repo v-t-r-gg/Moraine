@@ -21,7 +21,8 @@ use windows::Win32::Security::{
     AclSizeInformation, EqualSid, GetAce, GetAclInformation, GetSecurityDescriptorControl,
     GetSecurityDescriptorDacl, GetSecurityDescriptorOwner, LookupAccountNameW,
     ACL_SIZE_INFORMATION, DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
-    PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED, SID_NAME_USE,
+    PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED,
+    SID_NAME_USE,
 };
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
@@ -248,8 +249,12 @@ impl TaskSchedulerSession {
         let Some(task) = self.get(identity)? else {
             return Ok(None);
         };
-        let security_information =
-            (OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION).0 as i32;
+        // Task Scheduler returns the descriptor control bits only when the
+        // protected-DACL information class is requested explicitly.
+        let security_information = (OWNER_SECURITY_INFORMATION
+            | DACL_SECURITY_INFORMATION
+            | PROTECTED_DACL_SECURITY_INFORMATION)
+            .0 as i32;
         unsafe {
             Ok(Some(TaskRegistration {
                 xml: task

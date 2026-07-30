@@ -786,7 +786,7 @@ impl BackgroundRuntimeManager for WindowsTaskSchedulerRuntime {
                 WindowsTaskSnapshotState::Absent => Ok(()),
                 WindowsTaskSnapshotState::Existing {
                     xml,
-                    security_descriptor,
+                    security_descriptor: _,
                     fingerprint,
                 } => {
                     // Returned Task Scheduler XML embeds the normalized descriptor.

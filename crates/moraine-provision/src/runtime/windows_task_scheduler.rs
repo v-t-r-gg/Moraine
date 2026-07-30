@@ -281,7 +281,8 @@ impl TaskSchedulerSession {
             .map(|value| VARIANT::from(BSTR::from(value)))
             .unwrap_or_default();
         unsafe {
-            self.root
+            let task = self
+                .root
                 .RegisterTask(
                     &BSTR::from(&identity.task_name),
                     &BSTR::from(xml),
@@ -291,7 +292,15 @@ impl TaskSchedulerSession {
                     TASK_LOGON_INTERACTIVE_TOKEN,
                     &security,
                 )
-                .map_err(task_error("register current-user Task Scheduler task"))
+                .map_err(task_error("register current-user Task Scheduler task"))?;
+            if let Some(sddl) = sddl {
+                // RegisterTask normalizes the task definition and may discard
+                // descriptor control bits. Apply the protected descriptor to
+                // the registered object before validating its effective ACL.
+                task.SetSecurityDescriptor(&BSTR::from(sddl), 0)
+                    .map_err(task_error("protect Task Scheduler task descriptor"))?;
+            }
+            Ok(task)
         }
     }
 
@@ -1131,12 +1140,10 @@ impl BackgroundRuntimeManager for WindowsTaskSchedulerRuntime {
                 WindowsTaskSnapshotState::Absent => Ok(()),
                 WindowsTaskSnapshotState::Existing {
                     xml,
-                    security_descriptor: _,
+                    security_descriptor,
                     fingerprint,
                 } => {
-                    // Returned Task Scheduler XML embeds the normalized descriptor.
-                    // Reapplying a separate SDDL changes the returned XML.
-                    session.register(&identity, &xml, None)?;
+                    session.register(&identity, &xml, Some(&security_descriptor))?;
                     let restored = session.read(&identity)?.ok_or_else(|| {
                         ProvisionError::RollbackRequired(
                             "restored Windows task is absent".into(),

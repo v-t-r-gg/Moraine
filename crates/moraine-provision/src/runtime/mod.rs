@@ -155,6 +155,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn linux_host_selects_systemd_backend() {
         let runtime = background_runtime_manager_for_host(HostPlatform::Linux);

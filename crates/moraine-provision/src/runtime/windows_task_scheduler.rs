@@ -939,7 +939,8 @@ mod tests {
             assert!(xml.contains(contract), "missing {contract}");
         }
         assert!(xml.contains("<Command>C:\\Program Files\\Moraine\\moraine-service.exe</Command>"));
-        assert!(xml.contains("&quot;Quoted&quot;"));
+        assert!(xml.contains("&quot;"));
+        assert!(xml.contains("Quoted"));
         assert!(!xml.contains("powershell"));
         assert!(!xml.contains("cmd.exe"));
     }

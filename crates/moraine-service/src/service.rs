@@ -286,6 +286,9 @@ fn process_mechanical_value(value: &Value) -> Result<()> {
                     p.get("prompt")
                         .or_else(|| p.get("text"))
                         .or_else(|| p.get("initialTask"))
+                        // Privacy-preserving adapters may supply a bounded marker
+                        // instead of the full prompt body.
+                        .or_else(|| p.get("objectiveHint"))
                 })
                 .and_then(|s| s.as_str())
                 .map(|s| s.to_string());

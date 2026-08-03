@@ -1,7 +1,9 @@
 //! Agent integration adapters (detect / plan / apply / verify / remove).
 
+mod claude_code;
 mod codex;
 
+pub use claude_code::ClaudeCodeAdapter;
 pub use codex::CodexAdapter;
 
 use std::path::Path;
@@ -129,9 +131,13 @@ pub trait AgentAdapter: Send + Sync {
 pub fn adapter_for(kind: AgentKind) -> Arc<dyn AgentAdapter> {
     match kind {
         AgentKind::Codex => Arc::new(CodexAdapter::new()),
+        AgentKind::ClaudeCode => Arc::new(ClaudeCodeAdapter::new()),
     }
 }
 
 pub fn all_adapters() -> Vec<Arc<dyn AgentAdapter>> {
-    vec![Arc::new(CodexAdapter::new())]
+    vec![
+        Arc::new(CodexAdapter::new()),
+        Arc::new(ClaudeCodeAdapter::new()),
+    ]
 }

@@ -7,6 +7,7 @@
 mod capture;
 mod codex_setup;
 mod doctor;
+mod hook_claude_code;
 mod hook_codex;
 mod relay;
 mod run_cli;
@@ -265,6 +266,27 @@ On delivery failure, events are written to the local spool (exit 0)."
         spool_dir: Option<PathBuf>,
     },
 
+    /// Claude Code lifecycle hook adapter (stdin JSON → local service / spool)
+    #[command(
+        name = "hook-claude-code",
+        after_help = "Intended for Claude Code .claude/settings.json command handlers.\n\
+Reads Claude Code hook JSON from stdin, maps SessionStart / UserPromptSubmit / Stop\n\
+to Moraine mechanical events, and delivers them to the local capture endpoint.\n\
+Full prompts and assistant messages are not stored by default.\n\
+On delivery failure, events are written to the local spool (exit 0)."
+    )]
+    HookClaudeCode {
+        /// Unix socket path (default: $MORAINE_SOCKET or $XDG_RUNTIME_DIR/moraine-service.sock)
+        #[arg(long)]
+        socket: Option<PathBuf>,
+        /// Windows named pipe (default: SID-scoped Moraine capture pipe)
+        #[arg(long)]
+        named_pipe: Option<String>,
+        /// Spool directory used when the service is unavailable
+        #[arg(long)]
+        spool_dir: Option<PathBuf>,
+    },
+
     /// Product version and installed-suite identity
     Version {
         #[arg(long)]
@@ -329,7 +351,7 @@ Exit 0 only when verification reports Ready."
     SelfTest {
         #[arg(long)]
         project: PathBuf,
-        /// Integration adapter (currently only: codex)
+        /// Integration adapter: codex | claude-code
         #[arg(long, default_value = "codex")]
         integration: String,
         /// Skip background-service checks (still verifies direct capture + discovery)
@@ -409,6 +431,20 @@ enum SetupSub {
 enum IntegrateSub {
     /// Configure project-scoped Codex hooks & local MCP
     Codex {
+        #[arg(long)]
+        project: PathBuf,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        check: bool,
+        #[arg(long)]
+        remove: bool,
+    },
+    /// Configure project-scoped Claude Code MCP & lifecycle hooks
+    #[command(name = "claude-code")]
+    ClaudeCode {
         #[arg(long)]
         project: PathBuf,
         #[arg(long)]
@@ -508,6 +544,11 @@ fn run() -> Result<i32> {
             named_pipe,
             spool_dir,
         } => hook_codex::run_hook_codex(socket, named_pipe, spool_dir),
+        Commands::HookClaudeCode {
+            socket,
+            named_pipe,
+            spool_dir,
+        } => hook_claude_code::run_hook_claude_code(socket, named_pipe, spool_dir),
         Commands::Version { json, long } => cmd_version(json, long),
         Commands::Doctor {
             project,
@@ -550,7 +591,7 @@ fn cmd_self_test(
     json: bool,
 ) -> Result<i32> {
     let agent = moraine_provision::AgentKind::parse(&integration).ok_or_else(|| {
-        anyhow::anyhow!("unsupported integration '{integration}' (supported: codex)")
+        anyhow::anyhow!("unsupported integration '{integration}' (supported: codex, claude-code)")
     })?;
     let intent = moraine_provision::SetupIntent {
         project,
@@ -583,7 +624,7 @@ fn cmd_enable(
     json: bool,
 ) -> Result<i32> {
     let agent = moraine_provision::AgentKind::parse(&integration).ok_or_else(|| {
-        anyhow::anyhow!("unsupported integration '{integration}' (supported: codex)")
+        anyhow::anyhow!("unsupported integration '{integration}' (supported: codex, claude-code)")
     })?;
     let intent = moraine_provision::SetupIntent {
         project,
@@ -822,7 +863,119 @@ fn cmd_integrate(cmd: IntegrateSub) -> Result<i32> {
             check,
             remove,
         } => dispatch_codex_integration(&project, dry_run, json, check, remove),
+        IntegrateSub::ClaudeCode {
+            project,
+            dry_run,
+            json,
+            check,
+            remove,
+        } => dispatch_claude_code_integration(&project, dry_run, json, check, remove),
     }
+}
+
+fn dispatch_claude_code_integration(
+    project: &std::path::Path,
+    dry_run: bool,
+    json: bool,
+    check: bool,
+    remove: bool,
+) -> Result<i32> {
+    use moraine_provision::{adapter_for, AgentKind, SuitePaths};
+    let adapter = adapter_for(AgentKind::ClaudeCode);
+    let cli = SuitePaths::discover().absolute_cli();
+    if remove {
+        if dry_run {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "ok": true,
+                        "dryRun": true,
+                        "actions": ["would remove managed Claude Code MCP & hooks"],
+                    })
+                );
+            } else {
+                println!("would remove managed Claude Code MCP & hooks");
+            }
+            return Ok(EXIT_OK);
+        }
+        let snaps = adapter
+            .remove(project)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "ok": true,
+                    "removed": true,
+                    "snapshots": snaps.len(),
+                })
+            );
+        } else {
+            println!(
+                "removed managed Claude Code integration ({} snapshots)",
+                snaps.len()
+            );
+        }
+        return Ok(EXIT_OK);
+    }
+    if check {
+        let report = adapter
+            .verify(project, &cli)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        if json {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        } else {
+            println!(
+                "Claude Code integration: {}",
+                if report.ok { "ok" } else { "needs attention" }
+            );
+            for m in &report.messages {
+                println!("  {m}");
+            }
+        }
+        return Ok(if report.ok { EXIT_OK } else { EXIT_ERR });
+    }
+    if dry_run {
+        let plan = adapter
+            .plan_install(project, &cli)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        if json {
+            println!("{}", serde_json::to_string_pretty(&plan)?);
+        } else {
+            println!("would configure Claude Code:");
+            for a in &plan.actions {
+                println!("  {a}");
+            }
+        }
+        return Ok(EXIT_OK);
+    }
+    // Transactional agent-only apply via shared provision path.
+    let intent = moraine_provision::SetupIntent {
+        project: project.to_path_buf(),
+        agent: AgentKind::ClaudeCode,
+        enable_autostart: false,
+        skip_service: true,
+    };
+    let outcome =
+        moraine_provision::enable_project_default(intent).map_err(|e| anyhow::anyhow!("{e}"))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&outcome)?);
+    } else {
+        println!(
+            "Claude Code integration: {}",
+            if outcome.is_success() {
+                "configured"
+            } else {
+                "failed"
+            }
+        );
+    }
+    Ok(if outcome.is_success() {
+        EXIT_OK
+    } else {
+        EXIT_ERR
+    })
 }
 
 fn dispatch_codex_integration(

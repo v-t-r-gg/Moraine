@@ -130,6 +130,12 @@ describe("OnboardingWizard", () => {
     // Drive wizard through product steps using role queries (stable across re-renders).
     fireEvent.click(screen.getByRole("button", { name: /^Continue$/i }));
     expect(await screen.findByText(/Coding agent/i)).toBeInTheDocument();
+    // Wait for auto-select of the sole detected agent so Continue is enabled.
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /^Continue$/i }),
+      ).not.toBeDisabled();
+    });
     fireEvent.click(screen.getByRole("button", { name: /^Continue$/i }));
     expect(await screen.findByText(/Select a project/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /^Continue$/i }));

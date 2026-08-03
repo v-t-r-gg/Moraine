@@ -61,6 +61,26 @@ export interface TimelineEntryDto {
   provenance?: string | null;
 }
 
+export interface CaptureDimensionDto {
+  dimension: string;
+  capability: string;
+  observation: string;
+  exactCount?: number | null;
+  countIsComplete: boolean;
+  explanation: string;
+}
+
+export interface CaptureFidelityDto {
+  schemaVersion: number;
+  runId: string;
+  integration?: string | null;
+  legacyCoverage: string;
+  provisional: boolean;
+  sessionBound: boolean;
+  dimensions: CaptureDimensionDto[];
+  gaps: { dimension: string; reason: string }[];
+}
+
 export interface RunDetailDto {
   summary: RunSummaryDto;
   timeline: TimelineEntryDto[];
@@ -68,6 +88,7 @@ export interface RunDetailDto {
   objective?: string | null;
   risks: string[];
   openQuestions: string[];
+  captureFidelity?: CaptureFidelityDto | null;
 }
 
 export interface DiscoveryStatusDto {

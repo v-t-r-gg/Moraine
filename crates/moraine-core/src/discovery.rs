@@ -131,6 +131,9 @@ pub struct RunDetail {
     pub risks: Vec<String>,
     #[serde(default)]
     pub open_questions: Vec<String>,
+    /// Shared multi-agent fidelity report when this is a protocol run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_fidelity: Option<crate::agent_protocol::CaptureFidelityReport>,
 }
 
 /// Infer a display name from the project root path.
@@ -454,6 +457,17 @@ pub fn load_run_detail(md_path: &Path, project_id: Uuid) -> RunDetail {
     let timeline = agent
         .map(|a| build_timeline(meta.as_ref().unwrap(), a))
         .unwrap_or_default();
+    let capture_fidelity = if is_protocol {
+        let root = md_path
+            .parent() // runs/
+            .and_then(|p| p.parent()) // .moraine/
+            .and_then(|p| p.parent()) // project root
+            .unwrap_or(Path::new("."));
+        let profile = crate::agent_protocol::capability_profile_for_integration("unknown");
+        crate::agent_protocol::capture_fidelity_report(Some(root), summary.run_id, &profile).ok()
+    } else {
+        None
+    };
     RunDetail {
         summary,
         timeline,
@@ -472,6 +486,7 @@ pub fn load_run_detail(md_path: &Path, project_id: Uuid) -> RunDetail {
                 )
             })
             .unwrap_or_default(),
+        capture_fidelity,
     }
 }
 

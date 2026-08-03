@@ -65,6 +65,8 @@ pub struct ProvisionalRunRequest {
     /// Bounded objective from the first substantive prompt; optional fallback applied.
     pub objective: Option<String>,
     pub idempotency_key: Option<String>,
+    /// Integration id (e.g. `codex`, `claude-code`). Defaults from session id prefix.
+    pub integration: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -194,24 +196,56 @@ pub fn run_start(req: RunStartRequest) -> Result<AgentOpResult> {
         .filter(|s| !s.is_empty())
     {
         let project = resolve_or_init_project(req.project.as_deref())?;
-        // Session keys are namespaced; try common integrations when looking up.
-        let session_key = namespace_session_key("codex", project.project_id, external_sid);
-        let session = match load_session(&project.project_root, &session_key)? {
-            Some(s) => Some(s),
-            None => {
-                // Fall back: observe without confine so MCP can bind a session.
-                let obs = session_observe(SessionObserveRequest {
-                    session_id: external_sid.to_string(),
-                    integration: "codex".into(),
-                    project: Some(project.project_root.clone()),
-                    source: "mcp_run_start".into(),
-                    initial_task: Some(objective.clone()),
-                    ended: false,
-                    confine_existing_project: false,
-                })?;
-                load_session(&project.project_root, &obs.session_key)?
+        // Session keys are namespaced per integration. Claude hooks may already
+        // prefix the external id (`claude-code:<raw>`); try both forms.
+        let mut candidates: Vec<(String, String)> = Vec::new();
+        for integration in ["claude-code", "codex", "unknown"] {
+            candidates.push((
+                integration.to_string(),
+                namespace_session_key(integration, project.project_id, external_sid),
+            ));
+        }
+        if let Some(raw) = external_sid.strip_prefix("claude-code:") {
+            candidates.push((
+                "claude-code".into(),
+                namespace_session_key("claude-code", project.project_id, raw),
+            ));
+        } else {
+            candidates.push((
+                "claude-code".into(),
+                namespace_session_key(
+                    "claude-code",
+                    project.project_id,
+                    &format!("claude-code:{external_sid}"),
+                ),
+            ));
+        }
+        let mut session = None;
+        for (_integration, key) in &candidates {
+            if let Some(s) = load_session(&project.project_root, key)? {
+                session = Some(s);
+                break;
             }
-        };
+        }
+        if session.is_none() {
+            // Fall back: observe without confine so MCP can bind a session.
+            // Prefer claude-code when the caller passed a namespaced id.
+            let integration = if external_sid.starts_with("claude-code:") {
+                "claude-code"
+            } else {
+                "codex"
+            };
+            let obs = session_observe(SessionObserveRequest {
+                session_id: external_sid.to_string(),
+                integration: integration.into(),
+                project: Some(project.project_root.clone()),
+                source: "mcp_run_start".into(),
+                initial_task: Some(objective.clone()),
+                ended: false,
+                confine_existing_project: false,
+            })?;
+            session = load_session(&project.project_root, &obs.session_key)?;
+        }
         if let Some(session) = session {
             if let Some(run_id) = session.active_provisional_run_id {
                 if let Ok((md_path, meta)) = find_run_by_id(&project.project_root, run_id) {
@@ -575,9 +609,23 @@ pub fn provisional_run_ensure(req: ProvisionalRunRequest) -> Result<AgentOpResul
         });
     }
 
+    let integration = req
+        .integration
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            if external.starts_with("claude-code:") {
+                Some("claude-code".into())
+            } else {
+                Some("codex".into())
+            }
+        })
+        .unwrap_or_else(|| "codex".into());
     let observed = session_observe(SessionObserveRequest {
         session_id: external.to_string(),
-        integration: "codex".into(),
+        integration,
         project: req.project.clone(),
         source: "provisional_ensure".into(),
         initial_task: req.objective.clone(),
@@ -2055,6 +2103,7 @@ mod tests {
             project: Some(project.project_root.clone()),
             objective: Some("Fix the spool".into()),
             idempotency_key: None,
+            integration: Some("codex".into()),
         })
         .unwrap();
         assert!(!first.idempotent_replay);
@@ -2073,6 +2122,7 @@ mod tests {
             project: Some(project.project_root.clone()),
             objective: Some("Fix the spool".into()),
             idempotency_key: None,
+            integration: Some("codex".into()),
         })
         .unwrap();
         assert!(second.idempotent_replay);

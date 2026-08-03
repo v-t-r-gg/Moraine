@@ -134,6 +134,10 @@ pub struct RunDetail {
     /// Shared multi-agent fidelity report when this is a protocol run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capture_fidelity: Option<crate::agent_protocol::CaptureFidelityReport>,
+    /// Structured fidelity failure (e.g. unsupported bound session schema).
+    /// Present instead of silently omitting a bound-session error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_fidelity_error: Option<String>,
 }
 
 /// Infer a display name from the project root path.
@@ -449,7 +453,24 @@ pub fn summarize_run_path(md_path: &Path, project_id: Uuid) -> RunSummary {
 }
 
 /// Full run detail + timeline (read-only).
+///
+/// Uses an all-unknown capability profile. Prefer
+/// [`load_run_detail_with_profile`] at application boundaries that own the
+/// adapter capability table.
 pub fn load_run_detail(md_path: &Path, project_id: Uuid) -> RunDetail {
+    load_run_detail_with_profile(
+        md_path,
+        project_id,
+        &crate::agent_protocol::CaptureCapabilityProfile::unknown(),
+    )
+}
+
+/// Full run detail with a caller-supplied capability profile (application layer).
+pub fn load_run_detail_with_profile(
+    md_path: &Path,
+    project_id: Uuid,
+    profile: &crate::agent_protocol::CaptureCapabilityProfile,
+) -> RunDetail {
     let summary = summarize_run_path(md_path, project_id);
     let meta = load_run_meta_readonly(md_path).ok().flatten();
     let agent = meta.as_ref().and_then(|m| m.agent.as_ref());
@@ -457,16 +478,18 @@ pub fn load_run_detail(md_path: &Path, project_id: Uuid) -> RunDetail {
     let timeline = agent
         .map(|a| build_timeline(meta.as_ref().unwrap(), a))
         .unwrap_or_default();
-    let capture_fidelity = if is_protocol {
+    let (capture_fidelity, capture_fidelity_error) = if is_protocol {
         let root = md_path
             .parent() // runs/
             .and_then(|p| p.parent()) // .moraine/
             .and_then(|p| p.parent()) // project root
             .unwrap_or(Path::new("."));
-        let profile = crate::agent_protocol::capability_profile_for_integration("unknown");
-        crate::agent_protocol::capture_fidelity_report(Some(root), summary.run_id, &profile).ok()
+        match crate::agent_protocol::capture_fidelity_report(Some(root), summary.run_id, profile) {
+            Ok(report) => (Some(report), None),
+            Err(e) => (None, Some(e.protocol_code().to_string())),
+        }
     } else {
-        None
+        (None, None)
     };
     RunDetail {
         summary,
@@ -487,6 +510,7 @@ pub fn load_run_detail(md_path: &Path, project_id: Uuid) -> RunDetail {
             })
             .unwrap_or_default(),
         capture_fidelity,
+        capture_fidelity_error,
     }
 }
 
@@ -949,6 +973,64 @@ mod tests {
             start.absolute_path,
             cp.op_id.unwrap(),
         )
+    }
+
+    #[test]
+    fn bound_session_schema_error_not_hidden_in_run_detail() {
+        use crate::agent_protocol::{provisional_run_ensure, ProvisionalRunRequest};
+        let dir = tempdir().unwrap();
+        let project = crate::agent_protocol::init_project(Some(dir.path())).unwrap();
+        let started = provisional_run_ensure(ProvisionalRunRequest {
+            session_id: "disc-future".into(),
+            project: Some(project.project_root.clone()),
+            objective: Some("discovery future schema".into()),
+            idempotency_key: None,
+            integration: Some("test".into()),
+        })
+        .unwrap();
+        let meta = load_run_meta_readonly(&started.absolute_path)
+            .unwrap()
+            .unwrap();
+        let key = meta.agent.as_ref().unwrap().session_id.clone().unwrap();
+        // Overwrite the existing session file in place.
+        let sessions = sessions_dir_for(&project.project_root);
+        let path = fs::read_dir(&sessions)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| p.extension().and_then(|e| e.to_str()) == Some("json"))
+            .expect("session file");
+        fs::write(
+            &path,
+            format!(
+                r#"{{
+                  "schemaVersion": 99,
+                  "sessionKey": "{key}",
+                  "externalSessionId": "disc-future",
+                  "integration": "test",
+                  "projectId": "{}",
+                  "projectRoot": "{}",
+                  "startedAt": "2020-01-01T00:00:00Z",
+                  "runIds": ["{}"],
+                  "sourcesSeen": ["startup"]
+                }}"#,
+                project.project_id,
+                project.project_root.display(),
+                started.run_id
+            ),
+        )
+        .unwrap();
+        let detail = load_run_detail(&started.absolute_path, project.project_id);
+        assert!(detail.is_protocol_run);
+        assert!(detail.capture_fidelity.is_none());
+        assert_eq!(
+            detail.capture_fidelity_error.as_deref(),
+            Some("unsupported_schema_version")
+        );
+    }
+
+    fn sessions_dir_for(root: &Path) -> PathBuf {
+        root.join(".moraine/sessions")
     }
 
     #[test]

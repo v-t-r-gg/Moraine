@@ -9,6 +9,7 @@ description = "Local STDIO MCP transport for Moraine agent-run protocol"
 
 [dependencies]
 moraine-core.workspace = true
+moraine-provision.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 serde = { workspace = true }

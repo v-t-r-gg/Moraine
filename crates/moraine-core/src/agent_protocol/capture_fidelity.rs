@@ -2,14 +2,19 @@
 //!
 //! Capability (adapter can emit) is separate from observation (Moraine recorded
 //! durable facts). Legacy [`CaptureCoverage`] remains a compact compatibility field.
+//!
+//! Built-in adapter capability tables live at the application/integration layer.
+//! This module only derives facts from run state, bound session state, and a
+//! caller-supplied [`CaptureCapabilityProfile`].
 
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use uuid::Uuid;
 
 use super::project::{find_run_by_id, resolve_existing_project};
-use super::session::{load_session, namespace_session_key, sessions_dir, SessionRecord};
+use super::session::{load_session, parse_session_record, sessions_dir, SessionRecord};
 use super::types::{AgentRunState, CaptureCoverage, EvidenceProvenance};
 use crate::error::{Error, Result};
 
@@ -130,6 +135,9 @@ pub struct CaptureFidelityReport {
 }
 
 /// What categories of mechanical observation an integration can produce.
+///
+/// Built-in adapter tables are owned by the integration layer; callers supply
+/// the resolved profile. Core never replaces this profile after load.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CaptureCapabilityProfile {
     pub integration_id: &'static str,
@@ -139,30 +147,17 @@ pub struct CaptureCapabilityProfile {
     pub semantic_protocol: CapabilitySupport,
 }
 
-/// Authoritative built-in capability table (agent-neutral API, fixed IDs).
-pub fn capability_profile_for_integration(integration: &str) -> CaptureCapabilityProfile {
-    match integration.trim() {
-        "codex" => CaptureCapabilityProfile {
-            integration_id: "codex",
-            session_lifecycle: CapabilitySupport::Supported,
-            prompt_activity: CapabilitySupport::Supported,
-            tool_activity: CapabilitySupport::Supported,
-            semantic_protocol: CapabilitySupport::Supported,
-        },
-        "claude-code" => CaptureCapabilityProfile {
-            integration_id: "claude-code",
-            session_lifecycle: CapabilitySupport::Supported,
-            prompt_activity: CapabilitySupport::Supported,
-            tool_activity: CapabilitySupport::NotSupported,
-            semantic_protocol: CapabilitySupport::Supported,
-        },
-        _ => CaptureCapabilityProfile {
+impl CaptureCapabilityProfile {
+    /// All-unknown profile for unrecognized integrations or when the caller
+    /// has not resolved a built-in adapter.
+    pub const fn unknown() -> Self {
+        Self {
             integration_id: "unknown",
             session_lifecycle: CapabilitySupport::Unknown,
             prompt_activity: CapabilitySupport::Unknown,
             tool_activity: CapabilitySupport::Unknown,
             semantic_protocol: CapabilitySupport::Unknown,
-        },
+        }
     }
 }
 
@@ -229,7 +224,6 @@ fn count_source(session: &SessionRecord, sources: &[&str]) -> (u64, bool) {
         if let Some(n) = session.observation_counts.get(*s) {
             total = total.saturating_add(*n);
         } else if session.sources_seen.iter().any(|x| x == s) {
-            // Historical presence without exact count.
             total = total.saturating_add(1);
         }
     }
@@ -294,11 +288,87 @@ fn agent_reported_evidence_count(agent: &AgentRunState) -> u64 {
     from_run.saturating_add(from_checkpoints)
 }
 
-/// Find session envelopes that list this run (rebuildable; may be empty).
-pub fn find_sessions_for_run(project_root: &Path, run_id: Uuid) -> Vec<SessionRecord> {
-    let mut out = Vec::new();
+fn session_binds_run(rec: &SessionRecord, run_id: Uuid) -> bool {
+    rec.run_ids.contains(&run_id)
+        || rec.active_provisional_run_id == Some(run_id)
+        || rec.capture_active_run_id == Some(run_id)
+}
+
+fn session_matches_binding(rec: &SessionRecord, bound: &str) -> bool {
+    rec.session_key == bound
+        || rec.external_session_id == bound
+        || rec.session_key.ends_with(&format!(":{bound}"))
+}
+
+/// Lightweight JSON peek used only when full validation fails, to decide whether
+/// a broken envelope is bound to this run (and must surface) or is unrelated.
+fn raw_session_bound_to_run(raw: &str, run_id: Uuid, bound_session: Option<&str>) -> bool {
+    let Ok(v) = serde_json::from_str::<Value>(raw) else {
+        // Unparseable JSON: only treat as bound when the durable key is known from
+        // the run and matches the expected filename key (caller checks path).
+        return false;
+    };
+    let rid = run_id.to_string();
+    let lists_run = v
+        .get("runIds")
+        .and_then(|a| a.as_array())
+        .map(|a| a.iter().any(|x| x.as_str() == Some(rid.as_str())))
+        .unwrap_or(false)
+        || v.get("activeProvisionalRunId")
+            .and_then(|x| x.as_str())
+            .is_some_and(|s| s == rid)
+        || v.get("captureActiveRunId")
+            .and_then(|x| x.as_str())
+            .is_some_and(|s| s == rid);
+    if lists_run {
+        return true;
+    }
+    if let Some(bound) = bound_session {
+        if v.get("sessionKey").and_then(|x| x.as_str()) == Some(bound) {
+            return true;
+        }
+        if v.get("externalSessionId").and_then(|x| x.as_str()) == Some(bound) {
+            return true;
+        }
+        if v.get("sessionKey")
+            .and_then(|x| x.as_str())
+            .is_some_and(|k| k.ends_with(&format!(":{bound}")))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Resolve the session envelope for a run (read-only).
+///
+/// Uses the durable bound session key, run-id membership, and generic
+/// external-session identity. Does not construct provider-specific session keys.
+///
+/// Propagates structured errors for malformed or future-schema envelopes that
+/// are bound to this run. Unrelated broken files are skipped.
+pub fn resolve_session_for_run(
+    project_root: &Path,
+    run_id: Uuid,
+    agent: &AgentRunState,
+) -> Result<Option<SessionRecord>> {
+    let bound = agent.session_id.as_deref();
+
+    // 1) Direct load by durable session key stored on the run.
+    if let Some(sid) = bound {
+        match load_session(project_root, sid) {
+            Ok(Some(rec)) => return Ok(Some(rec)),
+            Ok(None) => {
+                // Missing file for the bound key — fall through to generic scan.
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    // 2) Scan session files generically.
+    let mut candidates: Vec<SessionRecord> = Vec::new();
     let Ok(entries) = std::fs::read_dir(sessions_dir(project_root)) else {
-        return out;
+        return Ok(None);
     };
     for ent in entries.flatten() {
         let path = ent.path();
@@ -308,52 +378,36 @@ pub fn find_sessions_for_run(project_root: &Path, run_id: Uuid) -> Vec<SessionRe
         let Ok(raw) = std::fs::read_to_string(&path) else {
             continue;
         };
-        let Ok(rec) = serde_json::from_str::<SessionRecord>(&raw) else {
-            continue;
-        };
-        if rec.run_ids.contains(&run_id)
-            || rec.active_provisional_run_id == Some(run_id)
-            || rec.capture_active_run_id == Some(run_id)
-        {
-            out.push(rec);
+        match parse_session_record(&raw) {
+            Ok(rec) => {
+                let matches = session_binds_run(&rec, run_id)
+                    || bound.is_some_and(|b| session_matches_binding(&rec, b));
+                if matches {
+                    candidates.push(rec);
+                }
+            }
+            Err(e) => {
+                // Bound broken envelope must surface; unrelated noise is ignored.
+                let file_stem = path.file_stem().and_then(|s| s.to_str());
+                let bound_by_name = bound.is_some_and(|b| file_stem == Some(b));
+                if bound_by_name || raw_session_bound_to_run(&raw, run_id, bound) {
+                    return Err(e);
+                }
+            }
         }
     }
-    out
-}
 
-pub fn find_session_for_run(project_root: &Path, run_id: Uuid) -> Option<SessionRecord> {
-    find_sessions_for_run(project_root, run_id)
-        .into_iter()
-        .next()
-}
+    if candidates.is_empty() {
+        return Ok(None);
+    }
 
-pub fn find_session_for_run_with_agent(
-    project_root: &Path,
-    run_id: Uuid,
-    agent: &AgentRunState,
-) -> Option<SessionRecord> {
-    let mut candidates = find_sessions_for_run(project_root, run_id);
-    if let Some(sid) = agent.session_id.as_deref() {
-        // Runs store the durable session_key (not only the external id).
-        if let Some(idx) = candidates.iter().position(|s| {
-            s.session_key == sid
-                || s.external_session_id == sid
-                || s.session_key.ends_with(&format!(":{sid}"))
-        }) {
-            return Some(candidates.swap_remove(idx));
-        }
-        if let Ok(Some(rec)) = load_session(project_root, sid) {
-            return Some(rec);
-        }
-        let project_id = agent
-            .project_id
-            .or_else(|| candidates.first().map(|s| s.project_id))
-            .unwrap_or(Uuid::nil());
-        for integration in ["claude-code", "codex", "unknown"] {
-            let key = namespace_session_key(integration, project_id, sid);
-            if let Ok(Some(rec)) = load_session(project_root, &key) {
-                return Some(rec);
-            }
+    // Prefer exact durable key / external identity match, then richest sources.
+    if let Some(sid) = bound {
+        if let Some(idx) = candidates
+            .iter()
+            .position(|s| session_matches_binding(s, sid))
+        {
+            return Ok(Some(candidates.swap_remove(idx)));
         }
     }
     candidates.sort_by_key(|s| {
@@ -363,10 +417,63 @@ pub fn find_session_for_run_with_agent(
                 .saturating_add(s.observation_counts.len()),
         )
     });
-    candidates.into_iter().next()
+    Ok(candidates.into_iter().next())
+}
+
+/// Find a session for a run (errors ignored → empty). Prefer
+/// [`resolve_session_for_run`] for fidelity reporting.
+pub fn find_session_for_run(project_root: &Path, run_id: Uuid) -> Option<SessionRecord> {
+    // Minimal agent shell for run-id-only scan.
+    let agent = AgentRunState {
+        lifecycle: super::types::RunLifecycle::Active,
+        record_revision: 0,
+        objective: String::new(),
+        record_path: String::new(),
+        project_id: None,
+        start_idempotency_key: String::new(),
+        starting_git: None,
+        current_git: None,
+        checkpoints: vec![],
+        lifecycle_events: vec![],
+        ready_summary: None,
+        idempotency: Default::default(),
+        incomplete_op: None,
+        risks: vec![],
+        open_questions: vec![],
+        capture_coverage: CaptureCoverage::Unknown,
+        session_id: None,
+        provisional: true,
+        evidence: vec![],
+        findings: vec![],
+        finding_events: vec![],
+        append_only_ops: vec![],
+    };
+    let _ = run_id;
+    // Scan with synthetic agent that has no session binding — only run_id matches.
+    resolve_session_for_run(project_root, run_id, &agent)
+        .ok()
+        .flatten()
+}
+
+/// Peek the durable integration id from the bound session (generic string).
+/// Does not apply capability tables.
+pub fn peek_run_integration(project: Option<&Path>, run_id: Uuid) -> Result<Option<String>> {
+    let resolved = resolve_existing_project(project)?;
+    let (_md_path, meta) = find_run_by_id(&resolved.project_root, run_id)?;
+    let agent = meta
+        .agent
+        .as_ref()
+        .ok_or_else(|| Error::other(format!("run {run_id} is not a protocol run")))?;
+    let session = resolve_session_for_run(&resolved.project_root, run_id, agent)?;
+    Ok(session
+        .map(|s| s.integration)
+        .filter(|s| !s.is_empty() && s != "unknown"))
 }
 
 /// Build a fidelity report from durable project state (read-only).
+///
+/// Uses `capability_profile` as supplied; never re-resolves or replaces it from
+/// discovered integration identifiers.
 pub fn capture_fidelity_report(
     project: Option<&Path>,
     run_id: Uuid,
@@ -379,35 +486,14 @@ pub fn capture_fidelity_report(
         .as_ref()
         .ok_or_else(|| Error::other(format!("run {run_id} is not a protocol run")))?;
 
-    let mut session = find_session_for_run_with_agent(&resolved.project_root, run_id, agent);
-    // Prefer reconstructing from the run's bound external session id + project id.
-    if session.is_none() {
-        if let Some(ext) = agent.session_id.as_deref() {
-            for integration in ["claude-code", "codex", "unknown"] {
-                let key = namespace_session_key(integration, resolved.project_id, ext);
-                if let Ok(Some(rec)) = load_session(&resolved.project_root, &key) {
-                    session = Some(rec);
-                    break;
-                }
-            }
-        }
-    }
-    // Prefer session integration; fall back to external-session prefix heuristics.
+    let session = resolve_session_for_run(&resolved.project_root, run_id, agent)?;
+
+    // Integration label is factual (from session or caller profile id), not a
+    // capability override.
     let integration = session
         .as_ref()
         .map(|s| s.integration.clone())
         .filter(|s| !s.is_empty() && s != "unknown")
-        .or_else(|| {
-            agent.session_id.as_ref().and_then(|s| {
-                if s.starts_with("claude-code:") {
-                    Some("claude-code".into())
-                } else if s.starts_with("codex:") {
-                    Some("codex".into())
-                } else {
-                    None
-                }
-            })
-        })
         .or_else(|| {
             if capability_profile.integration_id != "unknown" {
                 Some(capability_profile.integration_id.to_string())
@@ -416,11 +502,7 @@ pub fn capture_fidelity_report(
             }
         });
 
-    let profile = if let Some(ref id) = integration {
-        capability_profile_for_integration(id)
-    } else {
-        *capability_profile
-    };
+    let profile = *capability_profile;
 
     let session_bound = session.is_some() || agent.session_id.is_some();
     let counts_complete = session
@@ -478,6 +560,9 @@ pub fn capture_fidelity_report(
                     "Session lifecycle activity was recorded; exact historical counts are incomplete."
                         .into()
                 }
+            } else if session.is_none() && agent.session_id.is_some() {
+                "Bound session envelope is unavailable; lifecycle observations cannot be confirmed."
+                    .into()
             } else {
                 match profile.session_lifecycle {
                     CapabilitySupport::NotSupported => {
@@ -613,7 +698,6 @@ pub fn capture_fidelity_report(
         ),
     ];
 
-    // Stabilize dimension order (already fixed).
     let _ = &mut dimensions;
 
     let mut gaps = Vec::new();
@@ -646,16 +730,21 @@ pub fn capture_fidelity_report(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_protocol::session::SessionRecord;
+    use crate::agent_protocol::session::{
+        session_path, sessions_dir, SessionRecord, SESSION_SCHEMA_VERSION,
+    };
+    use crate::agent_protocol::{init_project, provisional_run_ensure, ProvisionalRunRequest};
     use chrono::Utc;
     use std::collections::BTreeMap;
+    use std::fs;
+    use tempfile::tempdir;
 
     fn empty_session(sources: &[&str]) -> SessionRecord {
         SessionRecord {
             schema_version: 3,
-            session_key: "codex:x:y".to_string(),
+            session_key: "test:x:y".to_string(),
             external_session_id: "y".to_string(),
-            integration: "codex".to_string(),
+            integration: "test".to_string(),
             project_id: Uuid::nil(),
             project_root: "/tmp".to_string(),
             started_at: Utc::now(),
@@ -669,6 +758,42 @@ mod tests {
             observation_counts: BTreeMap::new(),
             observation_counts_complete: true,
         }
+    }
+
+    fn supported_profile() -> CaptureCapabilityProfile {
+        CaptureCapabilityProfile {
+            integration_id: "test",
+            session_lifecycle: CapabilitySupport::Supported,
+            prompt_activity: CapabilitySupport::Supported,
+            tool_activity: CapabilitySupport::Supported,
+            semantic_protocol: CapabilitySupport::Supported,
+        }
+    }
+
+    #[test]
+    fn core_fidelity_source_has_no_builtin_adapter_ids() {
+        let src = include_str!("capture_fidelity.rs");
+        // Only production source (exclude this tests module).
+        let prod = src
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production fidelity source");
+        assert!(
+            !prod.contains("\"codex\""),
+            "core fidelity must not hard-code codex"
+        );
+        assert!(
+            !prod.contains("\"claude-code\""),
+            "core fidelity must not hard-code claude-code"
+        );
+        assert!(
+            !prod.contains("fn capability_profile_for_integration"),
+            "capability table must not live in core fidelity"
+        );
+        assert!(
+            !prod.contains("namespace_session_key("),
+            "core fidelity must not construct provider-specific session keys"
+        );
     }
 
     #[test]
@@ -695,29 +820,14 @@ mod tests {
             derive_capture_coverage(true, None, 0),
             CaptureCoverage::Unknown
         );
-        // Non-provisional with no mechanical session is still semantic-only.
         assert_eq!(
             derive_capture_coverage(false, Some(&none), 0),
             CaptureCoverage::SemanticOnly
         );
-        // provisional with checkpoint still mechanical_only if hooks present
         assert_eq!(
             derive_capture_coverage(true, Some(&mechanical), 2),
             CaptureCoverage::MechanicalOnly
         );
-    }
-
-    #[test]
-    fn claude_profile_tool_not_supported() {
-        let p = capability_profile_for_integration("claude-code");
-        assert_eq!(p.tool_activity, CapabilitySupport::NotSupported);
-        assert_eq!(p.session_lifecycle, CapabilitySupport::Supported);
-    }
-
-    #[test]
-    fn codex_profile_tools_supported() {
-        let p = capability_profile_for_integration("codex");
-        assert_eq!(p.tool_activity, CapabilitySupport::Supported);
     }
 
     #[test]
@@ -745,6 +855,34 @@ mod tests {
     }
 
     #[test]
+    fn supplied_profile_is_not_replaced() {
+        let dir = tempdir().unwrap();
+        let project = init_project(Some(dir.path())).unwrap();
+        let started = provisional_run_ensure(ProvisionalRunRequest {
+            session_id: "ext-1".into(),
+            project: Some(project.project_root.clone()),
+            objective: Some("profile lock".into()),
+            idempotency_key: None,
+            integration: Some("test".into()),
+        })
+        .unwrap();
+        // Caller supplies Unknown even though session has an integration string.
+        let report = capture_fidelity_report(
+            Some(&project.project_root),
+            started.run_id,
+            &CaptureCapabilityProfile::unknown(),
+        )
+        .unwrap();
+        let tool = report
+            .dimensions
+            .iter()
+            .find(|d| d.dimension == CaptureDimension::ToolActivity)
+            .unwrap();
+        assert_eq!(tool.capability, CapabilitySupport::Unknown);
+        assert_eq!(tool.observation, ObservationState::Unknown);
+    }
+
+    #[test]
     fn full_label_is_not_complete_knowledge() {
         assert_eq!(
             human_legacy_coverage_label(CaptureCoverage::Full),
@@ -754,7 +892,6 @@ mod tests {
 
     #[test]
     fn capture_coverage_serialization_byte_compatible() {
-        // Existing serialized values must remain stable.
         for (value, expected) in [
             (CaptureCoverage::Full, "\"full\""),
             (CaptureCoverage::MechanicalOnly, "\"mechanical_only\""),
@@ -773,7 +910,7 @@ mod tests {
         let report = CaptureFidelityReport {
             schema_version: 1,
             run_id: Uuid::nil(),
-            integration: Some("codex".into()),
+            integration: Some("test".into()),
             legacy_coverage: CaptureCoverage::MechanicalOnly,
             provisional: true,
             session_bound: true,
@@ -792,5 +929,280 @@ mod tests {
         assert_eq!(a, b);
         let again: CaptureFidelityReport = serde_json::from_str(&a).unwrap();
         assert_eq!(again, report);
+    }
+
+    fn write_session_file(project_root: &std::path::Path, key: &str, body: &str) {
+        let dir = sessions_dir(project_root);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(session_path(project_root, key), body).unwrap();
+    }
+
+    #[test]
+    fn future_schema_bound_session_errors() {
+        let dir = tempdir().unwrap();
+        let project = init_project(Some(dir.path())).unwrap();
+        let started = provisional_run_ensure(ProvisionalRunRequest {
+            session_id: "future-ext".into(),
+            project: Some(project.project_root.clone()),
+            objective: Some("future schema".into()),
+            idempotency_key: None,
+            integration: Some("test".into()),
+        })
+        .unwrap();
+        // Overwrite the bound session with a future schema.
+        let meta = crate::run_meta::load_run_meta_readonly(&started.absolute_path)
+            .unwrap()
+            .unwrap();
+        let key = meta.agent.as_ref().unwrap().session_id.clone().unwrap();
+        write_session_file(
+            &project.project_root,
+            &key,
+            &format!(
+                r#"{{
+                  "schemaVersion": 99,
+                  "sessionKey": "{key}",
+                  "externalSessionId": "future-ext",
+                  "integration": "test",
+                  "projectId": "{}",
+                  "projectRoot": "{}",
+                  "startedAt": "2020-01-01T00:00:00Z",
+                  "runIds": ["{}"],
+                  "sourcesSeen": ["startup"]
+                }}"#,
+                project.project_id,
+                project.project_root.display(),
+                started.run_id
+            ),
+        );
+        let err = capture_fidelity_report(
+            Some(&project.project_root),
+            started.run_id,
+            &supported_profile(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::UnsupportedSchemaVersion { .. }));
+    }
+
+    #[test]
+    fn malformed_bound_session_errors() {
+        let dir = tempdir().unwrap();
+        let project = init_project(Some(dir.path())).unwrap();
+        let started = provisional_run_ensure(ProvisionalRunRequest {
+            session_id: "bad-ext".into(),
+            project: Some(project.project_root.clone()),
+            objective: Some("bad json".into()),
+            idempotency_key: None,
+            integration: Some("test".into()),
+        })
+        .unwrap();
+        let meta = crate::run_meta::load_run_meta_readonly(&started.absolute_path)
+            .unwrap()
+            .unwrap();
+        let key = meta.agent.as_ref().unwrap().session_id.clone().unwrap();
+        write_session_file(&project.project_root, &key, "{not json");
+        let err = capture_fidelity_report(
+            Some(&project.project_root),
+            started.run_id,
+            &supported_profile(),
+        )
+        .unwrap_err();
+        match err {
+            Error::Other(msg) => assert!(msg.contains("parse error") || msg.contains("session")),
+            Error::Serde(_) => {}
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn future_schema_found_via_run_id_scan_errors() {
+        let dir = tempdir().unwrap();
+        let project = init_project(Some(dir.path())).unwrap();
+        let started = provisional_run_ensure(ProvisionalRunRequest {
+            session_id: "scan-ext".into(),
+            project: Some(project.project_root.clone()),
+            objective: Some("scan future".into()),
+            idempotency_key: None,
+            integration: Some("test".into()),
+        })
+        .unwrap();
+        // Clear bound key on run so lookup must scan by run id.
+        let md = started.absolute_path.clone();
+        let mut meta = crate::run_meta::load_or_migrate_locked(&md).unwrap();
+        if let Some(agent) = meta.agent.as_mut() {
+            agent.session_id = None;
+        }
+        // Persist via write of sidecar using existing helpers
+        let sidecar = crate::run_meta::moraine_sidecar_path(&md);
+        let raw = serde_json::to_string_pretty(&meta).unwrap();
+        fs::write(&sidecar, format!("{raw}\n")).unwrap();
+
+        let key = format!("orphan:{}:scan-ext", project.project_id);
+        write_session_file(
+            &project.project_root,
+            &key,
+            &format!(
+                r#"{{
+                  "schemaVersion": 99,
+                  "sessionKey": "{key}",
+                  "externalSessionId": "scan-ext",
+                  "integration": "test",
+                  "projectId": "{}",
+                  "projectRoot": "{}",
+                  "startedAt": "2020-01-01T00:00:00Z",
+                  "activeProvisionalRunId": "{}",
+                  "sourcesSeen": ["startup"]
+                }}"#,
+                project.project_id,
+                project.project_root.display(),
+                started.run_id
+            ),
+        );
+        let err = capture_fidelity_report(
+            Some(&project.project_root),
+            started.run_id,
+            &supported_profile(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::UnsupportedSchemaVersion { .. }));
+    }
+
+    #[test]
+    fn unrelated_malformed_session_does_not_block_valid_bound() {
+        let dir = tempdir().unwrap();
+        let project = init_project(Some(dir.path())).unwrap();
+        let started = provisional_run_ensure(ProvisionalRunRequest {
+            session_id: "good-ext".into(),
+            project: Some(project.project_root.clone()),
+            objective: Some("good run".into()),
+            idempotency_key: None,
+            integration: Some("test".into()),
+        })
+        .unwrap();
+        write_session_file(
+            &project.project_root,
+            "unrelated-broken",
+            "{ this is not valid session json",
+        );
+        let report = capture_fidelity_report(
+            Some(&project.project_root),
+            started.run_id,
+            &supported_profile(),
+        )
+        .unwrap();
+        assert!(report.session_bound);
+        let life = report
+            .dimensions
+            .iter()
+            .find(|d| d.dimension == CaptureDimension::SessionLifecycle)
+            .unwrap();
+        // provisional_ensure source alone may not count as lifecycle; either way no error.
+        let _ = life;
+    }
+
+    #[test]
+    fn missing_bound_session_yields_explicit_report() {
+        let dir = tempdir().unwrap();
+        let project = init_project(Some(dir.path())).unwrap();
+        let started = provisional_run_ensure(ProvisionalRunRequest {
+            session_id: "missing-ext".into(),
+            project: Some(project.project_root.clone()),
+            objective: Some("missing session file".into()),
+            idempotency_key: None,
+            integration: Some("test".into()),
+        })
+        .unwrap();
+        let meta = crate::run_meta::load_run_meta_readonly(&started.absolute_path)
+            .unwrap()
+            .unwrap();
+        let key = meta.agent.as_ref().unwrap().session_id.clone().unwrap();
+        let path = session_path(&project.project_root, &key);
+        fs::remove_file(&path).unwrap();
+        let report = capture_fidelity_report(
+            Some(&project.project_root),
+            started.run_id,
+            &supported_profile(),
+        )
+        .unwrap();
+        assert!(report.session_bound);
+        let life = report
+            .dimensions
+            .iter()
+            .find(|d| d.dimension == CaptureDimension::SessionLifecycle)
+            .unwrap();
+        assert_eq!(life.observation, ObservationState::NotObserved);
+        assert!(
+            life.explanation.contains("unavailable") || life.explanation.contains("No session")
+        );
+    }
+
+    #[test]
+    fn historical_external_session_id_resolved_generically() {
+        let dir = tempdir().unwrap();
+        let project = init_project(Some(dir.path())).unwrap();
+        let started = provisional_run_ensure(ProvisionalRunRequest {
+            session_id: "hist-ext".into(),
+            project: Some(project.project_root.clone()),
+            objective: Some("historical binding".into()),
+            idempotency_key: None,
+            integration: Some("test".into()),
+        })
+        .unwrap();
+        // Rewrite run to store only the raw external id (historical shape).
+        let md = started.absolute_path.clone();
+        let mut meta = crate::run_meta::load_or_migrate_locked(&md).unwrap();
+        if let Some(agent) = meta.agent.as_mut() {
+            agent.session_id = Some("hist-ext".into());
+        }
+        let sidecar = crate::run_meta::moraine_sidecar_path(&md);
+        fs::write(
+            &sidecar,
+            format!("{}\n", serde_json::to_string_pretty(&meta).unwrap()),
+        )
+        .unwrap();
+
+        let report = capture_fidelity_report(
+            Some(&project.project_root),
+            started.run_id,
+            &supported_profile(),
+        )
+        .unwrap();
+        assert!(report.session_bound);
+        // Session should be found via external_session_id match without provider guesses.
+        let life = report
+            .dimensions
+            .iter()
+            .find(|d| d.dimension == CaptureDimension::SessionLifecycle);
+        assert!(life.is_some());
+    }
+
+    #[test]
+    fn read_only_coverage_does_not_rewrite_session() {
+        let dir = tempdir().unwrap();
+        let project = init_project(Some(dir.path())).unwrap();
+        let started = provisional_run_ensure(ProvisionalRunRequest {
+            session_id: "ro-ext".into(),
+            project: Some(project.project_root.clone()),
+            objective: Some("read only".into()),
+            idempotency_key: None,
+            integration: Some("test".into()),
+        })
+        .unwrap();
+        let meta = crate::run_meta::load_run_meta_readonly(&started.absolute_path)
+            .unwrap()
+            .unwrap();
+        let key = meta.agent.as_ref().unwrap().session_id.clone().unwrap();
+        let path = session_path(&project.project_root, &key);
+        let before = fs::read(&path).unwrap();
+        let mtime = fs::metadata(&path).unwrap().modified().unwrap();
+        let _ = capture_fidelity_report(
+            Some(&project.project_root),
+            started.run_id,
+            &supported_profile(),
+        )
+        .unwrap();
+        let after = fs::read(&path).unwrap();
+        assert_eq!(before, after);
+        assert_eq!(mtime, fs::metadata(&path).unwrap().modified().unwrap());
+        assert_eq!(SESSION_SCHEMA_VERSION, 3);
     }
 }

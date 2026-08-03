@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use moraine_core::{
-    list_run_summaries, load_run_detail, resolve_existing_project, scan_project_roots,
+    list_run_summaries, load_run_detail_with_profile, resolve_existing_project, scan_project_roots,
     summarize_project, ProjectSummary, RunDetail, RunSummary,
 };
 use serde::Serialize;
@@ -221,15 +221,26 @@ pub fn discovery_run_detail(
 ) -> Result<RunDetail, String> {
     if let Some(p) = path {
         let pb = PathBuf::from(p);
-        let pid = resolve_existing_project(Some(
-            pb.parent()
-                .and_then(|p| p.parent())
-                .and_then(|p| p.parent())
-                .unwrap_or(Path::new(".")),
-        ))
-        .map(|r| r.project_id)
-        .unwrap_or(Uuid::nil());
-        return Ok(load_run_detail(&pb, pid));
+        let project = pb
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.parent())
+            .unwrap_or(Path::new("."));
+        let resolved = resolve_existing_project(Some(project)).map_err(map_err)?;
+        let summary = moraine_core::summarize_run_path(&pb, resolved.project_id);
+        let profile = moraine_provision::capability_profile_for_run(
+            Some(&resolved.project_root),
+            summary.run_id,
+        )
+        .unwrap_or_else(|_| moraine_core::CaptureCapabilityProfile::unknown());
+        let detail = load_run_detail_with_profile(&pb, resolved.project_id, &profile);
+        // Bound-session schema/parse failures must not be hidden.
+        if let Some(code) = detail.capture_fidelity_error.as_deref() {
+            if code == "unsupported_schema_version" || code == "error" || code == "serde" {
+                return Err(format!("capture_fidelity:{code}"));
+            }
+        }
+        return Ok(detail);
     }
     let rid = run_id
         .as_deref()
@@ -242,7 +253,15 @@ pub fn discovery_run_detail(
     let pid = resolve_existing_project(Some(&root))
         .map(|r| r.project_id)
         .unwrap_or(Uuid::nil());
-    Ok(load_run_detail(&md, pid))
+    let profile = moraine_provision::capability_profile_for_run(Some(&root), uid)
+        .map_err(|e| format!("capture_fidelity:{}", e.protocol_code()))?;
+    let detail = load_run_detail_with_profile(&md, pid, &profile);
+    if let Some(code) = detail.capture_fidelity_error.as_deref() {
+        if code == "unsupported_schema_version" || code == "error" || code == "serde" {
+            return Err(format!("capture_fidelity:{code}"));
+        }
+    }
+    Ok(detail)
 }
 
 #[tauri::command]

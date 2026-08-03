@@ -89,6 +89,8 @@ export interface RunDetailDto {
   risks: string[];
   openQuestions: string[];
   captureFidelity?: CaptureFidelityDto | null;
+  /** Structured fidelity failure code when bound session state is unreadable. */
+  captureFidelityError?: string | null;
 }
 
 export interface DiscoveryStatusDto {

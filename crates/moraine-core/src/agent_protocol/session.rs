@@ -259,13 +259,13 @@ pub fn resolve_confined_project(path: Option<&Path>) -> Result<super::project::P
     resolve_existing_project(Some(&root_canon))
 }
 
-pub fn load_session(project_root: &Path, session_key: &str) -> Result<Option<SessionRecord>> {
-    let path = session_path(project_root, session_key);
-    if !path.exists() {
-        return Ok(None);
-    }
-    let raw = fs::read_to_string(&path)?;
-    let mut rec: SessionRecord = serde_json::from_str(&raw)?;
+/// Parse and validate a session envelope (read-only, zero writes).
+///
+/// Performs in-memory compatibility promotion for older readable schemas and
+/// rejects future unsupported schema versions.
+pub fn parse_session_record(raw: &str) -> Result<SessionRecord> {
+    let mut rec: SessionRecord = serde_json::from_str(raw)
+        .map_err(|e| Error::other(format!("session envelope parse error: {e}")))?;
     if rec.schema_version > SESSION_SCHEMA_VERSION {
         return Err(Error::UnsupportedSchemaVersion {
             version: rec.schema_version,
@@ -278,7 +278,16 @@ pub fn load_session(project_root: &Path, session_key: &str) -> Result<Option<Ses
         rec.schema_version = SESSION_SCHEMA_VERSION;
         rec.observation_counts_complete = false;
     }
-    Ok(Some(rec))
+    Ok(rec)
+}
+
+pub fn load_session(project_root: &Path, session_key: &str) -> Result<Option<SessionRecord>> {
+    let path = session_path(project_root, session_key);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = fs::read_to_string(&path)?;
+    Ok(Some(parse_session_record(&raw)?))
 }
 
 pub fn update_session<F, T>(project_root: &Path, session_key: &str, f: F) -> Result<T>

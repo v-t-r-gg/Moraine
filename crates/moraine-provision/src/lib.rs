@@ -26,9 +26,10 @@ pub mod types;
 pub mod verify;
 
 pub use agent::{
-    adapter_for, all_adapters, AgentAdapter, AgentDetection, BackupRecorder, ClaudeCodeAdapter,
-    CodexAdapter, IntegrationPlan, IntegrationReceipt, IntegrationState, IntegrationVerification,
-    VecBackupRecorder,
+    adapter_for, all_adapters, capability_profile_for_integration, capability_profile_for_run,
+    capture_fidelity_report_for_run, AgentAdapter, AgentDetection, BackupRecorder,
+    ClaudeCodeAdapter, CodexAdapter, IntegrationPlan, IntegrationReceipt, IntegrationState,
+    IntegrationVerification, VecBackupRecorder,
 };
 pub use apply::{
     apply, apply_default, apply_receipt, apply_with_options, compute_witness, rollback,

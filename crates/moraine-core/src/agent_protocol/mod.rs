@@ -59,15 +59,15 @@ pub use projection::{
 #[path = "redaction_nonleak_tests.rs"]
 mod redaction_nonleak_tests;
 pub use capture_fidelity::{
-    capability_profile_for_integration, capture_fidelity_report, find_session_for_run,
-    human_legacy_coverage_label, CapabilitySupport, CaptureCapabilityProfile, CaptureDimension,
-    CaptureDimensionReport, CaptureFidelityReport, CaptureGap, ObservationState,
+    capture_fidelity_report, find_session_for_run, human_legacy_coverage_label,
+    peek_run_integration, resolve_session_for_run, CapabilitySupport, CaptureCapabilityProfile,
+    CaptureDimension, CaptureDimensionReport, CaptureFidelityReport, CaptureGap, ObservationState,
     CAPTURE_FIDELITY_SCHEMA_VERSION,
 };
 pub use session::{
-    derive_capture_coverage, load_session, namespace_session_key, resolve_confined_project,
-    session_observe, SessionObserveRequest, SessionObserveResult, SessionRecord,
-    SESSION_SCHEMA_VERSION,
+    derive_capture_coverage, load_session, namespace_session_key, parse_session_record,
+    resolve_confined_project, session_observe, SessionObserveRequest, SessionObserveResult,
+    SessionRecord, SESSION_SCHEMA_VERSION,
 };
 pub use types::{
     ActorCategory, AgentRunState, AppendOnlyOpRecord, CaptureCoverage, CheckpointRecord,

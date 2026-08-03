@@ -5,10 +5,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use moraine_core::{
-    capability_profile_for_integration, capture_fidelity_report, get_finding, list_findings,
-    respond_to_finding, run_checkpoint, run_ready, run_resume, run_show, run_start,
-    CheckpointInput, Error as CoreError, EvidenceItem, EvidenceKind, EvidenceProvenance,
-    RationalItem, RunShowOptions, RunStartRequest,
+    get_finding, list_findings, respond_to_finding, run_checkpoint, run_ready, run_resume,
+    run_show, run_start, CheckpointInput, Error as CoreError, EvidenceItem, EvidenceKind,
+    EvidenceProvenance, RationalItem, RunShowOptions, RunStartRequest,
 };
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -256,8 +255,10 @@ impl MoraineMcp {
         Parameters(args): Parameters<RunCoverageArgs>,
     ) -> Result<CallToolResult, McpError> {
         let run_id = parse_uuid(&args.run_id)?;
-        let profile = capability_profile_for_integration("unknown");
-        match capture_fidelity_report(Some(self.project_root.as_ref()), run_id, &profile) {
+        match moraine_provision::capture_fidelity_report_for_run(
+            Some(self.project_root.as_ref()),
+            run_id,
+        ) {
             Ok(report) => ok_json(json!({
                 "runId": report.run_id.to_string(),
                 "integration": report.integration,
@@ -660,5 +661,66 @@ mod tests {
         // Compact text payload should stay under budget.
         let text = format!("{res:?}");
         assert!(text.len() < TOOLS_LIST_MAX_BYTES);
+    }
+
+    #[tokio::test]
+    async fn run_coverage_propagates_unsupported_session_schema() {
+        use moraine_core::{provisional_run_ensure, ProvisionalRunRequest};
+        use std::fs;
+
+        let dir = tempdir().unwrap();
+        let project = init_project(Some(dir.path())).unwrap();
+        let started = provisional_run_ensure(ProvisionalRunRequest {
+            session_id: "mcp-future".into(),
+            project: Some(project.project_root.clone()),
+            objective: Some("mcp future schema".into()),
+            idempotency_key: None,
+            integration: Some("codex".into()),
+        })
+        .unwrap();
+        let meta = moraine_core::load_run_meta_readonly(&started.absolute_path)
+            .unwrap()
+            .unwrap();
+        let key = meta.agent.as_ref().unwrap().session_id.clone().unwrap();
+        // Overwrite via the canonical session path (keys are hashed into file stems).
+        let path = project.project_root.join(".moraine/sessions").join(
+            std::fs::read_dir(project.project_root.join(".moraine/sessions"))
+                .unwrap()
+                .flatten()
+                .next()
+                .unwrap()
+                .file_name(),
+        );
+        fs::write(
+            &path,
+            format!(
+                r#"{{
+                  "schemaVersion": 99,
+                  "sessionKey": "{key}",
+                  "externalSessionId": "mcp-future",
+                  "integration": "codex",
+                  "projectId": "{}",
+                  "projectRoot": "{}",
+                  "startedAt": "2020-01-01T00:00:00Z",
+                  "runIds": ["{}"],
+                  "sourcesSeen": ["startup"]
+                }}"#,
+                project.project_id,
+                project.project_root.display(),
+                started.run_id
+            ),
+        )
+        .unwrap();
+        let mcp = MoraineMcp::new(project.project_root.clone());
+        let res = mcp
+            .run_coverage(Parameters(RunCoverageArgs {
+                run_id: started.run_id.to_string(),
+            }))
+            .await
+            .unwrap();
+        assert!(
+            res.is_error.unwrap_or(false),
+            "expected MCP error for unsupported session schema, got {res:?}"
+        );
     }
 }

@@ -22,17 +22,18 @@ pub mod share;
 pub mod watcher;
 
 pub use agent_protocol::{
-    capability_profile_for_integration, capture_fidelity_report, capture_git_context,
-    change_finding_state, change_finding_state_at_path, create_finding, create_finding_at_path,
-    current_checkpoint_claim, derive_capture_coverage, ensure_project, entry_redact,
-    entry_redact_at_path, entry_supersede, entry_supersede_at_path, find_run_by_id, get_finding,
-    get_finding_at_path, human_observation_add, human_observation_add_at_path, init_project,
-    is_redacted, list_append_ops, list_append_ops_at_path, list_findings, list_findings_at_path,
+    capture_fidelity_report, capture_git_context, change_finding_state,
+    change_finding_state_at_path, create_finding, create_finding_at_path, current_checkpoint_claim,
+    derive_capture_coverage, ensure_project, entry_redact, entry_redact_at_path, entry_supersede,
+    entry_supersede_at_path, find_run_by_id, get_finding, get_finding_at_path,
+    human_observation_add, human_observation_add_at_path, init_project, is_redacted,
+    list_append_ops, list_append_ops_at_path, list_findings, list_findings_at_path,
     load_evidence_record, load_run_checkpoints_detail, load_session, namespace_session_key,
-    project_append_only_ops, project_checkpoint_summary,
-    project_string_list_without_redacted_claims, project_target_context, project_target_snapshot,
-    provisional_run_ensure, record_mechanical_evidence, redact_secrets, resolve_confined_project,
-    resolve_existing_project, resolve_or_init_project, respond_to_finding,
+    parse_session_record, peek_run_integration, project_append_only_ops,
+    project_checkpoint_summary, project_string_list_without_redacted_claims,
+    project_target_context, project_target_snapshot, provisional_run_ensure,
+    record_mechanical_evidence, redact_secrets, resolve_confined_project, resolve_existing_project,
+    resolve_or_init_project, resolve_session_for_run, respond_to_finding,
     respond_to_finding_at_path, run_amend, run_amend_at_path, run_checkpoint, run_ready,
     run_resume, run_show, run_start, session_observe, ActorCategory, AgentOpResult, AgentRunState,
     AmendRequest, AppendOnlyOpRecord, AppendOpResult, CapabilitySupport, CaptureCapabilityProfile,
@@ -73,9 +74,9 @@ pub use comments::{
 };
 pub use discovery::{
     build_timeline, canonicalize_existing, dedupe_project_roots, filter_runs, filter_runs_ext,
-    list_run_summaries, load_run_detail, project_display_name, scan_project_roots,
-    summarize_project, summarize_run_path, ProjectRunCounts, ProjectSummary, RunDetail,
-    RunIntegrity, RunSummary, TimelineEntry,
+    list_run_summaries, load_run_detail, load_run_detail_with_profile, project_display_name,
+    scan_project_roots, summarize_project, summarize_run_path, ProjectRunCounts, ProjectSummary,
+    RunDetail, RunIntegrity, RunSummary, TimelineEntry,
 };
 pub use document::{Document, DocumentId, DocumentMeta, DocumentSnapshot};
 pub use error::{Error, Result};

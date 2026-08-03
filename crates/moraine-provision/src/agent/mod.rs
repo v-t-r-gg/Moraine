@@ -11,6 +11,8 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use moraine_core::CaptureCapabilityProfile;
+
 use crate::error::Result;
 use crate::types::{AgentKind, FileSnapshot};
 
@@ -115,6 +117,9 @@ pub trait AgentAdapter: Send + Sync {
     fn display_name(&self) -> &'static str;
     fn kind(&self) -> AgentKind;
 
+    /// Generic mechanical capture capabilities for this adapter (fidelity reporting).
+    fn capture_capabilities(&self) -> CaptureCapabilityProfile;
+
     fn detect(&self) -> Result<AgentDetection>;
     fn inspect(&self, project: &Path) -> Result<IntegrationState>;
     fn plan_install(&self, project: &Path, absolute_cli: &Path) -> Result<IntegrationPlan>;
@@ -140,4 +145,84 @@ pub fn all_adapters() -> Vec<Arc<dyn AgentAdapter>> {
         Arc::new(CodexAdapter::new()),
         Arc::new(ClaudeCodeAdapter::new()),
     ]
+}
+
+/// Authoritative built-in capability table. Unknown IDs resolve to all-`Unknown`.
+pub fn capability_profile_for_integration(integration: &str) -> CaptureCapabilityProfile {
+    let id = integration.trim();
+    if id.is_empty() || id == "unknown" {
+        return CaptureCapabilityProfile::unknown();
+    }
+    for adapter in all_adapters() {
+        if adapter.id() == id {
+            return adapter.capture_capabilities();
+        }
+    }
+    CaptureCapabilityProfile::unknown()
+}
+
+/// Resolve the capability profile for a run from durable session integration
+/// (application boundary). Propagates bound-session validation errors.
+pub fn capability_profile_for_run(
+    project: Option<&Path>,
+    run_id: uuid::Uuid,
+) -> moraine_core::Result<CaptureCapabilityProfile> {
+    let integration = moraine_core::peek_run_integration(project, run_id)?;
+    Ok(capability_profile_for_integration(
+        integration.as_deref().unwrap_or(""),
+    ))
+}
+
+/// Capture fidelity report with the authoritative adapter capability profile.
+pub fn capture_fidelity_report_for_run(
+    project: Option<&Path>,
+    run_id: uuid::Uuid,
+) -> moraine_core::Result<moraine_core::CaptureFidelityReport> {
+    let profile = capability_profile_for_run(project, run_id)?;
+    moraine_core::capture_fidelity_report(project, run_id, &profile)
+}
+
+#[cfg(test)]
+mod capability_tests {
+    use super::*;
+    use moraine_core::CapabilitySupport;
+
+    #[test]
+    fn codex_profile_tools_supported() {
+        let p = capability_profile_for_integration("codex");
+        assert_eq!(p.integration_id, "codex");
+        assert_eq!(p.session_lifecycle, CapabilitySupport::Supported);
+        assert_eq!(p.prompt_activity, CapabilitySupport::Supported);
+        assert_eq!(p.tool_activity, CapabilitySupport::Supported);
+        assert_eq!(p.semantic_protocol, CapabilitySupport::Supported);
+    }
+
+    #[test]
+    fn claude_code_tool_capability_not_supported() {
+        let p = capability_profile_for_integration("claude-code");
+        assert_eq!(p.integration_id, "claude-code");
+        assert_eq!(p.tool_activity, CapabilitySupport::NotSupported);
+        assert_eq!(p.session_lifecycle, CapabilitySupport::Supported);
+        assert_eq!(p.semantic_protocol, CapabilitySupport::Supported);
+    }
+
+    #[test]
+    fn unknown_integration_uses_unknown_profile() {
+        let p = capability_profile_for_integration("some-future-agent");
+        assert_eq!(p.integration_id, "unknown");
+        assert_eq!(p.session_lifecycle, CapabilitySupport::Unknown);
+        assert_eq!(p.prompt_activity, CapabilitySupport::Unknown);
+        assert_eq!(p.tool_activity, CapabilitySupport::Unknown);
+        assert_eq!(p.semantic_protocol, CapabilitySupport::Unknown);
+        let empty = capability_profile_for_integration("");
+        assert_eq!(empty, CaptureCapabilityProfile::unknown());
+    }
+
+    #[test]
+    fn adapter_trait_matches_table() {
+        let codex = adapter_for(AgentKind::Codex).capture_capabilities();
+        assert_eq!(codex, capability_profile_for_integration("codex"));
+        let claude = adapter_for(AgentKind::ClaudeCode).capture_capabilities();
+        assert_eq!(claude, capability_profile_for_integration("claude-code"));
+    }
 }

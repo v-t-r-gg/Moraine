@@ -7,10 +7,9 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use moraine_core::{
-    capability_profile_for_integration, capture_fidelity_report, find_run_by_id,
-    human_legacy_coverage_label, init_project, resolve_existing_project, run_checkpoint, run_ready,
-    run_resume, run_show, run_start, CaptureDimension, CheckpointInput, Error as CoreError,
-    ObservationState, RunShowOptions, RunStartRequest,
+    find_run_by_id, human_legacy_coverage_label, init_project, resolve_existing_project,
+    run_checkpoint, run_ready, run_resume, run_show, run_start, CaptureDimension, CheckpointInput,
+    Error as CoreError, ObservationState, RunShowOptions, RunStartRequest,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -451,10 +450,9 @@ pub fn dispatch_run(cmd: RunCmd) -> Result<i32> {
                 Ok(u) => u,
                 Err(c) => return Ok(c),
             };
-            // Prefer integration from session once known; start with unknown profile
-            // and let capture_fidelity_report refine from durable session state.
-            let profile = capability_profile_for_integration("unknown");
-            match capture_fidelity_report(project.as_deref(), id, &profile) {
+            // Resolve capability profile at the application boundary (provision
+            // adapter table); core derives facts with the supplied profile only.
+            match moraine_provision::capture_fidelity_report_for_run(project.as_deref(), id) {
                 Ok(report) => {
                     if json {
                         println!(

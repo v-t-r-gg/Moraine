@@ -2341,6 +2341,7 @@ dependencies = [
  "chrono",
  "futures",
  "moraine-core",
+ "moraine-provision",
  "rmcp",
  "schemars 1.2.1",
  "serde",

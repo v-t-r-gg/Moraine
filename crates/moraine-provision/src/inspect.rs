@@ -123,13 +123,24 @@ fn push_candidate(out: &mut Vec<ProjectCandidate>, path: &Path) {
         .unwrap_or("project")
         .to_string();
     let initialized = resolve_existing_project(Some(path)).is_ok();
-    let integration = initialized
-        .then(|| crate::agent::adapter_for(AgentKind::Codex).inspect(path))
-        .transpose();
-    let (integration_configured, integration_needs_repair) = match integration {
-        Ok(Some(state)) => (state.configured, state.needs_repair),
-        Ok(None) => (false, false),
-        Err(_) => (false, true),
+    let (integration_configured, integration_needs_repair) = if initialized {
+        let mut configured = false;
+        let mut needs_repair = false;
+        for adapter in crate::agent::all_adapters() {
+            match adapter.inspect(path) {
+                Ok(state) => {
+                    if state.configured {
+                        configured = true;
+                    }
+                    // Surface repair when any adapter is partial or drifted.
+                    needs_repair = needs_repair || state.needs_repair;
+                }
+                Err(_) => needs_repair = true,
+            }
+        }
+        (configured, needs_repair)
+    } else {
+        (false, false)
     };
     let is_git = path.join(".git").exists();
     // Avoid duplicates

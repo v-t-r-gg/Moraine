@@ -11,18 +11,21 @@ use crate::suite::SuiteState;
 #[serde(rename_all = "camelCase")]
 pub enum AgentKind {
     Codex,
+    ClaudeCode,
 }
 
 impl AgentKind {
     pub fn as_str(self) -> &'static str {
         match self {
             AgentKind::Codex => "codex",
+            AgentKind::ClaudeCode => "claude-code",
         }
     }
 
     pub fn parse(s: &str) -> Option<Self> {
-        match s.to_ascii_lowercase().as_str() {
+        match s.to_ascii_lowercase().replace('_', "-").as_str() {
             "codex" => Some(AgentKind::Codex),
+            "claude-code" | "claudecode" | "claude" => Some(AgentKind::ClaudeCode),
             _ => None,
         }
     }

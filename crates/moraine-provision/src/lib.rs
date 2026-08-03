@@ -26,8 +26,8 @@ pub mod types;
 pub mod verify;
 
 pub use agent::{
-    adapter_for, all_adapters, AgentAdapter, AgentDetection, BackupRecorder, CodexAdapter,
-    IntegrationPlan, IntegrationReceipt, IntegrationState, IntegrationVerification,
+    adapter_for, all_adapters, AgentAdapter, AgentDetection, BackupRecorder, ClaudeCodeAdapter,
+    CodexAdapter, IntegrationPlan, IntegrationReceipt, IntegrationState, IntegrationVerification,
     VecBackupRecorder,
 };
 pub use apply::{

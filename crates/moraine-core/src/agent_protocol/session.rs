@@ -24,7 +24,8 @@ use super::types::{CaptureCoverage, MAX_SUMMARY_CHARS};
 use crate::atomic::{write_atomic, SidecarLock};
 use crate::error::{Error, Result};
 
-pub const SESSION_SCHEMA_VERSION: u32 = 2;
+/// Writable session envelope schema. Older v1/v2 files remain readable.
+pub const SESSION_SCHEMA_VERSION: u32 = 3;
 pub const SESSIONS_DIR: &str = "sessions";
 pub const MAX_PROMPT_CONTEXT: usize = 32;
 
@@ -60,6 +61,12 @@ pub struct SessionRecord {
     /// Observe sources already recorded (startup, resume, user_prompt, stop, …).
     #[serde(default)]
     pub sources_seen: Vec<String>,
+    /// Exact per-source mechanical observation counts (v3+).
+    #[serde(default)]
+    pub observation_counts: std::collections::BTreeMap<String, u64>,
+    /// False for migrated v1/v2 sessions where earlier exact counts are unknowable.
+    #[serde(default)]
+    pub observation_counts_complete: bool,
 }
 
 impl SessionRecord {
@@ -74,8 +81,16 @@ impl SessionRecord {
                     | "user_prompt"
                     | "stop"
                     | "session_start"
-            )
-        })
+                    | "session_stop"
+                    | "command_started"
+                    | "command_finished"
+                    | "tool_started"
+                    | "tool_finished"
+                    | "artifact_observed"
+                    | "provisional_ensure"
+            ) || s.starts_with("tool_")
+                || s.starts_with("command_")
+        }) || !self.observation_counts.is_empty()
     }
 }
 
@@ -257,9 +272,11 @@ pub fn load_session(project_root: &Path, session_key: &str) -> Result<Option<Ses
             max: SESSION_SCHEMA_VERSION,
         });
     }
-    // Soft-migrate v1 → v2 field defaults already via serde defaults.
+    // Soft-migrate in memory only (ordinary reads do not rewrite session files).
+    // Historical exact counts remain unknowable, so completeness stays false.
     if rec.schema_version < SESSION_SCHEMA_VERSION {
         rec.schema_version = SESSION_SCHEMA_VERSION;
+        rec.observation_counts_complete = false;
     }
     Ok(Some(rec))
 }
@@ -322,7 +339,7 @@ pub fn session_observe(req: SessionObserveRequest) -> Result<SessionObserveResul
     let mut created = false;
     let mut rec = if path.exists() {
         let raw = fs::read_to_string(&path)?;
-        let existing: SessionRecord = serde_json::from_str(&raw)?;
+        let mut existing: SessionRecord = serde_json::from_str(&raw)?;
         // Reject project retarget for the same session key.
         let locked = PathBuf::from(&existing.project_root);
         let locked_canon = fs::canonicalize(&locked).unwrap_or(locked);
@@ -335,6 +352,11 @@ pub fn session_observe(req: SessionObserveRequest) -> Result<SessionObserveResul
                     project_root.display()
                 ),
             });
+        }
+        // Promote schema on legitimate mutation; historical count completeness stays false.
+        if existing.schema_version < SESSION_SCHEMA_VERSION {
+            existing.schema_version = SESSION_SCHEMA_VERSION;
+            existing.observation_counts_complete = false;
         }
         existing
     } else {
@@ -354,12 +376,20 @@ pub fn session_observe(req: SessionObserveRequest) -> Result<SessionObserveResul
             initial_task: None,
             prompt_context: vec![],
             sources_seen: vec![],
+            observation_counts: std::collections::BTreeMap::new(),
+            observation_counts_complete: true,
         }
     };
 
     if !rec.sources_seen.iter().any(|s| s == source) {
         rec.sources_seen.push(source.to_string());
     }
+    // Exact count: every accepted observe increments once (spool dedupe is upstream).
+    let entry = rec
+        .observation_counts
+        .entry(source.to_string())
+        .or_insert(0);
+    *entry = entry.saturating_add(1);
     if rec.integration == "unknown" && integration != "unknown" {
         rec.integration = integration;
     }
@@ -450,24 +480,7 @@ pub fn derive_capture_coverage(
     session: Option<&SessionRecord>,
     checkpoint_count: usize,
 ) -> CaptureCoverage {
-    let mechanical = session
-        .map(|s| {
-            s.has_mechanical_hooks()
-                || s.sources_seen
-                    .iter()
-                    .any(|x| x == "provisional_ensure" || x == "session_start")
-        })
-        .unwrap_or(false);
-    let semantic = !provisional || checkpoint_count > 0;
-    match (mechanical, semantic) {
-        (true, true) if !provisional => CaptureCoverage::Full,
-        (true, _) if provisional => CaptureCoverage::MechanicalOnly,
-        (true, false) => CaptureCoverage::MechanicalOnly,
-        (false, true) if !provisional => CaptureCoverage::SemanticOnly,
-        (false, true) => CaptureCoverage::Unknown,
-        (false, false) => CaptureCoverage::Unknown,
-        (true, true) => CaptureCoverage::Full,
-    }
+    super::capture_fidelity::derive_capture_coverage(provisional, session, checkpoint_count)
 }
 
 #[cfg(test)]
@@ -553,5 +566,150 @@ mod tests {
         let dir = tempdir().unwrap();
         let err = resolve_confined_project(Some(dir.path())).unwrap_err();
         assert!(matches!(err, Error::ProjectNotFound { .. }));
+    }
+
+    #[test]
+    fn v3_session_records_exact_observation_counts() {
+        let dir = tempdir().unwrap();
+        let project = crate::agent_protocol::project::init_project(Some(dir.path())).unwrap();
+        let obs = session_observe(SessionObserveRequest {
+            session_id: "count-ext".into(),
+            integration: "codex".into(),
+            project: Some(project.project_root.clone()),
+            source: "startup".into(),
+            initial_task: None,
+            ended: false,
+            confine_existing_project: true,
+        })
+        .unwrap();
+        session_observe(SessionObserveRequest {
+            session_id: "count-ext".into(),
+            integration: "codex".into(),
+            project: Some(project.project_root.clone()),
+            source: "user_prompt".into(),
+            initial_task: Some("hello".into()),
+            ended: false,
+            confine_existing_project: true,
+        })
+        .unwrap();
+        session_observe(SessionObserveRequest {
+            session_id: "count-ext".into(),
+            integration: "codex".into(),
+            project: Some(project.project_root.clone()),
+            source: "user_prompt".into(),
+            initial_task: Some("again".into()),
+            ended: false,
+            confine_existing_project: true,
+        })
+        .unwrap();
+        let rec = load_session(&project.project_root, &obs.session_key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(rec.schema_version, SESSION_SCHEMA_VERSION);
+        assert!(rec.observation_counts_complete);
+        assert_eq!(rec.observation_counts.get("startup"), Some(&1));
+        assert_eq!(rec.observation_counts.get("user_prompt"), Some(&2));
+        assert!(rec.sources_seen.iter().any(|s| s == "startup"));
+        assert!(rec.sources_seen.iter().any(|s| s == "user_prompt"));
+    }
+
+    #[test]
+    fn v1_session_loads_with_incomplete_counts() {
+        let dir = tempdir().unwrap();
+        let project = crate::agent_protocol::project::init_project(Some(dir.path())).unwrap();
+        let sessions = sessions_dir(&project.project_root);
+        fs::create_dir_all(&sessions).unwrap();
+        let key = namespace_session_key("codex", project.project_id, "legacy");
+        let path = session_path(&project.project_root, &key);
+        // Minimal v1-shaped envelope (no observation_counts fields).
+        let raw = format!(
+            r#"{{
+              "schemaVersion": 1,
+              "sessionKey": "{key}",
+              "externalSessionId": "legacy",
+              "integration": "codex",
+              "projectId": "{}",
+              "projectRoot": "{}",
+              "startedAt": "2020-01-01T00:00:00Z",
+              "sourcesSeen": ["startup", "user_prompt"]
+            }}"#,
+            project.project_id,
+            project.project_root.display()
+        );
+        fs::write(&path, raw).unwrap();
+        let before = fs::metadata(&path).unwrap().modified().unwrap();
+        let rec = load_session(&project.project_root, &key).unwrap().unwrap();
+        assert_eq!(rec.schema_version, SESSION_SCHEMA_VERSION);
+        assert!(!rec.observation_counts_complete);
+        assert!(rec.sources_seen.iter().any(|s| s == "startup"));
+        // Ordinary read must not rewrite the file.
+        let after = fs::metadata(&path).unwrap().modified().unwrap();
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn unsupported_future_session_schema_fails() {
+        let dir = tempdir().unwrap();
+        let project = crate::agent_protocol::project::init_project(Some(dir.path())).unwrap();
+        let key = namespace_session_key("codex", project.project_id, "future");
+        let path = session_path(&project.project_root, &key);
+        fs::create_dir_all(sessions_dir(&project.project_root)).unwrap();
+        let raw = format!(
+            r#"{{
+              "schemaVersion": 99,
+              "sessionKey": "{key}",
+              "externalSessionId": "future",
+              "integration": "codex",
+              "projectId": "{}",
+              "projectRoot": "{}",
+              "startedAt": "2020-01-01T00:00:00Z"
+            }}"#,
+            project.project_id,
+            project.project_root.display()
+        );
+        fs::write(&path, raw).unwrap();
+        let err = load_session(&project.project_root, &key).unwrap_err();
+        assert!(matches!(err, Error::UnsupportedSchemaVersion { .. }));
+    }
+
+    #[test]
+    fn mutation_promotes_legacy_session_with_incomplete_counts() {
+        let dir = tempdir().unwrap();
+        let project = crate::agent_protocol::project::init_project(Some(dir.path())).unwrap();
+        let key = namespace_session_key("codex", project.project_id, "promote");
+        let path = session_path(&project.project_root, &key);
+        fs::create_dir_all(sessions_dir(&project.project_root)).unwrap();
+        let raw = format!(
+            r#"{{
+              "schemaVersion": 2,
+              "sessionKey": "{key}",
+              "externalSessionId": "promote",
+              "integration": "codex",
+              "projectId": "{}",
+              "projectRoot": "{}",
+              "startedAt": "2020-01-01T00:00:00Z",
+              "sourcesSeen": ["startup"]
+            }}"#,
+            project.project_id,
+            project.project_root.display()
+        );
+        fs::write(&path, raw).unwrap();
+        session_observe(SessionObserveRequest {
+            session_id: "promote".into(),
+            integration: "codex".into(),
+            project: Some(project.project_root.clone()),
+            source: "user_prompt".into(),
+            initial_task: Some("later".into()),
+            ended: false,
+            confine_existing_project: true,
+        })
+        .unwrap();
+        let rec = load_session(&project.project_root, &key).unwrap().unwrap();
+        assert_eq!(rec.schema_version, SESSION_SCHEMA_VERSION);
+        assert!(!rec.observation_counts_complete);
+        assert!(rec.sources_seen.iter().any(|s| s == "startup"));
+        assert!(rec.sources_seen.iter().any(|s| s == "user_prompt"));
+        // Only post-migration observes have exact counts.
+        assert_eq!(rec.observation_counts.get("user_prompt"), Some(&1));
     }
 }

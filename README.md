@@ -56,11 +56,15 @@ Moraine actually observed (capability vs observation, no percentage score):
 moraine run coverage <RUN_ID> --project /path/to/project
 ```
 
-Open the desktop later:
+Open the desktop review workspace later:
 
 ```bash
 moraine open
 ```
+
+The desktop is organized as **Projects → Runs → Review** (Overview, Checkpoints,
+Evidence, Findings, History). It records review activity; it does not approve
+work. See [docs/EXTERNAL_BETA_REVIEW.md](docs/EXTERNAL_BETA_REVIEW.md).
 
 ## Files Moraine creates
 

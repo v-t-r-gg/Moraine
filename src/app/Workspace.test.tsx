@@ -1,6 +1,6 @@
 // @ts-nocheck — node fs used for structural source checks in vitest only.
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { readFileSync } from "fs";
 import { dirname, join } from "path";
@@ -21,6 +21,7 @@ const demoProject = {
   available: true,
   runCounts: { active: 1, ready: 0, recent: 1 },
   openFindingCount: 2,
+  lastActivityAt: "2026-01-01T00:00:00Z",
 };
 
 const healthyRun = {
@@ -40,6 +41,8 @@ const healthyRun = {
   appendOnlyOpCount: 1,
   integrity: "current",
   recoveryRequired: false,
+  startedAt: "2026-01-01T00:00:00Z",
+  updatedAt: "2026-01-01T01:00:00Z",
 };
 
 const malformedRun = {
@@ -69,15 +72,30 @@ vi.mock("@/shared/api/discovery", () => ({
 
 vi.mock("@/shared/api", async () => {
   const actual = await vi.importActual<typeof import("@/shared/api")>("@/shared/api");
-  return { ...actual, isTauri: false };
+  return {
+    ...actual,
+    isTauri: false,
+    getRunCheckpoints: vi.fn().mockResolvedValue({
+      runId: "r1",
+      contentHash: "h",
+      checkpoints: [
+        {
+          opId: "cp1",
+          summary: "First checkpoint",
+          createdAt: "2026-01-01T00:00:00Z",
+          openFindingCount: 1,
+          findingCount: 1,
+        },
+      ],
+      findings: [],
+    }),
+    listFindings: vi.fn().mockResolvedValue([]),
+    getFinding: vi.fn(),
+    createFinding: vi.fn(),
+    changeFindingState: vi.fn(),
+    listAppendOps: vi.fn().mockResolvedValue([]),
+  };
 });
-
-vi.mock("@/features/ledger/ProtocolLedgerPanel", () => ({
-  ProtocolLedgerPanel: () => <div data-testid="protocol-ledger">ledger</div>,
-}));
-vi.mock("@/features/findings/CheckpointFindingsPanel", () => ({
-  CheckpointFindingsPanel: () => <div>findings</div>,
-}));
 
 import { Workspace } from "./Workspace";
 import { LedgerTimeline } from "@/features/ledger/LedgerTimeline";
@@ -108,18 +126,46 @@ function defaultMocks() {
         timestamp: "2026-01-01T00:00:00Z",
         kind: "checkpoint",
         summary: "Checkpoint: original → amended",
-        detail: "Original claim:\noriginal\n\nAmendment (fix):\nPrior: original\nNew: amended\n\nCurrent statement:\namended\n",
+        detail: "Original claim:\noriginal\n\nCurrent statement:\namended\n",
       },
       {
         id: "t2",
         timestamp: "2026-01-01T00:01:00Z",
-        kind: "amendment",
-        summary: "Amendment: fix",
+        kind: "evidence",
+        summary: "tool result",
+        provenance: "result_observed",
+      },
+      {
+        id: "t3",
+        timestamp: "2026-01-01T00:02:00Z",
+        kind: "evidence",
+        summary: "agent note",
+        provenance: "agent_reported",
       },
     ],
     isProtocolRun: true,
+    objective: "Ship discovery",
     risks: ["maybe flaky"],
-    openQuestions: [],
+    openQuestions: ["ordering?"],
+    captureFidelity: {
+      schemaVersion: 1,
+      runId: "r1",
+      integration: "codex",
+      legacyCoverage: "full",
+      provisional: false,
+      sessionBound: true,
+      dimensions: [
+        {
+          dimension: "tool_activity",
+          capability: "supported",
+          observation: "observed",
+          exactCount: 1,
+          countIsComplete: true,
+          explanation: "tools",
+        },
+      ],
+      gaps: [],
+    },
   });
   rebuildMock.mockResolvedValue({ ok: true });
   rescanMock.mockResolvedValue({ ok: true });
@@ -145,7 +191,6 @@ describe("Workspace discovery shell", () => {
 
   it("App defaults to workspace not welcome-md", () => {
     const app = readFileSync(join(root, "src/app/App.tsx"), "utf8");
-    // The ledger workspace is the default product shell.
     expect(app).toContain("product-shell");
     expect(app).toContain("<Workspace");
     expect(app).not.toContain("WELCOME_MD");
@@ -153,37 +198,79 @@ describe("Workspace discovery shell", () => {
     expect(app).not.toMatch(/moraine-welcome\.md/);
   });
 
-  it("shows service offline banner when status is offline", async () => {
+  it("shows discovery offline banner when status is offline", async () => {
     render(<Workspace />);
     await waitFor(() => {
-      expect(screen.getByText(/Service offline/i)).toBeInTheDocument();
+      expect(screen.getByTestId("offline-banner")).toBeInTheDocument();
     });
   });
 
-  it("selects a run and shows timeline original→amended→current", async () => {
+  it("selects a run and shows review header and overview", async () => {
     const user = userEvent.setup();
     render(<Workspace />);
     await waitFor(() => expect(screen.getByText("Ship discovery")).toBeInTheDocument());
     await user.click(screen.getByText("Ship discovery"));
-    await waitFor(() => expect(screen.getByTestId("protocol-ledger")).toBeInTheDocument());
-    await waitFor(() => expect(screen.getByText("Timeline")).toBeInTheDocument());
-    expect(screen.getByText(/Checkpoint: original → amended/)).toBeInTheDocument();
-    // Expand details for original/current claim chain
-    const details = screen.getByText("Details");
-    await user.click(details);
-    expect(screen.getByText(/Original claim/)).toBeInTheDocument();
-    expect(screen.getByText(/Current statement/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("run-review-header")).toBeInTheDocument());
+    expect(screen.getByTestId("header-lifecycle")).toHaveTextContent("Active");
+    expect(screen.getByTestId("header-fidelity")).toHaveTextContent(
+      /Mechanical \+ semantic observed|Semantic observed/,
+    );
+    await waitFor(() => expect(screen.getByTestId("review-overview")).toBeInTheDocument());
+    expect(screen.getByTestId("overview-risks")).toBeInTheDocument();
+  });
+
+  it("run change clears section to overview and supports nav", async () => {
+    const user = userEvent.setup();
+    const second = {
+      ...healthyRun,
+      runId: "r2",
+      objective: "Second run",
+    };
+    runsMock.mockResolvedValue([healthyRun, second]);
+    detailMock.mockImplementation(async (args: { runId?: string }) => ({
+      summary: args?.runId === "r2" ? second : healthyRun,
+      timeline: [],
+      isProtocolRun: true,
+      objective: args?.runId === "r2" ? "Second run" : "Ship discovery",
+      risks: [],
+      openQuestions: [],
+      captureFidelity: {
+        schemaVersion: 1,
+        runId: args?.runId ?? "r1",
+        integration: "claude-code",
+        legacyCoverage: "full",
+        provisional: false,
+        sessionBound: true,
+        dimensions: [
+          {
+            dimension: "tool_activity",
+            capability: "not_supported",
+            observation: "not_supported",
+            exactCount: 0,
+            countIsComplete: true,
+            explanation: "Tool activity is not supported by this adapter.",
+          },
+        ],
+        gaps: [],
+      },
+    }));
+    render(<Workspace />);
+    await waitFor(() => expect(screen.getByText("Ship discovery")).toBeInTheDocument());
+    await user.click(screen.getByText("Ship discovery"));
+    await waitFor(() => expect(screen.getByTestId("review-nav")).toBeInTheDocument());
+    await user.click(screen.getByTestId("review-tab-history"));
+    expect(screen.getByTestId("review-history")).toBeInTheDocument();
+    await user.click(screen.getByText("Second run"));
+    await waitFor(() => expect(screen.getByTestId("review-overview")).toBeInTheDocument());
   });
 
   it("passes category and search filters into discoveryRuns", async () => {
     const user = userEvent.setup();
     render(<Workspace />);
     await waitFor(() => expect(screen.getByText("Demo")).toBeInTheDocument());
-    await user.click(screen.getByRole("button", { name: "active" }));
+    await user.click(screen.getByRole("button", { name: "Active" }));
     await waitFor(() => {
-      expect(runsMock).toHaveBeenCalledWith(
-        expect.objectContaining({ category: "active" }),
-      );
+      expect(runsMock).toHaveBeenCalledWith(expect.objectContaining({ category: "active" }));
     });
     const search = screen.getByLabelText("Search runs");
     await user.clear(search);
@@ -194,11 +281,11 @@ describe("Workspace discovery shell", () => {
     });
   });
 
-  it("shows malformed integrity on run card", async () => {
+  it("shows malformed integrity on run card with human label", async () => {
     runsMock.mockResolvedValue([malformedRun]);
     render(<Workspace />);
     await waitFor(() => {
-      expect(screen.getByText("malformed_sidecar")).toBeInTheDocument();
+      expect(screen.getByText(/Malformed run record/i)).toBeInTheDocument();
     });
   });
 
@@ -207,13 +294,13 @@ describe("Workspace discovery shell", () => {
       {
         ...demoProject,
         available: false,
-        warning: "project path unavailable",
+        warning: "needs integrity attention",
       },
     ]);
     render(<Workspace />);
     await waitFor(() => {
-      expect(screen.getByText("unavailable")).toBeInTheDocument();
-      expect(screen.getByText(/project path unavailable/)).toBeInTheDocument();
+      expect(screen.getByText(/Project path unavailable/i)).toBeInTheDocument();
+      expect(screen.getByText(/needs integrity attention/i)).toBeInTheDocument();
     });
   });
 
@@ -225,11 +312,12 @@ describe("Workspace discovery shell", () => {
     });
   });
 
-  it("empty filter matches state", async () => {
+  it("distinguishes no runs vs filter mismatch", async () => {
+    // First unfiltered probe returns empty → project has no runs
     runsMock.mockResolvedValue([]);
     render(<Workspace />);
     await waitFor(() => {
-      expect(screen.getByText(/No runs match filters/i)).toBeInTheDocument();
+      expect(screen.getByText(/This project has no runs/i)).toBeInTheDocument();
     });
   });
 
@@ -248,6 +336,36 @@ describe("Workspace discovery shell", () => {
     await waitFor(() => expect(screen.getByText("Demo")).toBeInTheDocument());
     await user.click(screen.getByTitle("Rebuild discovery index"));
     await waitFor(() => expect(rebuildMock).toHaveBeenCalled());
+  });
+
+  it("shows captureFidelityError as explicit notice", async () => {
+    const user = userEvent.setup();
+    detailMock.mockResolvedValue({
+      summary: healthyRun,
+      timeline: [],
+      isProtocolRun: true,
+      objective: "Ship discovery",
+      risks: [],
+      openQuestions: [],
+      captureFidelity: null,
+      captureFidelityError: "unsupported_schema_version",
+    });
+    render(<Workspace />);
+    await waitFor(() => expect(screen.getByText("Ship discovery")).toBeInTheDocument());
+    await user.click(screen.getByText("Ship discovery"));
+    await waitFor(() =>
+      expect(screen.getByTestId("overview-fidelity-error")).toBeInTheDocument(),
+    );
+  });
+
+  it("does not use approval vocabulary in review chrome", async () => {
+    const user = userEvent.setup();
+    render(<Workspace />);
+    await waitFor(() => expect(screen.getByText("Ship discovery")).toBeInTheDocument());
+    await user.click(screen.getByText("Ship discovery"));
+    await waitFor(() => expect(screen.getByTestId("review-nav")).toBeInTheDocument());
+    const shell = screen.getByTestId("ledger-workspace").textContent || "";
+    expect(shell).not.toMatch(/approve|reject|block merge|safe to merge|verdict/i);
   });
 });
 
@@ -304,11 +422,38 @@ describe("RunList filters (local UI)", () => {
         onSelect={vi.fn()}
       />,
     );
-    await user.click(screen.getByRole("button", { name: "ready" }));
+    await user.click(screen.getByRole("button", { name: "Ready for review" }));
     expect(onCategory).toHaveBeenCalledWith("ready");
     await user.click(screen.getByLabelText("Open findings"));
     expect(onOpenFindingsOnly).toHaveBeenCalledWith(true);
-    expect(screen.getByLabelText("Capture coverage filter")).toBeInTheDocument();
+    expect(screen.getByLabelText("Capture observation filter")).toBeInTheDocument();
+  });
+
+  it("filter mismatch offers reset", () => {
+    const onReset = vi.fn();
+    render(
+      <RunList
+        runs={[]}
+        selectedId={null}
+        category="active"
+        query="zzz"
+        openFindingsOnly={false}
+        hasRisks={false}
+        hasQuestions={false}
+        captureCoverage=""
+        projectHasRuns
+        hasProject
+        onCategory={vi.fn()}
+        onQuery={vi.fn()}
+        onOpenFindingsOnly={vi.fn()}
+        onHasRisks={vi.fn()}
+        onHasQuestions={vi.fn()}
+        onCaptureCoverage={vi.fn()}
+        onResetFilters={onReset}
+        onSelect={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/No runs match the current filters/i)).toBeInTheDocument();
   });
 });
 
@@ -325,7 +470,7 @@ describe("ProjectList empty + offline", () => {
         onRebuild={vi.fn()}
       />,
     );
-    expect(screen.getByText(/Service offline/i)).toBeInTheDocument();
+    expect(screen.getByTestId("projects-offline")).toBeInTheDocument();
     expect(screen.getByText(/No projects yet/i)).toBeInTheDocument();
   });
 });

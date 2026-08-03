@@ -32,8 +32,14 @@ Complete real Windows 11 acceptance for the implemented runtime:
 W2 does not include a signed installer or WinGet publication.
 
 **W2-E Windows interactive acceptance remains pending** (`not_executed`). Draft
-PR #26 records that evidence gate. Second-agent implementation proceeds
-independently because it does not alter Windows support claims.
+PR #26 records that evidence gate. The external-beta review workspace proceeds
+independently and does not alter Windows support claims.
+
+### External beta review workspace
+
+Desktop Projects → Runs → Review flow for evaluators without schema knowledge:
+overview, checkpoints, evidence, findings, history, capture fidelity, and
+recovery notices. See [docs/EXTERNAL_BETA_REVIEW.md](docs/EXTERNAL_BETA_REVIEW.md).
 
 ## Later
 
@@ -41,10 +47,9 @@ independently because it does not alter Windows support claims.
    * no-admin installation where practical;
    * uninstall that preserves project ledgers;
    * signing, upgrade & package-manager validation.
-2. **External beta evidence & product presentation**
-   * clean-machine workflows;
-   * real graphical acceptance;
-   * current screenshots or demonstrations only when reproducible.
+2. **External beta evidence expansion**
+   * clean-machine workflows beyond the coordinated review workspace;
+   * broader graphical demonstration packs when reproducible.
 3. **Deferred**
    * broad evidence expansion;
    * semantic or vector search;

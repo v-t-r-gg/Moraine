@@ -128,18 +128,23 @@ compatibility review.
 
 ## External-beta gate
 
-External beta evidence requires:
+The coordinated desktop review workspace (Projects → Runs → Review) is the
+primary product surface for evaluators. See
+[EXTERNAL_BETA_REVIEW.md](EXTERNAL_BETA_REVIEW.md).
+
+External beta evidence still requires:
 
 * a clean supported-host install by someone outside the implementation loop;
 * one successful real agent run with stated capture coverage;
 * project discovery after service & desktop restart;
 * diagnosis & recovery from at least one injected failure;
 * uninstall confirmation with project ledgers retained;
-* current screenshots or demonstration material generated from that workflow;
-* limitations stated beside the evidence.
+* current screenshots or demonstration material generated from that workflow when claimed;
+* limitations stated beside the evidence (W2-E remains `not_executed`; Windows Product Ready remains No).
 
-Synthetic hook payloads & headless tests remain useful regression evidence; they
-do not substitute for graphical or user-session acceptance.
+Repository gates include `./scripts/desktop-review-acceptance.sh` (frontend build,
+Tauri command-boundary tests, optional fixture). Synthetic fixtures do not claim
+Windows product readiness.
 
 ## Deferred work
 

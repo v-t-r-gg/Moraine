@@ -176,7 +176,10 @@ Product verification still requires a real, session-bound run to materialize &
 remain readable; direct core tests cannot produce product `Ready`.
 
 Mechanical hooks establish activity coverage. MCP checkpoints add semantic
-intent, evidence & findings. Moraine reports the distinction.
+intent, evidence & findings. Moraine reports the distinction through a shared
+capture fidelity report: adapter capability profiles are separate from observed
+facts; legacy `captureCoverage` remains a compact compatibility field; `full`
+means both primary channels were observed, not complete agent knowledge.
 
 ## Setup & rollback
 

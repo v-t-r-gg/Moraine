@@ -9,6 +9,8 @@ Moraine records review activity; it does not render a verdict.
 * Append-only observations, amendments, supersessions & target redaction.
 * Codex hooks plus MCP integration.
 * Claude Code ProductCapture adapter (project MCP & lifecycle hooks).
+* Multi-agent capture fidelity reporting (capability vs observation, session v3
+  counts, CLI/MCP/desktop shared report; no percentage scores).
 * Background capture, durable spool & rebuildable project discovery.
 * Transactional Linux & staged-Windows provisioning, rollback, repair &
   self-verification.
@@ -39,20 +41,18 @@ independently because it does not alter Windows support claims.
    * no-admin installation where practical;
    * uninstall that preserves project ledgers;
    * signing, upgrade & package-manager validation.
-2. **Multi-agent fidelity & coverage reporting**
-   * honest mechanical versus semantic capture across adapters;
-   * preserve one run model rather than agent-specific domain state.
-3. **External beta evidence & product presentation**
+2. **External beta evidence & product presentation**
    * clean-machine workflows;
    * real graphical acceptance;
    * current screenshots or demonstrations only when reproducible.
-4. **Deferred**
+3. **Deferred**
    * broad evidence expansion;
    * semantic or vector search;
    * relay authentication;
    * richer Git/PR integration;
    * hosted or live-collaboration expansion;
    * general public API reorganization.
+   * Claude tool-call capture (beyond current lifecycle hooks).
 
 Implementation constraints & acceptance gates live in
 [docs/DEVELOPMENT_BLUEPRINT.md](docs/DEVELOPMENT_BLUEPRINT.md). Current

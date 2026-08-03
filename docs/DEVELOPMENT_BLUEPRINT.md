@@ -119,9 +119,12 @@ removal & ProductCapture verification with no approval or verdict semantics.
 proceeds independently because it does not alter Windows support claims or
 domain protocols.
 
-Further multi-agent fidelity (coverage honesty across adapters) is a following
-slice. If a future adapter requires a domain schema change, that change receives
-its own compatibility review.
+Multi-agent fidelity reporting is implemented: one agent-neutral capability
+profile table, session v3 observation counts, and a derived fidelity report
+shared by CLI (`run coverage`), MCP (`run_coverage`), discovery, and desktop.
+Run sidecars remain schema v6; no Claude/Codex-specific domain fields. If a
+future adapter requires a domain schema change, that change receives its own
+compatibility review.
 
 ## External-beta gate
 

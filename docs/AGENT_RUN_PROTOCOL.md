@@ -111,17 +111,48 @@ Supported older sidecars remain readable. Mutation promotes them to the current
 writable schema through tested compatibility paths. The current schema constant
 is `moraine_core::run_meta::SCHEMA_CURRENT_WRITABLE`.
 
-## Capture coverage
+## Capture coverage & fidelity
 
-Coverage is explicit:
+Legacy `captureCoverage` on the run remains a compact compatibility field with
+stable serialized values:
 
-* mechanical; hook activity reached the capture path;
-* semantic; the agent used run/checkpoint operations;
-* evidence; evidence references or artifacts were recorded;
-* findings; review findings exist;
-* incomplete; an expected layer is absent or failed.
+| Value | Meaning |
+|---|---|
+| `full` | Mechanical and semantic channels were both observed |
+| `mechanical_only` | Mechanical activity without semantic confirmation |
+| `semantic_only` | Semantic activity without a bound mechanical session |
+| `partial` | Both channels exist with a known expected observation gap |
+| `unknown` | Available state cannot support a stronger conclusion |
 
-No single hook event proves full semantic capture.
+`full` means both primary channels were observed. It is **not** complete
+knowledge of everything the agent did.
+
+Read surfaces derive a richer, agent-neutral **capture fidelity report** from
+the same durable run + session state:
+
+* **Capability** — can this adapter emit this category of observation?
+* **Observation** — did Moraine receive durable facts for this run?
+
+Dimensions include session lifecycle, prompt activity, tool activity, semantic
+start, checkpoints, mechanical evidence, agent-reported evidence, and review
+findings. Absence alone is not delivery failure. Gaps are factual expected
+observations that are missing — not scores, severities, or recommendations.
+
+Exact mechanical observation counts live on the session envelope
+(`SESSION_SCHEMA_VERSION` = 3). Older sessions remain readable; historical
+count completeness stays false because earlier exact counts are unknowable.
+Ordinary reads do not rewrite session files.
+
+Inspect via:
+
+```bash
+moraine run coverage <RUN_ID> --project /path/to/project
+moraine run coverage <RUN_ID> --project /path/to/project --json
+```
+
+MCP tool `run_coverage` returns the same compact facts for the server’s fixed
+project. No percentage or universal score is calculated — Moraine has no honest
+denominator for “everything the agent did.”
 
 ## CLI & MCP mapping
 

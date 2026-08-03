@@ -242,6 +242,9 @@ fn discovery_routes_over_loopback_http() {
         serde_json::from_str(&http_get(&format!("{base}/status")).unwrap()).unwrap();
     assert_eq!(status["status"], "ok");
     assert_eq!(status["online"], true);
+    assert_eq!(status["product"], "moraine-service");
+    assert_eq!(status["serviceProtocolVersion"], 1);
+    assert_eq!(status["protocolVersion"], 1);
     assert_eq!(status["captureReady"], true);
     assert_eq!(status["captureEndpoint"]["kind"], "unix_socket");
 

@@ -49,16 +49,10 @@ pub fn health(
             technical_detail: svc.status_message.clone(),
             repair: None,
         });
-    } else if svc.running && svc.diagnostics_ready && svc.capture_ready {
-        checks.push(HealthCheck {
-            id: "service.running".into(),
-            status: HealthStatus::Pass,
-            user_message: "Background capture is running".into(),
-            technical_detail: svc.status_message.clone(),
-            repair: None,
-        });
     } else if !svc.registration_present || !svc.registration_valid {
-        // Missing or invalid registration → Install/repair (not Start).
+        // Registration is authoritative. A live diagnostics responder without a
+        // valid product registration is not healthy (manual launch / port
+        // collision must not report Ready).
         checks.push(HealthCheck {
             id: "service.installed".into(),
             status: HealthStatus::Fail,
@@ -79,6 +73,14 @@ pub fn health(
                 project: None,
                 agent: None,
             }),
+        });
+    } else if svc.running && svc.diagnostics_ready && svc.capture_ready {
+        checks.push(HealthCheck {
+            id: "service.running".into(),
+            status: HealthStatus::Pass,
+            user_message: "Background capture is running".into(),
+            technical_detail: svc.status_message.clone(),
+            repair: None,
         });
     } else if svc.running {
         checks.push(HealthCheck {
@@ -475,5 +477,32 @@ mod tests {
         assert!(result.ok);
         assert_eq!(runtime.inspect_count(), 0);
         assert!(project.join(".moraine").is_dir());
+    }
+
+    #[test]
+    fn health_fails_when_diagnostics_ready_without_registration() {
+        let runtime = MemoryRuntimeManager::new();
+        // Simulate a live diagnostics responder (manual launch / port collision)
+        // without product Task Scheduler / systemd registration.
+        runtime.simulate_orphan_endpoint(true);
+
+        let report = health(&runtime, None, None).unwrap();
+        let service = report
+            .checks
+            .iter()
+            .find(|check| check.id.starts_with("service."))
+            .expect("service health check");
+
+        assert_eq!(service.status, HealthStatus::Fail);
+        assert_eq!(service.id, "service.installed");
+        let repair = service.repair.as_ref().expect("install repair");
+        assert_eq!(repair.kind, RepairKind::InstallService);
+        assert!(
+            !report
+                .checks
+                .iter()
+                .any(|check| check.id == "service.running" && check.status == HealthStatus::Pass),
+            "orphan diagnostics must not report healthy running capture"
+        );
     }
 }

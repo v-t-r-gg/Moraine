@@ -277,15 +277,28 @@ async fn handle_status(State(state): State<AppState>) -> Json<Value> {
     let executable = std::env::current_exe()
         .ok()
         .map(|p| p.display().to_string());
+    let scope_id = match &state.capture_endpoint {
+        moraine_platform::CaptureEndpoint::WindowsNamedPipe(name) => name
+            .rsplit(['\\', '/'])
+            .next()
+            .unwrap_or(name)
+            .strip_prefix("moraine.capture.v1.")
+            .filter(|scope| !scope.is_empty())
+            .map(str::to_owned),
+        _ => None,
+    };
     Json(json!({
         "status": "ok",
         "online": true,
+        "product": moraine_core::SERVICE_PRODUCT_ID,
+        "protocolVersion": build.service_protocol_version,
         "version": build.version,
         "productVersion": build.version,
         "gitCommit": build.git_commit,
         "serviceProtocolVersion": build.service_protocol_version,
         "schema": build.schema,
         "executablePath": executable,
+        "scopeId": scope_id,
         "captureReady": state.capture_ready.load(Ordering::Acquire),
         "captureEndpoint": state.capture_endpoint,
         "socketPath": match &state.capture_endpoint {

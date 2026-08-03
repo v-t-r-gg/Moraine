@@ -88,6 +88,18 @@ impl MemoryRuntimeManager {
     pub fn set_endpoint_ready_override(&self, ready: Option<bool>) {
         self.inner.lock().unwrap().endpoint_ready_override = ready;
     }
+
+    /// Test helper: diagnostics/capture appear ready without a product registration.
+    ///
+    /// Models Windows `running = task.running || diagnostics_ready` when a process
+    /// answers loopback diagnostics but no Task Scheduler task exists.
+    pub fn simulate_orphan_endpoint(&self, ready: bool) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.installed = false;
+        inner.running = ready;
+        inner.binary = None;
+        inner.endpoint_ready_override = Some(ready);
+    }
 }
 
 impl super::BackgroundRuntimeManager for MemoryRuntimeManager {

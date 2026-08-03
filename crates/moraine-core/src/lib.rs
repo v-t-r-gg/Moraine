@@ -58,7 +58,7 @@ pub use annotation_ops::{
 pub use build_info::{
     build_profile, build_target, git_commit, product_version, BuildIdentity, SchemaCompat,
     SuiteComponents, SuiteManifest, MCP_IMPLEMENTATION_VERSION, PRODUCT_NAME,
-    SCHEMA_CURRENT_WRITABLE, SCHEMA_MAXIMUM_READABLE, SCHEMA_MINIMUM_READABLE,
+    SCHEMA_CURRENT_WRITABLE, SCHEMA_MAXIMUM_READABLE, SCHEMA_MINIMUM_READABLE, SERVICE_PRODUCT_ID,
     SERVICE_PROTOCOL_VERSION,
 };
 #[allow(deprecated)]

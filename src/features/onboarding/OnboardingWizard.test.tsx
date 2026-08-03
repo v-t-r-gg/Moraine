@@ -196,9 +196,84 @@ describe("OnboardingWizard", () => {
     render(<OnboardingWizard onComplete={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: /^Continue$/i }));
     const agents = await screen.findByTestId("wizard-agents");
-    expect(agents).toHaveTextContent(/cannot be verified until Codex is detected/i);
+    expect(agents).toHaveTextContent(/cannot be verified until an agent is detected/i);
     expect(
       within(agents).getByRole("button", { name: /^Continue$/i }),
     ).toBeDisabled();
+  });
+
+  it("lists both agents and requires explicit selection when both are detected", async () => {
+    vi.mocked(provisionInspect).mockResolvedValueOnce({
+      platform: {
+        host: "linux",
+        userPaths: "supported",
+        suiteLayout: "supported",
+        captureTransport: "supported",
+        backgroundRuntime: "supported",
+        desktopHost: "supported",
+        userInstallation: "supported",
+      },
+      suite: {
+        prefix: "/tmp",
+        cliPath: "/tmp/moraine",
+        cliPresent: true,
+        servicePath: "",
+        servicePresent: false,
+        desktopPath: "",
+        desktopPresent: true,
+        manifestPath: "",
+        manifestPresent: false,
+        componentsCoherent: true,
+      },
+      service: {
+        installed: false,
+        running: false,
+        binaryPresent: false,
+        registrationPresent: false,
+        registrationValid: false,
+        autostartEnabled: false,
+        backend: "memory_test",
+        supported: true,
+        endpointReady: false,
+        diagnosticsReady: false,
+        captureReady: false,
+        statusMessage: "not set up",
+        platform: "test",
+      },
+      agents: [
+        {
+          kind: "codex",
+          id: "codex",
+          displayName: "Codex",
+          detected: true,
+          status: "readyToConnect",
+          statusMessage: "Ready to connect",
+        },
+        {
+          kind: "claudeCode",
+          id: "claude-code",
+          displayName: "Claude Code",
+          detected: true,
+          status: "readyToConnect",
+          statusMessage: "Ready to connect",
+        },
+      ],
+      projects: [],
+      readiness: "notConfigured",
+    });
+    render(<OnboardingWizard onComplete={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: /^Continue$/i }));
+    const agents = await screen.findByTestId("wizard-agents");
+    expect(agents).toHaveTextContent(/Codex/);
+    expect(agents).toHaveTextContent(/Claude Code/);
+    expect(agents).toHaveTextContent(/Choose which agent/i);
+    // Continue disabled until explicit selection when both detected
+    expect(
+      within(agents).getByRole("button", { name: /^Continue$/i }),
+    ).toBeDisabled();
+    fireEvent.click(screen.getByTestId("wizard-agent-claude-code"));
+    expect(
+      within(agents).getByRole("button", { name: /^Continue$/i }),
+    ).not.toBeDisabled();
   });
 });

@@ -50,6 +50,7 @@ export function OnboardingWizard({
   const [step, setStep] = useState<WizardStep>("welcome");
   const [system, setSystem] = useState<SystemStateDto | null>(systemState ?? null);
   const [projectPath, setProjectPath] = useState(initialProject ?? "");
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [plan, setPlan] = useState<SetupPlanDto | null>(null);
   const [receipt, setReceipt] = useState<SetupReceiptDto | null>(null);
   const [progressLabel, setProgressLabel] = useState("");
@@ -102,12 +103,16 @@ export function OnboardingWizard({
       setError("Choose a project folder first");
       return;
     }
+    if (!selectedAgent) {
+      setError("Choose a coding agent first");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
       const p = await provisionPlan({
         project: projectPath.trim(),
-        agent: "codex",
+        agent: selectedAgent,
         enableAutostart: true,
       });
       setPlan(p);
@@ -117,7 +122,7 @@ export function OnboardingWizard({
     } finally {
       setBusy(false);
     }
-  }, [projectPath]);
+  }, [projectPath, selectedAgent]);
 
   const runApply = useCallback(async () => {
     if (!projectPath.trim() || !plan) return;
@@ -224,6 +229,8 @@ export function OnboardingWizard({
           {step === "agents" ? (
             <AgentsStep
               agents={agents}
+              selectedId={selectedAgent}
+              onSelect={setSelectedAgent}
               onBack={() => setStep("welcome")}
               onNext={() => setStep("project")}
             />
@@ -303,60 +310,110 @@ function WelcomeStep({ onNext }: { onNext: () => void }) {
 
 function AgentsStep({
   agents,
+  selectedId,
+  onSelect,
   onBack,
   onNext,
 }: {
   agents: DetectedAgentDto[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
   onBack: () => void;
   onNext: () => void;
 }) {
-  const codex = agents.find((a) => a.id === "codex") ?? {
-    id: "codex",
-    displayName: "Codex",
-    detected: false,
-    status: "notFound",
-    statusMessage: "Not detected yet",
-    kind: "codex",
-  };
+  const list =
+    agents.length > 0
+      ? agents
+      : [
+          {
+            id: "codex",
+            displayName: "Codex",
+            detected: false,
+            status: "notFound",
+            statusMessage: "Not detected yet",
+            kind: "codex",
+          } satisfies DetectedAgentDto,
+        ];
+  const detected = list.filter((a) => a.detected);
+  const effectiveSelected =
+    selectedId ??
+    (detected.length === 1 ? detected[0].id : null);
+
+  // Auto-select the only detected agent.
+  if (selectedId == null && detected.length === 1) {
+    queueMicrotask(() => onSelect(detected[0].id));
+  }
+
+  const canContinue =
+    effectiveSelected != null &&
+    list.some((a) => a.id === effectiveSelected && a.detected);
+
   return (
     <div data-testid="wizard-agents">
       <h1 className="text-xl font-semibold">Coding agent</h1>
       <p className="mt-2 text-sm" style={{ color: "var(--muted)" }}>
         Moraine connects to the agent you already use.
+        {detected.length > 1
+          ? " Choose which agent to connect for this project."
+          : null}
       </p>
-      <div
-        className="mt-6 rounded-lg border p-4"
-        style={{ borderColor: "var(--border)", background: "var(--panel)" }}
-      >
-        <div className="flex items-center justify-between">
-          <span className="font-medium">{codex.displayName}</span>
-          <span
-            className="text-[11px] font-semibold"
-            style={{ color: codex.detected ? "#16a34a" : "#b45309" }}
-          >
-            {codex.detected ? "Detected" : "Not found"}
-          </span>
-        </div>
-        <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>
-          {codex.statusMessage}
-        </p>
-        {codex.executable ? (
-          <details className="mt-2 text-[10px]" style={{ color: "var(--muted)" }}>
-            <summary>Advanced details</summary>
-            <code className="mt-1 block break-all">{codex.executable}</code>
-            {codex.version ? <div>Version: {codex.version}</div> : null}
-          </details>
-        ) : null}
+      <div className="mt-6 space-y-3">
+        {list.map((agent) => {
+          const selected = effectiveSelected === agent.id;
+          return (
+            <button
+              key={agent.id}
+              type="button"
+              data-testid={`wizard-agent-${agent.id}`}
+              disabled={!agent.detected}
+              onClick={() => onSelect(agent.id)}
+              className="w-full rounded-lg border p-4 text-left transition"
+              style={{
+                borderColor: selected ? "var(--accent, #2563eb)" : "var(--border)",
+                background: "var(--panel)",
+                opacity: agent.detected ? 1 : 0.7,
+              }}
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-medium">{agent.displayName}</span>
+                <span
+                  className="text-[11px] font-semibold"
+                  style={{ color: agent.detected ? "#16a34a" : "#b45309" }}
+                >
+                  {agent.detected ? "Detected" : "Not found"}
+                </span>
+              </div>
+              <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>
+                {agent.statusMessage}
+              </p>
+              {agent.executable ? (
+                <details
+                  className="mt-2 text-[10px]"
+                  style={{ color: "var(--muted)" }}
+                >
+                  <summary>Advanced details</summary>
+                  <code className="mt-1 block break-all">{agent.executable}</code>
+                  {agent.version ? <div>Version: {agent.version}</div> : null}
+                </details>
+              ) : null}
+            </button>
+          );
+        })}
       </div>
-      {!codex.detected ? (
+      {detected.length === 0 ? (
         <p className="mt-3 text-xs" style={{ color: "#b45309" }}>
-          Install or start Codex, then reopen setup. Product capture cannot be
-          verified until Codex is detected.
+          Install or start a supported coding agent, then reopen setup. Product
+          capture cannot be verified until an agent is detected.
+        </p>
+      ) : null}
+      {detected.length > 1 && !effectiveSelected ? (
+        <p className="mt-3 text-xs" style={{ color: "#b45309" }}>
+          Select which agent to connect.
         </p>
       ) : null}
       <div className="mt-8 flex gap-2">
         <SecondaryButton onClick={onBack}>Back</SecondaryButton>
-        <PrimaryButton onClick={onNext} disabled={!codex.detected}>
+        <PrimaryButton onClick={onNext} disabled={!canContinue}>
           Continue
         </PrimaryButton>
       </div>

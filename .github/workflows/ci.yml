@@ -108,6 +108,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
       - name: System deps for Tauri link check
         run: |
           sudo apt-get update
@@ -117,11 +121,17 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf \
-            libssl-dev
+            libssl-dev \
+            xvfb \
+            curl
       - name: cargo check moraine-app
         run: cargo check -p moraine-app
       - name: Provision command tests
         run: cargo test -p moraine-app --test provision_commands
+      - name: Review workspace acceptance
+        run: |
+          npm ci
+          ./scripts/desktop-review-acceptance.sh
 
   linux-release-artifact:
     runs-on: ubuntu-latest

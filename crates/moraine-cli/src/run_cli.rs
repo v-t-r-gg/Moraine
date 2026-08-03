@@ -7,8 +7,9 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use moraine_core::{
-    find_run_by_id, init_project, resolve_existing_project, run_checkpoint, run_ready, run_resume,
-    run_show, run_start, CheckpointInput, Error as CoreError, RunShowOptions, RunStartRequest,
+    find_run_by_id, human_legacy_coverage_label, init_project, resolve_existing_project,
+    run_checkpoint, run_ready, run_resume, run_show, run_start, CaptureDimension, CheckpointInput,
+    Error as CoreError, ObservationState, RunShowOptions, RunStartRequest,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -40,6 +41,9 @@ pub enum RunCmd {
         idempotency_key: String,
         #[arg(long)]
         project: Option<PathBuf>,
+        /// Optional host session id; confirms a provisional run bound to this session.
+        #[arg(long)]
+        session_id: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -109,6 +113,15 @@ pub enum RunCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Read-only multi-agent capture fidelity report
+    Coverage {
+        /// Run UUID
+        run_id: String,
+        #[arg(long)]
+        project: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 pub fn dispatch_project(cmd: ProjectCmd) -> Result<i32> {
@@ -157,6 +170,7 @@ pub fn dispatch_run(cmd: RunCmd) -> Result<i32> {
             objective,
             idempotency_key,
             project,
+            session_id,
             json,
         } => {
             if !json {
@@ -166,7 +180,7 @@ pub fn dispatch_run(cmd: RunCmd) -> Result<i32> {
                 objective,
                 idempotency_key,
                 project,
-                session_id: None,
+                session_id,
             }) {
                 Ok(r) => {
                     emit_ok(
@@ -426,6 +440,65 @@ pub fn dispatch_run(cmd: RunCmd) -> Result<i32> {
                 println!("opened {}", path.display());
             }
             Ok(EXIT_OK)
+        }
+        RunCmd::Coverage {
+            run_id,
+            project,
+            json,
+        } => {
+            let id = match parse_uuid(json, &run_id) {
+                Ok(u) => u,
+                Err(c) => return Ok(c),
+            };
+            // Resolve capability profile at the application boundary (provision
+            // adapter table); core derives facts with the supplied profile only.
+            match moraine_provision::capture_fidelity_report_for_run(project.as_deref(), id) {
+                Ok(report) => {
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&json!({
+                                "ok": true,
+                                "coverage": report,
+                            }))?
+                        );
+                    } else {
+                        println!("Capture fidelity");
+                        println!(
+                            "Integration: {}",
+                            report.integration.as_deref().unwrap_or("unknown")
+                        );
+                        println!("{}", human_legacy_coverage_label(report.legacy_coverage));
+                        println!();
+                        for d in &report.dimensions {
+                            let label = CaptureDimension::label(d.dimension);
+                            let state = match d.observation {
+                                ObservationState::Observed => {
+                                    if let Some(n) = d.exact_count {
+                                        if d.count_is_complete {
+                                            format!("Observed ({n})")
+                                        } else if n > 0 {
+                                            "At least one observed".into()
+                                        } else {
+                                            "Observed".into()
+                                        }
+                                    } else {
+                                        "Observed".into()
+                                    }
+                                }
+                                ObservationState::NotObserved => "Not observed".into(),
+                                ObservationState::NotSupported => {
+                                    "Not supported by this adapter".into()
+                                }
+                                ObservationState::Unknown => "Unknown".into(),
+                            };
+                            println!("{label:<24} {state}");
+                        }
+                    }
+                    Ok(EXIT_OK)
+                }
+                Err(e) => Ok(emit_core(json, &e)),
+            }
         }
     }
 }

@@ -49,8 +49,14 @@ moraine doctor --project /path/to/project --integration codex
 ```
 
 Start Codex or Claude Code in that project. Hooks deliver mechanical events
-while the local MCP gives the agent semantic run operations. Open the desktop
-later:
+while the local MCP gives the agent semantic run operations. Inspect what
+Moraine actually observed (capability vs observation, no percentage score):
+
+```bash
+moraine run coverage <RUN_ID> --project /path/to/project
+```
+
+Open the desktop later:
 
 ```bash
 moraine open

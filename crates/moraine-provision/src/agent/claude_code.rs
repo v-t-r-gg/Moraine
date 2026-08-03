@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use moraine_core::resolve_existing_project;
+use moraine_core::{resolve_existing_project, CapabilitySupport, CaptureCapabilityProfile};
 use serde_json::{json, Value};
 
 use super::{
@@ -51,6 +51,17 @@ impl AgentAdapter for ClaudeCodeAdapter {
 
     fn kind(&self) -> AgentKind {
         AgentKind::ClaudeCode
+    }
+
+    fn capture_capabilities(&self) -> CaptureCapabilityProfile {
+        CaptureCapabilityProfile {
+            integration_id: "claude-code",
+            session_lifecycle: CapabilitySupport::Supported,
+            prompt_activity: CapabilitySupport::Supported,
+            // Current hooks capture SessionStart / UserPromptSubmit / Stop only.
+            tool_activity: CapabilitySupport::NotSupported,
+            semantic_protocol: CapabilitySupport::Supported,
+        }
     }
 
     fn detect(&self) -> Result<AgentDetection> {

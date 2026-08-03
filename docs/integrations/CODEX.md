@@ -38,7 +38,29 @@ manage findings & append corrections. The process is confined to one project
 root. Discover the live tool inventory through MCP `tools/list`.
 
 Healthy ProductCapture needs both paths. A run with hooks but no semantic
-checkpoint should be presented as partial capture, not complete evidence.
+confirmation should not be presented as complete evidence.
+
+## Capture fidelity
+
+Codex capability profile (this slice):
+
+| Dimension | Capability |
+|---|---|
+| Session lifecycle | supported |
+| Prompt activity | supported |
+| Tool activity | supported (depends on received Pre/Post tool hook events) |
+| Semantic protocol | supported |
+
+Tool activity appears as `observed` only when Moraine received durable tool or
+command mechanical events (or mechanical evidence) for the run. Missing tool
+events report `not_observed`, not adapter failure.
+
+Legacy coverage `full` means mechanical + semantic channels were both observed —
+not a complete transcript of agent work.
+
+```bash
+moraine run coverage <RUN_ID> --project /absolute/path/to/project --json
+```
 
 ## Check & repair
 

@@ -68,6 +68,26 @@ Each managed handler runs:
 Handlers are observational. They exit zero after spooling when capture is
 temporarily unavailable so Claude Code is not disrupted.
 
+## Capture fidelity
+
+Claude Code capability profile (this slice):
+
+| Dimension | Capability |
+|---|---|
+| Session lifecycle | supported (`SessionStart`, `Stop`) |
+| Prompt activity | supported (`UserPromptSubmit`) |
+| Tool activity | **not_supported** (tool-call hooks are not captured yet) |
+| Semantic protocol | supported (MCP run/checkpoint operations) |
+
+A Claude run may still report legacy coverage `full` when lifecycle + semantic
+start both land. Tool activity remains `not_supported` rather than failure.
+
+Inspect:
+
+```bash
+moraine run coverage <RUN_ID> --project /absolute/path/to/project
+```
+
 ## Capture & privacy
 
 Hook payloads may include `session_id`, `cwd`, `prompt`, `transcript_path`,

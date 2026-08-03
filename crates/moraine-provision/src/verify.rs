@@ -697,6 +697,7 @@ fn direct_core_capture_with_marker(
         project: Some(project.to_path_buf()),
         objective: Some(objective.clone()),
         idempotency_key: Some(format!("prov-{verification_id}")),
+        integration: Some("codex".into()),
     })
     .map_err(|e| e.to_string())?;
 

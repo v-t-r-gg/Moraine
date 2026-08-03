@@ -173,6 +173,7 @@ fn mcp_initialize_tools_and_lifecycle() {
                 "list_findings",
                 "respond_to_finding",
                 "run_checkpoint",
+                "run_coverage",
                 "run_ready",
                 "run_resume",
                 "run_show",

@@ -309,6 +309,7 @@ fn process_mechanical_value(value: &Value) -> Result<()> {
                     project,
                     objective: prompt,
                     idempotency_key: None,
+                    integration: event.integration.clone(),
                 })
                 .map(|_| ())
                 .map_err(core_err)?;

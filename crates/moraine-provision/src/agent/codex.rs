@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use moraine_core::resolve_existing_project;
+use moraine_core::{resolve_existing_project, CapabilitySupport, CaptureCapabilityProfile};
 use serde_json::{json, Value};
 
 use super::{
@@ -44,6 +44,16 @@ impl AgentAdapter for CodexAdapter {
 
     fn kind(&self) -> AgentKind {
         AgentKind::Codex
+    }
+
+    fn capture_capabilities(&self) -> CaptureCapabilityProfile {
+        CaptureCapabilityProfile {
+            integration_id: "codex",
+            session_lifecycle: CapabilitySupport::Supported,
+            prompt_activity: CapabilitySupport::Supported,
+            tool_activity: CapabilitySupport::Supported,
+            semantic_protocol: CapabilitySupport::Supported,
+        }
     }
 
     fn detect(&self) -> Result<AgentDetection> {

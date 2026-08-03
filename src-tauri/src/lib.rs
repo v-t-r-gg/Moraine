@@ -67,6 +67,8 @@ pub fn run() {
             commands::discovery_rebuild_index,
             commands::discovery_rescan_project,
             commands::discovery_add_existing_project,
+            commands::reveal_run_record,
+            commands::open_run_markdown,
             // Provisioning control plane (shared moraine-provision crate)
             commands::provision_inspect,
             commands::provision_plan,

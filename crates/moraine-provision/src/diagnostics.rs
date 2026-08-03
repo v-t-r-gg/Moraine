@@ -277,9 +277,8 @@ mod tests {
 
     #[test]
     fn scope_id_is_derived_from_named_pipe_layout() {
-        let layout_endpoint = CaptureEndpoint::WindowsNamedPipe(
-            r"\\.\pipe\moraine.capture.v1.d07be4ed3160".into(),
-        );
+        let layout_endpoint =
+            CaptureEndpoint::WindowsNamedPipe(r"\\.\pipe\moraine.capture.v1.d07be4ed3160".into());
         let expectation = DiagnosticsExpectation {
             capture_endpoint: Some(layout_endpoint),
             scope_id: scope_id_from_pipe_name(r"\\.\pipe\moraine.capture.v1.d07be4ed3160"),

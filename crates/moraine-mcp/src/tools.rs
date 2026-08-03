@@ -5,9 +5,10 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use moraine_core::{
-    get_finding, list_findings, respond_to_finding, run_checkpoint, run_ready, run_resume,
-    run_show, run_start, CheckpointInput, Error as CoreError, EvidenceItem, EvidenceKind,
-    EvidenceProvenance, RationalItem, RunShowOptions, RunStartRequest,
+    capability_profile_for_integration, capture_fidelity_report, get_finding, list_findings,
+    respond_to_finding, run_checkpoint, run_ready, run_resume, run_show, run_start,
+    CheckpointInput, Error as CoreError, EvidenceItem, EvidenceKind, EvidenceProvenance,
+    RationalItem, RunShowOptions, RunStartRequest,
 };
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -61,6 +62,7 @@ pub fn tool_names() -> &'static [&'static str] {
         "run_checkpoint",
         "run_ready",
         "run_resume",
+        "run_coverage",
         "list_findings",
         "get_finding",
         "respond_to_finding",
@@ -80,6 +82,12 @@ pub struct RunStartArgs {
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RunShowArgs {
+    pub run_id: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RunCoverageArgs {
     pub run_id: String,
 }
 
@@ -235,6 +243,39 @@ impl MoraineMcp {
                 "decisionCurrent": p.decision_current,
                 "incompleteOperation": p.incomplete_operation,
                 "git": compact_git(p.current_git.as_ref()),
+            })),
+            Err(e) => core_err(e),
+        }
+    }
+
+    #[tool(
+        description = "Read-only capture fidelity for a run: legacy coverage, dimensions, factual gaps. No prompts, transcripts, or scores."
+    )]
+    async fn run_coverage(
+        &self,
+        Parameters(args): Parameters<RunCoverageArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let run_id = parse_uuid(&args.run_id)?;
+        let profile = capability_profile_for_integration("unknown");
+        match capture_fidelity_report(Some(self.project_root.as_ref()), run_id, &profile) {
+            Ok(report) => ok_json(json!({
+                "runId": report.run_id.to_string(),
+                "integration": report.integration,
+                "legacyCoverage": report.legacy_coverage.as_str(),
+                "provisional": report.provisional,
+                "sessionBound": report.session_bound,
+                "dimensions": report.dimensions.iter().map(|d| json!({
+                    "dimension": d.dimension.as_str(),
+                    "capability": d.capability.as_str(),
+                    "observation": d.observation.as_str(),
+                    "exactCount": d.exact_count,
+                    "countIsComplete": d.count_is_complete,
+                    "explanation": d.explanation,
+                })).collect::<Vec<_>>(),
+                "gaps": report.gaps.iter().map(|g| json!({
+                    "dimension": g.dimension.as_str(),
+                    "reason": g.reason,
+                })).collect::<Vec<_>>(),
             })),
             Err(e) => core_err(e),
         }
@@ -567,5 +608,57 @@ mod tests {
         assert!(head.contains("run_start"));
         assert!(head.contains("run_ready"));
         assert!(head.contains("human approval") || head.contains("Never record"));
+    }
+
+    #[tokio::test]
+    async fn run_coverage_missing_run_and_invalid_uuid() {
+        let dir = tempdir().unwrap();
+        let project = init_project(Some(dir.path())).unwrap();
+        let mcp = MoraineMcp::new(project.project_root);
+        assert!(mcp.list_tool_names().iter().any(|n| n == "run_coverage"));
+
+        let bad = mcp
+            .run_coverage(Parameters(RunCoverageArgs {
+                run_id: "not-a-uuid".into(),
+            }))
+            .await;
+        assert!(
+            bad.is_err(),
+            "invalid UUID should return MCP invalid params"
+        );
+
+        let missing = mcp
+            .run_coverage(Parameters(RunCoverageArgs {
+                run_id: "00000000-0000-4000-8000-000000000099".into(),
+            }))
+            .await
+            .unwrap();
+        assert!(missing.is_error.unwrap_or(false));
+    }
+
+    #[tokio::test]
+    async fn run_coverage_valid_run() {
+        use moraine_core::{run_start, RunStartRequest};
+
+        let dir = tempdir().unwrap();
+        let project = init_project(Some(dir.path())).unwrap();
+        let started = run_start(RunStartRequest {
+            objective: "coverage mcp test".into(),
+            idempotency_key: "mcp-cov-1".into(),
+            project: Some(project.project_root.clone()),
+            session_id: None,
+        })
+        .unwrap();
+        let mcp = MoraineMcp::new(project.project_root);
+        let res = mcp
+            .run_coverage(Parameters(RunCoverageArgs {
+                run_id: started.run_id.to_string(),
+            }))
+            .await
+            .unwrap();
+        assert!(!res.is_error.unwrap_or(true));
+        // Compact text payload should stay under budget.
+        let text = format!("{res:?}");
+        assert!(text.len() < TOOLS_LIST_MAX_BYTES);
     }
 }

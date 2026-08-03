@@ -49,15 +49,46 @@ pub trait EventCapture: Send + Sync {
     ) -> std::result::Result<Uuid, String>;
 }
 
-/// Real product path: invoke suite CLI hook-codex; poll **session-bound** runs only.
+/// Real product path: invoke suite CLI hook command; poll **session-bound** runs only.
 pub struct HookCodexCapture {
     pub poll_timeout: Duration,
+    pub agent: crate::types::AgentKind,
 }
 
 impl Default for HookCodexCapture {
     fn default() -> Self {
         Self {
             poll_timeout: Duration::from_secs(8),
+            agent: crate::types::AgentKind::Codex,
+        }
+    }
+}
+
+impl HookCodexCapture {
+    pub fn for_agent(agent: crate::types::AgentKind) -> Self {
+        Self {
+            poll_timeout: Duration::from_secs(8),
+            agent,
+        }
+    }
+
+    fn hook_subcommand(&self) -> &'static str {
+        match self.agent {
+            crate::types::AgentKind::Codex => "hook-codex",
+            crate::types::AgentKind::ClaudeCode => "hook-claude-code",
+        }
+    }
+
+    fn look_for_session(&self, raw_session: &str) -> String {
+        match self.agent {
+            crate::types::AgentKind::Codex => raw_session.to_string(),
+            crate::types::AgentKind::ClaudeCode => {
+                if raw_session.starts_with("claude-code:") {
+                    raw_session.to_string()
+                } else {
+                    format!("claude-code:{raw_session}")
+                }
+            }
         }
     }
 }
@@ -80,16 +111,19 @@ impl EventCapture for HookCodexCapture {
         let start_event_id = format!("self-test-{verification_id}-session-start");
         let prompt_event_id = format!("self-test-{verification_id}-user-prompt");
         let prompt = format!("Moraine self-test verification_id={verification_id}");
-        invoke_hook_codex(
+        let hook = self.hook_subcommand();
+        invoke_hook_cli(
             cli,
+            hook,
             project,
             session_id,
             &start_event_id,
             "SessionStart",
             None,
         )?;
-        invoke_hook_codex(
+        invoke_hook_cli(
             cli,
+            hook,
             project,
             session_id,
             &prompt_event_id,
@@ -97,13 +131,14 @@ impl EventCapture for HookCodexCapture {
             Some(&prompt),
         )?;
 
+        let look_for = self.look_for_session(session_id);
         let resolved = resolve_existing_project(Some(project))
             .map_err(|e| format!("project resolve after hook: {e}"))?;
         let deadline = Instant::now() + self.poll_timeout;
         let mut delay = Duration::from_millis(100);
         while Instant::now() < deadline {
             // ONLY accept runs bound to this session with the verification correlation ID.
-            if let Ok(Some(run_id)) = find_session_run(&resolved.project_root, session_id) {
+            if let Ok(Some(run_id)) = find_session_run(&resolved.project_root, &look_for) {
                 let runs = list_run_summaries(&resolved.project_root, resolved.project_id);
                 if let Some(r) = runs.iter().find(|r| r.run_id == run_id) {
                     if r.objective.contains(verification_id) {
@@ -115,7 +150,7 @@ impl EventCapture for HookCodexCapture {
             delay = (delay * 2).min(Duration::from_millis(800));
         }
         Err(format!(
-            "no session-bound run for session={session_id} verification_id={verification_id} within {:?}",
+            "no session-bound run for session={look_for} verification_id={verification_id} within {:?}",
             self.poll_timeout
         ))
     }
@@ -355,8 +390,12 @@ fn verify_product(
 
     let capture = opts
         .capture
-        .unwrap_or_else(|| Arc::new(HookCodexCapture::default()));
+        .unwrap_or_else(|| Arc::new(HookCodexCapture::for_agent(intent.agent)));
     let session_id = format!("self-test-{}", Uuid::new_v4());
+    let look_for_session = match intent.agent {
+        crate::types::AgentKind::Codex => session_id.clone(),
+        crate::types::AgentKind::ClaudeCode => format!("claude-code:{session_id}"),
+    };
     let verification_id = Uuid::new_v4().to_string();
     let run_id = match capture.deliver_and_materialize(
         &resolved.project_root,
@@ -368,7 +407,7 @@ fn verify_product(
             steps.push(ok_step(
                 "capture.adapter_event",
                 "Created a test capture event",
-                format!("session={session_id} verification_id={verification_id} run_id={id}"),
+                format!("session={look_for_session} verification_id={verification_id} run_id={id}"),
             ));
             id
         }
@@ -385,7 +424,7 @@ fn verify_product(
     // Re-validate binding: discovery + session + verification_id in objective.
     let runs = list_run_summaries(&resolved.project_root, resolved.project_id);
     let found = runs.iter().any(|r| r.run_id == run_id);
-    let session_bound = find_session_run(&resolved.project_root, &session_id)
+    let session_bound = find_session_run(&resolved.project_root, &look_for_session)
         .ok()
         .flatten()
         == Some(run_id);
@@ -732,8 +771,9 @@ fn find_session_run(project: &Path, session_id: &str) -> moraine_core::Result<Op
     Ok(None)
 }
 
-fn invoke_hook_codex(
+fn invoke_hook_cli(
     cli: &Path,
+    hook_subcommand: &str,
     project: &Path,
     session_id: &str,
     event_id: &str,
@@ -750,22 +790,22 @@ fn invoke_hook_codex(
         payload["prompt"] = json!(p);
     }
     let mut child = Command::new(cli)
-        .arg("hook-codex")
+        .arg(hook_subcommand)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("spawn hook-codex: {e}"))?;
+        .map_err(|e| format!("spawn {hook_subcommand}: {e}"))?;
     if let Some(mut stdin) = child.stdin.take() {
         let raw = serde_json::to_vec(&payload).map_err(|e| e.to_string())?;
         stdin.write_all(&raw).map_err(|e| e.to_string())?;
     }
     let out = child
         .wait_with_output()
-        .map_err(|e| format!("wait hook-codex: {e}"))?;
+        .map_err(|e| format!("wait {hook_subcommand}: {e}"))?;
     if !out.status.success() {
         return Err(format!(
-            "hook-codex exit {:?}: {}",
+            "{hook_subcommand} exit {:?}: {}",
             out.status.code(),
             String::from_utf8_lossy(&out.stderr)
         ));

@@ -85,10 +85,10 @@ fn host_open(path: &Path) -> Result<(), String> {
 }
 
 fn host_reveal(path: &Path) -> Result<(), String> {
-    let parent = path.parent().unwrap_or(path);
     #[cfg(target_os = "linux")]
     {
         // Reveal by opening the containing directory (file managers vary).
+        let parent = path.parent().unwrap_or(path);
         host_open(parent)
     }
     #[cfg(target_os = "macos")]

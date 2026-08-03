@@ -181,6 +181,11 @@ capture fidelity report: adapter capability profiles are separate from observed
 facts; legacy `captureCoverage` remains a compact compatibility field; `full`
 means both primary channels were observed, not complete agent knowledge.
 
+The desktop review workspace coordinates project and run discovery with a single
+selected-run review surface (overview, checkpoints, evidence, findings, history).
+Capability tables remain at the provision adapter boundary; the UI does not
+reimplement them.
+
 ## Setup & rollback
 
 The desktop or CLI creates an exact setup plan with a state witness. Apply

@@ -17,6 +17,7 @@ import { RunList } from "@/features/run-list/RunList";
 import { LedgerTimeline } from "@/features/ledger/LedgerTimeline";
 import { ProtocolLedgerPanel } from "@/features/ledger/ProtocolLedgerPanel";
 import { CheckpointFindingsPanel } from "@/features/findings/CheckpointFindingsPanel";
+import { CaptureFidelityPanel } from "@/features/runs/CaptureFidelityPanel";
 import { isTauri } from "@/shared/api";
 
 export interface WorkspaceProps {
@@ -263,6 +264,9 @@ export function Workspace({ openPath, onOpenRunPath, focusProjectPath }: Workspa
             </header>
             {detail?.isProtocolRun ? (
               <>
+                {detail.captureFidelity ? (
+                  <CaptureFidelityPanel report={detail.captureFidelity} />
+                ) : null}
                 <ProtocolLedgerPanel
                   path={selectedRun.absolutePath}
                   refreshToken={refreshToken}

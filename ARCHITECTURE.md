@@ -56,8 +56,8 @@ or depend on the desktop.
 ### `moraine-provision`
 
 Owns system inspection, setup plans, approved-plan application, transaction
-journals, rollback, health, repair, agent integration & background-runtime
-lifecycle.
+journals, rollback, health, repair, agent integration adapters (Codex & Claude
+Code) & background-runtime lifecycle.
 
 The transaction engine is platform-neutral. Runtime backends capture & restore
 their own registration state. Linux uses a systemd user backend. Windows uses a
@@ -72,12 +72,13 @@ intent & its actual operations.
 
 ### `moraine-cli`
 
-Owns command-line presentation, Codex hook mapping & capture delivery.
+Owns command-line presentation, agent hook mapping & capture delivery.
 
-The hook parses Codex input, creates stable event identifiers & decides whether
-to spool. Linux delivers through a Unix socket. Windows delivers through a
-bounded write-only named-pipe client. Unsupported endpoints fail explicitly;
-they do not use a fake transport.
+Hooks parse Codex (`hook-codex`) or Claude Code (`hook-claude-code`) input,
+create stable event identifiers & decide whether to spool. Linux delivers
+through a Unix socket. Windows delivers through a bounded write-only named-pipe
+client. Unsupported endpoints fail explicitly; they do not use a fake transport.
+Claude Code session IDs are namespaced so they cannot collide with Codex.
 
 Service lifecycle commands call the provisioning runtime manager. The CLI does
 not contain a second systemd implementation.

@@ -44,11 +44,13 @@ is:
 ```bash
 moraine project init /path/to/project
 moraine integrate codex --project /path/to/project
+# or: moraine integrate claude-code --project /path/to/project
 moraine doctor --project /path/to/project --integration codex
 ```
 
-Start Codex in that project. Hooks deliver mechanical events while the local
-MCP gives the agent semantic run operations. Open the desktop later:
+Start Codex or Claude Code in that project. Hooks deliver mechanical events
+while the local MCP gives the agent semantic run operations. Open the desktop
+later:
 
 ```bash
 moraine open
@@ -81,7 +83,12 @@ project ledgers.
 | `moraine mcp` | Local STDIO agent protocol |
 | `moraine-service` | Capture intake, durable spool & rebuildable discovery |
 | `moraine-app` | Projects, runs, timeline, findings & health |
-| Codex integration | Managed hooks & MCP configuration |
+| Agent integrations | Codex; Claude Code |
+
+Agent integrations:
+
+* **Codex** — managed `.codex` hooks & MCP configuration
+* **Claude Code** — managed project `.mcp.json` & `.claude/settings.json` hooks
 
 The desktop is not required for capture. Local collaboration & the free-form
 editor remain compatibility surfaces; they are not the primary product.
@@ -105,6 +112,7 @@ See [SECURITY.md](SECURITY.md) for the complete trust model.
 | [docs/INSTALL.md](docs/INSTALL.md) | Supported install & removal |
 | [docs/AGENT_RUN_PROTOCOL.md](docs/AGENT_RUN_PROTOCOL.md) | Durable run contract |
 | [docs/integrations/CODEX.md](docs/integrations/CODEX.md) | Codex setup & diagnosis |
+| [docs/integrations/CLAUDE_CODE.md](docs/integrations/CLAUDE_CODE.md) | Claude Code setup & diagnosis |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Operational recovery |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Source development & documentation rules |
 

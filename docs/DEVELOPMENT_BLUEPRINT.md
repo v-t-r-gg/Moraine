@@ -110,19 +110,18 @@ the same runtime authority as CLI provisioning.
 
 ## Second-agent gate
 
-A second adapter begins only after W2 proves that platform work does not leak
-into the domain protocol.
+Claude Code is the second production adapter. It maps into existing run,
+checkpoint, evidence, finding & append-only operations; keeps agent-specific
+configuration outside `moraine-core`; and uses transactional configuration,
+removal & ProductCapture verification with no approval or verdict semantics.
 
-The adapter must:
+**W2-E Windows interactive acceptance remains pending.** Second-agent work
+proceeds independently because it does not alter Windows support claims or
+domain protocols.
 
-* map into existing run, checkpoint, evidence, finding & append-only operations;
-* report mechanical versus semantic capture honestly;
-* keep agent-specific configuration outside `moraine-core`;
-* provide transactional configuration, removal & ProductCapture verification;
-* add no approval or verdict semantics.
-
-If the second agent requires a domain schema change, that change receives its
-own compatibility review.
+Further multi-agent fidelity (coverage honesty across adapters) is a following
+slice. If a future adapter requires a domain schema change, that change receives
+its own compatibility review.
 
 ## External-beta gate
 

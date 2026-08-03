@@ -8,6 +8,7 @@ Moraine records review activity; it does not render a verdict.
 * Local STDIO agent protocol with checkpoints, evidence & findings.
 * Append-only observations, amendments, supersessions & target redaction.
 * Codex hooks plus MCP integration.
+* Claude Code ProductCapture adapter (project MCP & lifecycle hooks).
 * Background capture, durable spool & rebuildable project discovery.
 * Transactional Linux & staged-Windows provisioning, rollback, repair &
   self-verification.
@@ -28,15 +29,19 @@ Complete real Windows 11 acceptance for the implemented runtime:
 
 W2 does not include a signed installer or WinGet publication.
 
+**W2-E Windows interactive acceptance remains pending** (`not_executed`). Draft
+PR #26 records that evidence gate. Second-agent implementation proceeds
+independently because it does not alter Windows support claims.
+
 ## Later
 
 1. **W3; signed installer & WinGet**
    * no-admin installation where practical;
    * uninstall that preserves project ledgers;
    * signing, upgrade & package-manager validation.
-2. **Second agent adapter**
-   * begin only after the shared protocol survives Linux & Windows backends;
-   * preserve one run model rather than adding agent-specific domain state.
+2. **Multi-agent fidelity & coverage reporting**
+   * honest mechanical versus semantic capture across adapters;
+   * preserve one run model rather than agent-specific domain state.
 3. **External beta evidence & product presentation**
    * clean-machine workflows;
    * real graphical acceptance;

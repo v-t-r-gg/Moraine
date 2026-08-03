@@ -187,32 +187,15 @@ impl AgentAdapter for ClaudeCodeAdapter {
         }
         let project_s = project.display().to_string();
         let cli_s = absolute_cli.display().to_string();
-        let mcp = project.join(".mcp.json");
-        let settings = project.join(".claude/settings.json");
+        let desired = compute_desired_integration(project, absolute_cli)?;
 
-        // Refuse unmanaged name conflicts at plan time so apply never mutates blindly.
-        if let Ok(Some(doc)) = read_json_object(&mcp) {
-            if matches!(classify_mcp(&doc, project), McpClass::NameConflict { .. }) {
-                return Err(ProvisionError::msg(
-                    "an unmanaged MCP server named 'moraine' already exists in .mcp.json; resolve the conflict manually before connecting Claude Code",
-                ));
-            }
+        let mut files_to_touch = Vec::new();
+        if desired.mcp_changed() {
+            files_to_touch.push(desired.mcp_path.display().to_string());
         }
-        if mcp.is_file() {
-            if let Err(message) = read_json_object(&mcp) {
-                return Err(ProvisionError::msg(message));
-            }
+        if desired.settings_changed() {
+            files_to_touch.push(desired.settings_path.display().to_string());
         }
-        if settings.is_file() {
-            if let Err(message) = read_json_object(&settings) {
-                return Err(ProvisionError::msg(message));
-            }
-        }
-
-        let mut files = Vec::new();
-        // Always list both product-owned files when either would change or is incomplete.
-        files.push(mcp.display().to_string());
-        files.push(settings.display().to_string());
 
         Ok(IntegrationPlan {
             kind: AgentKind::ClaudeCode,
@@ -227,7 +210,7 @@ impl AgentAdapter for ClaudeCodeAdapter {
                 "Capture Claude Code session activity".into(),
                 "Keep records next to the project".into(),
             ],
-            files_to_touch: files,
+            files_to_touch,
         })
     }
 
@@ -244,40 +227,14 @@ impl AgentAdapter for ClaudeCodeAdapter {
             ))
         })?;
 
-        let mcp_path = project.join(".mcp.json");
-        let settings_path = project.join(".claude/settings.json");
+        let cli_path = Path::new(&plan.absolute_cli);
+        let desired = compute_desired_integration(&project, cli_path)?;
         let claude_dir = project.join(".claude");
-        let cli_s = &plan.absolute_cli;
         let project_s = project.display().to_string();
 
-        // Parse + compute both resulting documents before any write.
-        let existing_mcp = match read_json_object(&mcp_path) {
-            Ok(v) => v.unwrap_or_else(|| json!({})),
-            Err(message) => return Err(ProvisionError::msg(message)),
-        };
-        if matches!(
-            classify_mcp(&existing_mcp, &project),
-            McpClass::NameConflict { .. }
-        ) {
-            return Err(ProvisionError::msg(
-                "an unmanaged MCP server named 'moraine' already exists in .mcp.json",
-            ));
-        }
-        let new_mcp = merge_mcp_server(&existing_mcp, cli_s, &project_s)?;
-
-        let existing_settings = match read_json_object(&settings_path) {
-            Ok(v) => v.unwrap_or_else(|| json!({})),
-            Err(message) => return Err(ProvisionError::msg(message)),
-        };
-        let mut new_settings = existing_settings.clone();
-        let hook_cmd = format!("{cli_s} {HOOK_SUBCOMMAND}");
-        ensure_managed_hooks(&mut new_settings, &hook_cmd);
-
-        let mcp_bytes = serde_json::to_vec_pretty(&new_mcp)?;
-        let settings_bytes = serde_json::to_vec_pretty(&new_settings)?;
-        let mut mcp_out = mcp_bytes;
+        let mut mcp_out = serde_json::to_vec_pretty(&desired.new_mcp)?;
         mcp_out.push(b'\n');
-        let mut settings_out = settings_bytes;
+        let mut settings_out = serde_json::to_vec_pretty(&desired.new_settings)?;
         settings_out.push(b'\n');
 
         fs::create_dir_all(&claude_dir)?;
@@ -285,45 +242,46 @@ impl AgentAdapter for ClaudeCodeAdapter {
         let mut local_snaps = Vec::new();
         let mut actions = Vec::new();
 
-        // Write-ahead: snapshot before each mutation.
-        let mcp_changed = existing_mcp != new_mcp || !mcp_path.is_file();
-        if mcp_changed {
-            let snap = if mcp_path.is_file() {
-                durable_backup(&mcp_path)?
+        // Write-ahead: snapshot before each mutation. Change detection matches plan_install.
+        if desired.mcp_changed() {
+            let snap = if desired.mcp_path.is_file() {
+                durable_backup(&desired.mcp_path)?
             } else {
-                snapshot_absent(&mcp_path)
+                snapshot_absent(&desired.mcp_path)
             };
             recorder.record_snapshot(snap.clone())?;
             local_snaps.push(snap);
-            atomic_write_durable(&mcp_path, &mcp_out)?;
-            actions.push(format!("wrote {}", mcp_path.display()));
+            atomic_write_durable(&desired.mcp_path, &mcp_out)?;
+            actions.push(format!("wrote {}", desired.mcp_path.display()));
         } else {
-            actions.push(format!("mcp unchanged {}", mcp_path.display()));
+            actions.push(format!("mcp unchanged {}", desired.mcp_path.display()));
         }
 
-        let settings_changed = existing_settings != new_settings || !settings_path.is_file();
-        if settings_changed {
-            let snap = if settings_path.is_file() {
-                durable_backup(&settings_path)?
+        if desired.settings_changed() {
+            let snap = if desired.settings_path.is_file() {
+                durable_backup(&desired.settings_path)?
             } else {
-                snapshot_absent(&settings_path)
+                snapshot_absent(&desired.settings_path)
             };
             recorder.record_snapshot(snap.clone())?;
             local_snaps.push(snap);
-            atomic_write_durable(&settings_path, &settings_out)?;
-            actions.push(format!("wrote {}", settings_path.display()));
+            atomic_write_durable(&desired.settings_path, &settings_out)?;
+            actions.push(format!("wrote {}", desired.settings_path.display()));
         } else {
-            actions.push(format!("settings unchanged {}", settings_path.display()));
+            actions.push(format!(
+                "settings unchanged {}",
+                desired.settings_path.display()
+            ));
         }
 
         Ok(IntegrationReceipt {
             kind: AgentKind::ClaudeCode,
             project: project_s,
-            absolute_cli: cli_s.clone(),
+            absolute_cli: plan.absolute_cli.clone(),
             actions,
             snapshots: local_snaps,
-            config_path: Some(mcp_path.display().to_string()),
-            hooks_path: Some(settings_path.display().to_string()),
+            config_path: Some(desired.mcp_path.display().to_string()),
+            hooks_path: Some(desired.settings_path.display().to_string()),
         })
     }
 
@@ -412,53 +370,107 @@ impl AgentAdapter for ClaudeCodeAdapter {
         let mut snaps = Vec::new();
 
         if mcp_path.is_file() {
-            match read_json_object(&mcp_path) {
-                Ok(Some(mut doc)) => {
-                    if strip_managed_mcp(&mut doc) {
-                        snaps.push(durable_backup(&mcp_path)?);
-                        if is_semantically_empty_mcp(&doc) {
-                            // File was only Moraine content — remove if we created sole ownership.
-                            // Prefer writing empty object only when other top-level keys remain;
-                            // if document is empty after strip, delete the file.
-                            if doc.as_object().map(|o| o.is_empty()).unwrap_or(true) {
-                                fs::remove_file(&mcp_path)?;
-                            } else {
-                                let mut bytes = serde_json::to_vec_pretty(&doc)?;
-                                bytes.push(b'\n');
-                                atomic_write_durable(&mcp_path, &bytes)?;
-                            }
+            if let Ok(Some(mut doc)) = read_json_object(&mcp_path) {
+                if strip_managed_mcp(&mut doc) {
+                    snaps.push(durable_backup(&mcp_path)?);
+                    if is_semantically_empty_mcp(&doc) {
+                        // File was only Moraine content — remove if we created sole ownership.
+                        // Prefer writing empty object only when other top-level keys remain;
+                        // if document is empty after strip, delete the file.
+                        if doc.as_object().map(|o| o.is_empty()).unwrap_or(true) {
+                            fs::remove_file(&mcp_path)?;
                         } else {
                             let mut bytes = serde_json::to_vec_pretty(&doc)?;
                             bytes.push(b'\n');
                             atomic_write_durable(&mcp_path, &bytes)?;
                         }
+                    } else {
+                        let mut bytes = serde_json::to_vec_pretty(&doc)?;
+                        bytes.push(b'\n');
+                        atomic_write_durable(&mcp_path, &bytes)?;
                     }
                 }
-                Ok(None) | Err(_) => {}
             }
         }
 
         if settings_path.is_file() {
-            match read_json_object(&settings_path) {
-                Ok(Some(mut doc)) => {
-                    let removed = strip_managed_hooks(&mut doc);
-                    if removed > 0 {
-                        snaps.push(durable_backup(&settings_path)?);
-                        if is_semantically_empty_settings(&doc) {
-                            fs::remove_file(&settings_path)?;
-                        } else {
-                            let mut bytes = serde_json::to_vec_pretty(&doc)?;
-                            bytes.push(b'\n');
-                            atomic_write_durable(&settings_path, &bytes)?;
-                        }
+            if let Ok(Some(mut doc)) = read_json_object(&settings_path) {
+                let removed = strip_managed_hooks(&mut doc);
+                if removed > 0 {
+                    snaps.push(durable_backup(&settings_path)?);
+                    if is_semantically_empty_settings(&doc) {
+                        fs::remove_file(&settings_path)?;
+                    } else {
+                        let mut bytes = serde_json::to_vec_pretty(&doc)?;
+                        bytes.push(b'\n');
+                        atomic_write_durable(&settings_path, &bytes)?;
                     }
                 }
-                Ok(None) | Err(_) => {}
             }
         }
 
         Ok(snaps)
     }
+}
+
+/// Shared plan/apply document computation so `files_to_touch` cannot drift from writes.
+struct DesiredIntegration {
+    mcp_path: PathBuf,
+    settings_path: PathBuf,
+    existing_mcp: Value,
+    new_mcp: Value,
+    existing_settings: Value,
+    new_settings: Value,
+}
+
+impl DesiredIntegration {
+    fn mcp_changed(&self) -> bool {
+        // Missing files are modeled as `{}`, so creating them is a value change when the
+        // desired document differs. Byte formatting is ignored; JSON structure is compared.
+        self.existing_mcp != self.new_mcp
+    }
+
+    fn settings_changed(&self) -> bool {
+        self.existing_settings != self.new_settings
+    }
+}
+
+fn compute_desired_integration(project: &Path, absolute_cli: &Path) -> Result<DesiredIntegration> {
+    let mcp_path = project.join(".mcp.json");
+    let settings_path = project.join(".claude/settings.json");
+    let cli_s = absolute_cli.display().to_string();
+    let project_s = project.display().to_string();
+
+    let existing_mcp = match read_json_object(&mcp_path) {
+        Ok(v) => v.unwrap_or_else(|| json!({})),
+        Err(message) => return Err(ProvisionError::msg(message)),
+    };
+    if matches!(
+        classify_mcp(&existing_mcp, project),
+        McpClass::NameConflict { .. }
+    ) {
+        return Err(ProvisionError::msg(
+            "an unmanaged MCP server named 'moraine' already exists in .mcp.json; resolve the conflict manually before connecting Claude Code",
+        ));
+    }
+    let new_mcp = merge_mcp_server(&existing_mcp, &cli_s, &project_s)?;
+
+    let existing_settings = match read_json_object(&settings_path) {
+        Ok(v) => v.unwrap_or_else(|| json!({})),
+        Err(message) => return Err(ProvisionError::msg(message)),
+    };
+    let mut new_settings = existing_settings.clone();
+    let hook_cmd = format!("{cli_s} {HOOK_SUBCOMMAND}");
+    ensure_managed_hooks(&mut new_settings, &hook_cmd);
+
+    Ok(DesiredIntegration {
+        mcp_path,
+        settings_path,
+        existing_mcp,
+        new_mcp,
+        existing_settings,
+        new_settings,
+    })
 }
 
 // --- detection ----------------------------------------------------------------
@@ -1050,6 +1062,97 @@ mod tests {
             .plan_install(&project, &cli)
             .unwrap_err();
         assert!(err.to_string().contains("malformed"));
+    }
+
+    #[test]
+    fn plan_refuses_malformed_settings_json() {
+        let temp = tempdir().unwrap();
+        let project = temp.path().join("proj");
+        fs::create_dir_all(project.join(".claude")).unwrap();
+        fs::write(project.join(".claude/settings.json"), b"{not json").unwrap();
+        let cli = abs_cli(temp.path());
+        let err = ClaudeCodeAdapter::new()
+            .plan_install(&project, &cli)
+            .unwrap_err();
+        assert!(err.to_string().contains("malformed"));
+    }
+
+    #[test]
+    fn plan_refuses_unmanaged_mcp_name_conflict() {
+        let temp = tempdir().unwrap();
+        let project = temp.path().join("proj");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(
+            project.join(".mcp.json"),
+            r#"{"mcpServers":{"moraine":{"command":"not-ours","args":["x"]}}}"#,
+        )
+        .unwrap();
+        let cli = abs_cli(temp.path());
+        let err = ClaudeCodeAdapter::new()
+            .plan_install(&project, &cli)
+            .unwrap_err();
+        assert!(err.to_string().contains("unmanaged"));
+    }
+
+    #[test]
+    fn files_to_touch_lists_only_documents_that_change() {
+        let temp = tempdir().unwrap();
+        let project = temp.path().join("proj");
+        fs::create_dir_all(&project).unwrap();
+        moraine_core::init_project(Some(&project)).unwrap();
+        let cli = abs_cli(temp.path());
+        let adapter = ClaudeCodeAdapter::new();
+
+        // both files absent → both listed
+        let plan = adapter.plan_install(&project, &cli).unwrap();
+        assert_eq!(plan.files_to_touch.len(), 2);
+        assert!(plan.files_to_touch.iter().any(|p| p.ends_with(".mcp.json")));
+        assert!(plan
+            .files_to_touch
+            .iter()
+            .any(|p| p.ends_with(".claude/settings.json")));
+
+        // apply full integration
+        let mut rec = VecBackupRecorder::new();
+        adapter.apply(&plan, &mut rec).unwrap();
+
+        // both files already exact → empty
+        let plan_exact = adapter.plan_install(&project, &cli).unwrap();
+        assert!(
+            plan_exact.files_to_touch.is_empty(),
+            "idempotent plan must list no files: {:?}",
+            plan_exact.files_to_touch
+        );
+
+        // only hooks already exact → MCP only (drift MCP)
+        let mcp_path = project.join(".mcp.json");
+        let mut mcp: Value = serde_json::from_str(&fs::read_to_string(&mcp_path).unwrap()).unwrap();
+        mcp["mcpServers"]["moraine"]["args"] = json!(["mcp", "--project", "/wrong"]);
+        fs::write(&mcp_path, serde_json::to_string_pretty(&mcp).unwrap()).unwrap();
+        let plan_mcp = adapter.plan_install(&project, &cli).unwrap();
+        assert_eq!(plan_mcp.files_to_touch.len(), 1);
+        assert!(plan_mcp.files_to_touch[0].ends_with(".mcp.json"));
+
+        // restore MCP, drift hooks only
+        let mut rec2 = VecBackupRecorder::new();
+        adapter
+            .apply(&adapter.plan_install(&project, &cli).unwrap(), &mut rec2)
+            .unwrap();
+        let settings_path = project.join(".claude/settings.json");
+        let mut settings: Value =
+            serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+        // remove SessionStart managed group only
+        if let Some(arr) = settings["hooks"]["SessionStart"].as_array_mut() {
+            arr.retain(|g| !is_managed_hook_group(g));
+        }
+        fs::write(
+            &settings_path,
+            serde_json::to_string_pretty(&settings).unwrap(),
+        )
+        .unwrap();
+        let plan_hooks = adapter.plan_install(&project, &cli).unwrap();
+        assert_eq!(plan_hooks.files_to_touch.len(), 1);
+        assert!(plan_hooks.files_to_touch[0].ends_with(".claude/settings.json"));
     }
 
     #[test]

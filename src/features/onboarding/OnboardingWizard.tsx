@@ -78,6 +78,20 @@ export function OnboardingWizard({
     };
   }, [systemState]);
 
+  // Auto-select the sole detected agent; clear stale selection when detection changes.
+  useEffect(() => {
+    const detected = (system?.agents ?? []).filter((a) => a.detected);
+    setSelectedAgent((prev) => {
+      if (prev && detected.some((a) => a.id === prev)) {
+        return prev;
+      }
+      if (detected.length === 1) {
+        return detected[0].id;
+      }
+      return null;
+    });
+  }, [system?.agents]);
+
   const pickFolder = useCallback(async () => {
     if (!isTauri) {
       setError("Folder selection requires the Moraine desktop app");
@@ -335,18 +349,8 @@ function AgentsStep({
           } satisfies DetectedAgentDto,
         ];
   const detected = list.filter((a) => a.detected);
-  const effectiveSelected =
-    selectedId ??
-    (detected.length === 1 ? detected[0].id : null);
-
-  // Auto-select the only detected agent.
-  if (selectedId == null && detected.length === 1) {
-    queueMicrotask(() => onSelect(detected[0].id));
-  }
-
   const canContinue =
-    effectiveSelected != null &&
-    list.some((a) => a.id === effectiveSelected && a.detected);
+    selectedId != null && list.some((a) => a.id === selectedId && a.detected);
 
   return (
     <div data-testid="wizard-agents">
@@ -359,7 +363,7 @@ function AgentsStep({
       </p>
       <div className="mt-6 space-y-3">
         {list.map((agent) => {
-          const selected = effectiveSelected === agent.id;
+          const selected = selectedId === agent.id;
           return (
             <button
               key={agent.id}
@@ -406,7 +410,7 @@ function AgentsStep({
           capture cannot be verified until an agent is detected.
         </p>
       ) : null}
-      {detected.length > 1 && !effectiveSelected ? (
+      {detected.length > 1 && !selectedId ? (
         <p className="mt-3 text-xs" style={{ color: "#b45309" }}>
           Select which agent to connect.
         </p>

@@ -7,6 +7,12 @@ use serde::{Deserialize, Serialize};
 /// Product marketing name.
 pub const PRODUCT_NAME: &str = "Moraine";
 
+/// Fixed identifier for the `moraine-service` diagnostics `/status` surface.
+///
+/// Distinct from [`PRODUCT_NAME`] so loopback health probes can reject
+/// unrelated processes that happen to answer on the diagnostics port.
+pub const SERVICE_PRODUCT_ID: &str = "moraine-service";
+
 /// Service diagnostics / query protocol major version (loopback HTTP surface).
 pub const SERVICE_PROTOCOL_VERSION: u32 = 1;
 

@@ -45,6 +45,11 @@ use moraine_platform::{CaptureEndpoint, RuntimeLayout};
 const STOP_BUDGET: Duration = Duration::from_secs(5);
 const STOP_POLL: Duration = Duration::from_millis(100);
 const TASK_FULL_ACCESS_MASK: u32 = 0x001f_01ff;
+/// Task Scheduler normalizes an extra current-account ACE after
+/// `SetSecurityDescriptor`. Observed production-backed form is SDDL `FR`
+/// (`FILE_GENERIC_READ` = 0x00120089). Accept only this exact mask — not any
+/// nonzero subset of full access (which can include write/mutation rights).
+const TASK_SCHEDULER_OWNER_READ_MASK: u32 = 0x0012_0089;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowsTaskIdentity {
@@ -825,10 +830,10 @@ fn validate_security_descriptor(identity: &WindowsTaskIdentity, sddl: &str) -> R
         if unsafe { EqualSid(sid, current_sid) }.is_ok() {
             if mask == TASK_FULL_ACCESS_MASK && !current_full {
                 current_full = true;
-            } else if mask != 0 && mask & !TASK_FULL_ACCESS_MASK == 0 && !scheduler_current_read {
-                // Task Scheduler adds a second, read-only ACE for the task
-                // owner after SetSecurityDescriptor. It cannot be removed
-                // through the COM task security API.
+            } else if mask == TASK_SCHEDULER_OWNER_READ_MASK && !scheduler_current_read {
+                // Task Scheduler adds a second owner-read ACE after
+                // SetSecurityDescriptor. It cannot be removed through the COM
+                // task security API. Require the exact FR mask only.
                 scheduler_current_read = true;
             } else {
                 return Err(ProvisionError::Service(
@@ -1443,6 +1448,20 @@ mod tests {
             sid = identity.account_sid
         );
         validate_registration(&identity, &candidate, Some(&spec())).unwrap();
+    }
+
+    #[test]
+    fn effective_acl_rejects_write_capable_owner_subset_ace() {
+        let identity = identity();
+        let xml = render_task_xml(&identity, &spec()).unwrap();
+        // FILE_GENERIC_WRITE (FW) is a nonzero subset of FA bits, but is not the
+        // scheduler owner-read ACE. The previous permissive check accepted it.
+        let mut candidate = registration(xml);
+        candidate.sddl = format!(
+            "O:{sid}D:(A;;FA;;;SY)(A;;FA;;;{sid})(A;;FW;;;{sid})",
+            sid = identity.account_sid
+        );
+        assert!(validate_registration(&identity, &candidate, Some(&spec())).is_err());
     }
 
     #[test]

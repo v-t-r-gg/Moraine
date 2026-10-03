@@ -75,6 +75,11 @@ describe("OnboardingWizard unsupported host defense", () => {
     );
 
     expect(screen.getByTestId("unsupported-platform")).toBeInTheDocument();
+    expect(
+      screen.getByText(/stage the demo suite; no installer is available/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/not available on Windows yet/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/belongs to W2/i)).not.toBeInTheDocument();
     expect(screen.queryByTestId("onboarding-wizard")).not.toBeInTheDocument();
     expect(screen.queryByText("Welcome to Moraine")).not.toBeInTheDocument();
     expect(provisionInspect).not.toHaveBeenCalled();

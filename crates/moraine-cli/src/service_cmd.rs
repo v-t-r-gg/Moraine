@@ -50,8 +50,15 @@ fn service_binary() -> Result<std::path::PathBuf> {
         })
         .filter(|path| path.is_file());
     sibling.ok_or_else(|| {
+        let hint = if moraine_platform::HostPlatform::current()
+            == moraine_platform::HostPlatform::Windows
+        {
+            "stage the demo suite; no installer is available."
+        } else {
+            "install the release suite first"
+        };
         anyhow::anyhow!(
-            "service binary not found at {} (install the release suite first)",
+            "service binary not found at {} ({hint})",
             suite.service.display()
         )
     })

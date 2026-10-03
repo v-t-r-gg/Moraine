@@ -1,0 +1,8 @@
+Notices
+
+Moraine is licensed under the Apache License, Version 2.0.
+The license text is the LICENSE file in this archive.
+
+This demo archive does not reproduce third-party license texts.
+Desktop and command-line builds link to their usual toolchain dependencies.
+Those notices stay with the toolchains that produced the binaries.

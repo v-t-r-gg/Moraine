@@ -69,6 +69,80 @@ fn write_manifest_marks_desktop_when_present() {
 }
 
 #[test]
+fn write_manifest_marks_windows_desktop_exe_when_present() {
+    let root = repo_root();
+    let dir = tempfile::tempdir().unwrap();
+    let stage = dir.path();
+    fs::create_dir_all(stage.join("bin")).unwrap();
+    fs::write(stage.join("bin/moraine.exe"), b"x").unwrap();
+    fs::write(stage.join("bin/moraine-service.exe"), b"x").unwrap();
+    fs::write(stage.join("bin/moraine-app.exe"), b"x").unwrap();
+    let st = Command::new("python3")
+        .arg(root.join("scripts/packaging/write_manifest.py"))
+        .arg(stage)
+        .env("VERSION", "0.1.0")
+        .env("MORAINE_TARGET_TRIPLE", "x86_64-pc-windows-msvc")
+        .output()
+        .unwrap();
+    assert!(
+        st.status.success(),
+        "{}",
+        String::from_utf8_lossy(&st.stderr)
+    );
+    let man: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(stage.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(man["components"]["desktop"], "0.1.0");
+    assert_eq!(man["components"]["cli"], "0.1.0");
+    assert_eq!(man["components"]["service"], "0.1.0");
+    assert_ne!(man["components"]["desktop"], "missing");
+}
+
+#[test]
+fn windows_demo_archive_checker_self_test() {
+    let root = repo_root();
+    let st = Command::new("python3")
+        .arg(root.join("scripts/packaging/check_windows_demo_archive.py"))
+        .arg("--self-test")
+        .output()
+        .unwrap();
+    assert!(
+        st.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&st.stdout),
+        String::from_utf8_lossy(&st.stderr)
+    );
+}
+
+#[test]
+fn windows_demo_scripts_stage_without_registering_a_task() {
+    let root = repo_root();
+    let build = fs::read_to_string(root.join("scripts/build-windows-demo.ps1")).unwrap();
+    let stage = fs::read_to_string(root.join("scripts/stage-windows-demo.ps1")).unwrap();
+    assert!(build.contains("x86_64-pc-windows-msvc"));
+    assert!(build.contains("moraine-app.exe"));
+    assert!(build.contains("-dirty"));
+    assert!(!build.contains("Register-ScheduledTask"));
+    assert!(!build.contains("schtasks"));
+    assert!(stage.contains("Administrator"));
+    assert!(stage.contains("LOCALAPPDATA"));
+    assert!(stage.contains("share\\moraine"));
+    assert!(stage.contains("\"User\""));
+    assert!(!stage.contains("\"Machine\""));
+    assert!(stage.contains("moraine --version"));
+    assert!(stage.contains("moraine doctor"));
+    assert!(stage.contains("moraine project init"));
+}
+
+#[test]
+fn readme_windows_product_ready_stays_no() {
+    let readme = fs::read_to_string(repo_root().join("README.md")).unwrap();
+    assert!(
+        readme.contains("| Product Ready | Yes | No |"),
+        "Windows Product Ready must stay No until a live W2-E session passes"
+    );
+}
+
+#[test]
 fn primary_stage_layout_requires_app_binary_assertion() {
     // Structural check: packaging install.sh copies moraine-app when present.
     let root = repo_root();

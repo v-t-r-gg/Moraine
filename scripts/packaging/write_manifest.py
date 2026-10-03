@@ -10,7 +10,11 @@ stage = Path(sys.argv[1])
 version = os.environ.get("VERSION") or "0.1.0"
 commit = os.environ.get("MORAINE_GIT_COMMIT") or "unknown"
 target = os.environ.get("MORAINE_TARGET_TRIPLE") or "x86_64-unknown-linux-gnu"
-has_app = (stage / "bin" / "moraine-app").is_file()
+# Linux stages bin/moraine-app. Windows stages bin/moraine-app.exe.
+# Either file means the desktop component is in this archive.
+has_app = (stage / "bin" / "moraine-app").is_file() or (
+    stage / "bin" / "moraine-app.exe"
+).is_file()
 manifest = {
     "product": "Moraine",
     "version": version,

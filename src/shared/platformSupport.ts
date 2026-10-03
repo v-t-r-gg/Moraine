@@ -30,6 +30,10 @@ export function deriveDesktopProductSupport(
       : "supported";
   const supported = reason === "supported";
   const desktopSupported = supported && isSupported(capabilities.desktopHost);
+  const unavailable =
+    capabilities.host === "windows"
+      ? "stage the demo suite; no installer is available."
+      : `Moraine background capture is not available on ${capabilities.host} yet.`;
   return {
     host: capabilities.host,
     supported,
@@ -38,6 +42,6 @@ export function deriveDesktopProductSupport(
     reason,
     message: desktopSupported
       ? "Moraine background capture is supported."
-      : `Moraine background capture is not available on ${capabilities.host} yet.`,
+      : unavailable,
   };
 }

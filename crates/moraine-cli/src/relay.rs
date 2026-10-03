@@ -72,19 +72,32 @@ fn server_bins() -> Vec<PathBuf> {
     bins
 }
 
+pub fn desktop_binary_names(host: moraine_platform::HostPlatform) -> [&'static str; 2] {
+    [
+        moraine_platform::executable_name(host, moraine_platform::SuiteComponent::Desktop),
+        "moraine-desktop",
+    ]
+}
+
+pub fn desktop_missing_hint() -> &'static str {
+    if moraine_platform::HostPlatform::current() == moraine_platform::HostPlatform::Windows {
+        "stage the demo suite; no installer is available."
+    } else {
+        "install suite with moraine-app or set PATH"
+    }
+}
+
 pub fn launch_desktop(path: &Path) -> Result<bool> {
     let abs = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let mut bins = Vec::new();
-    let desktop_name = moraine_platform::executable_name(
-        moraine_platform::HostPlatform::current(),
-        moraine_platform::SuiteComponent::Desktop,
-    );
+    let host = moraine_platform::HostPlatform::current();
+    let desktop_name = desktop_binary_names(host)[0];
     // Prefer the installed suite desktop, then PATH, then a development target.
     let suite_app = crate::suite::SuitePaths::discover().desktop;
     if suite_app.is_file() {
         bins.push(suite_app);
     }
-    for n in [desktop_name, "moraine-desktop"] {
+    for n in desktop_binary_names(host) {
         if which_exists(n) {
             bins.push(PathBuf::from(n));
         }
@@ -117,14 +130,10 @@ pub fn launch_desktop_workspace(open_path: Option<&Path>) -> Result<bool> {
     }
     // No path: still prefer suite binary so ledger workspace can open.
     let suite_app = crate::suite::SuitePaths::discover().desktop;
-    let desktop_name = moraine_platform::executable_name(
-        moraine_platform::HostPlatform::current(),
-        moraine_platform::SuiteComponent::Desktop,
-    );
     let bins = if suite_app.is_file() {
         vec![suite_app]
     } else {
-        [desktop_name, "moraine-desktop"]
+        desktop_binary_names(moraine_platform::HostPlatform::current())
             .into_iter()
             .filter(|n| which_exists(n))
             .map(PathBuf::from)
@@ -178,5 +187,15 @@ mod tests {
     #[test]
     fn health_fails_when_down() {
         assert!(!health_ok("http://127.0.0.1:1"));
+    }
+
+    #[test]
+    fn windows_desktop_lookup_uses_the_exe_name() {
+        let names = desktop_binary_names(moraine_platform::HostPlatform::Windows);
+        assert_eq!(names[0], "moraine-app.exe");
+        assert_eq!(
+            desktop_binary_names(moraine_platform::HostPlatform::Linux)[0],
+            "moraine-app"
+        );
     }
 }

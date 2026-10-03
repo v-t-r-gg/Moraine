@@ -61,6 +61,47 @@ pub struct IntegrationCheck {
     pub details: Vec<String>,
 }
 
+/// Missing-suite remediation. Windows must not send the user to install.sh.
+pub(crate) fn suite_manifest_remediation(windows: bool) -> &'static str {
+    if windows {
+        "stage the demo suite; no installer is available."
+    } else {
+        "Install with the release bundle: ./install.sh (see docs/INSTALL.md)"
+    }
+}
+
+pub(crate) fn suite_installed_remediation(windows: bool) -> &'static str {
+    if windows {
+        "stage the demo suite; no installer is available."
+    } else {
+        "Extract the release bundle and run ./install.sh"
+    }
+}
+
+pub(crate) fn service_binary_remediation(windows: bool) -> &'static str {
+    if windows {
+        "stage the demo suite; no installer is available."
+    } else {
+        "Re-run install.sh or moraine service install"
+    }
+}
+
+pub(crate) fn desktop_binary_expected(windows: bool) -> &'static str {
+    if windows {
+        "moraine-app.exe in the suite prefix"
+    } else {
+        "lib/moraine/moraine-app"
+    }
+}
+
+pub(crate) fn desktop_binary_remediation(windows: bool) -> &'static str {
+    if windows {
+        "stage the demo suite; no installer is available."
+    } else {
+        "Install release bundle including moraine-app"
+    }
+}
+
 fn check(
     id: &str,
     status: &str,
@@ -210,6 +251,25 @@ fn run_supported_doctor(project: Option<&Path>, integration: Option<&str>) -> Do
         None,
     ));
 
+    if windows {
+        checks.push(check(
+            "windows.installer",
+            "info",
+            "staged suite, installer unsupported, acceptance pending",
+            Some("user_installation=unsupported"),
+            Some("no supported Windows installer"),
+            Some(suite_manifest_remediation(true)),
+        ));
+        checks.push(check(
+            "windows.product_ready_claim",
+            "info",
+            "Windows Product Ready remains No. A staged suite is not a product-ready claim.",
+            Some("product_ready_claim=no"),
+            Some("Product Ready No until a live W2-E session records disposition passed"),
+            None,
+        ));
+    }
+
     let manifest_ok = suite.manifest.is_file();
     // Missing suite is FAIL: checking only the CLI binary is not a healthy install (§14).
     checks.push(check(
@@ -222,11 +282,7 @@ fn run_supported_doctor(project: Option<&Path>, integration: Option<&str>) -> Do
         },
         Some(&suite.manifest.display().to_string()),
         Some("present manifest.json under share/moraine"),
-        Some(if windows {
-            "A coherent Windows suite is required. A supported Windows installer is not available yet."
-        } else {
-            "Install with the release bundle: ./install.sh (see docs/INSTALL.md)"
-        }),
+        Some(suite_manifest_remediation(windows)),
     ));
     let suite_service = suite.service.is_file();
     if !manifest_ok {
@@ -236,11 +292,7 @@ fn run_supported_doctor(project: Option<&Path>, integration: Option<&str>) -> Do
             "no installed suite under the discovered prefix; doctor cannot claim product health",
             Some(&suite.prefix.display().to_string()),
             Some("suite manifest under the authoritative Moraine prefix"),
-            Some(if windows {
-                "Stage a coherent Windows suite; a supported Windows installer is not available yet"
-            } else {
-                "Extract the release bundle and run ./install.sh"
-            }),
+            Some(suite_installed_remediation(windows)),
         ));
     }
 
@@ -344,11 +396,7 @@ fn run_supported_doctor(project: Option<&Path>, integration: Option<&str>) -> Do
         },
         Some(&suite.service.display().to_string()),
         Some("Moraine background-runtime binary present"),
-        Some(if windows {
-            "A coherent Windows suite is required. A supported Windows installer is not available yet."
-        } else {
-            "Re-run install.sh or moraine service install"
-        }),
+        Some(service_binary_remediation(windows)),
     ));
 
     let runtime_supported = runtime_state.as_ref().is_some_and(|state| state.supported);
@@ -630,14 +678,7 @@ fn run_supported_doctor(project: Option<&Path>, integration: Option<&str>) -> Do
         }
     }
 
-    // Desktop
-    let desk_entry = suite
-        .desktop_registration
-        .as_ref()
-        .is_some_and(|path| path.is_file())
-        || dirs::data_dir()
-            .map(|d| d.join("applications/app.moraine.desktop").is_file())
-            .unwrap_or(false);
+    // Desktop. Windows has no .desktop registration; do not offer install.sh.
     checks.push(check(
         "desktop.binary",
         if suite.desktop.is_file() {
@@ -655,29 +696,47 @@ fn run_supported_doctor(project: Option<&Path>, integration: Option<&str>) -> Do
             "no installed desktop (dev mode ok)".into()
         },
         Some(&suite.desktop.display().to_string()),
-        Some("lib/moraine/moraine-app"),
-        Some("Install release bundle including moraine-app"),
+        Some(desktop_binary_expected(windows)),
+        Some(desktop_binary_remediation(windows)),
     ));
-    checks.push(check(
-        "desktop.registration",
-        if desk_entry || !manifest_ok {
-            if desk_entry {
-                "pass"
+    if windows {
+        checks.push(check(
+            "desktop.registration",
+            "info",
+            "Windows staged suite has no desktop-entry file. Launch moraine-app.exe from the suite prefix.",
+            Some(&suite.desktop.display().to_string()),
+            Some("moraine-app.exe beside the staged CLI"),
+            None,
+        ));
+    } else {
+        let desk_entry = suite
+            .desktop_registration
+            .as_ref()
+            .is_some_and(|path| path.is_file())
+            || dirs::data_dir()
+                .map(|d| d.join("applications/app.moraine.desktop").is_file())
+                .unwrap_or(false);
+        checks.push(check(
+            "desktop.registration",
+            if desk_entry || !manifest_ok {
+                if desk_entry {
+                    "pass"
+                } else {
+                    "info"
+                }
             } else {
-                "info"
-            }
-        } else {
-            "warn"
-        },
-        if desk_entry {
-            "desktop entry present"
-        } else {
-            "desktop entry not found"
-        },
-        None,
-        Some("share/applications/app.moraine.desktop"),
-        Some("Re-run install.sh"),
-    ));
+                "warn"
+            },
+            if desk_entry {
+                "desktop entry present"
+            } else {
+                "desktop entry not found"
+            },
+            None,
+            Some("share/applications/app.moraine.desktop"),
+            Some("Re-run install.sh"),
+        ));
+    }
 
     let project = project.map(|p| match resolve_existing_project(Some(p)) {
         Ok(r) => ProjectCheck {
@@ -1018,4 +1077,29 @@ fn libc_uid() -> u32 {
                 .and_then(|x| x.parse().ok())
         })
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn windows_missing_suite_does_not_offer_install_sh() {
+        for text in [
+            suite_manifest_remediation(true),
+            suite_installed_remediation(true),
+            service_binary_remediation(true),
+            desktop_binary_remediation(true),
+        ] {
+            assert_eq!(text, "stage the demo suite; no installer is available.");
+            assert!(!text.contains("install.sh"));
+        }
+        assert!(suite_installed_remediation(false).contains("install.sh"));
+        assert!(suite_manifest_remediation(false).contains("install.sh"));
+        assert_eq!(
+            desktop_binary_expected(true),
+            "moraine-app.exe in the suite prefix"
+        );
+        assert_eq!(desktop_binary_expected(false), "lib/moraine/moraine-app");
+    }
 }

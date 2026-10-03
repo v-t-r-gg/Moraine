@@ -43,6 +43,9 @@ describe("deriveDesktopProductSupport", () => {
     expect(support.supported).toBe(false);
     expect(support.desktopSupported).toBe(false);
     expect(support.reason).toBe("capture_unsupported");
+    expect(support.message).toBe(
+      "stage the demo suite; no installer is available.",
+    );
 
     expect(
       deriveDesktopProductSupport({

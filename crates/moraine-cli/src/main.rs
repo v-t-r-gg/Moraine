@@ -1034,14 +1034,17 @@ fn cmd_open(
                 "message": if launched {
                     "launched installed desktop"
                 } else {
-                    "desktop binary not found; install suite with moraine-app or set PATH"
+                    relay::desktop_missing_hint()
                 }
             })
         );
     } else if launched {
         println!("opened installed desktop");
     } else {
-        eprintln!("error: could not launch moraine-app (install suite desktop component)");
+        eprintln!(
+            "error: could not launch moraine-app ({})",
+            relay::desktop_missing_hint()
+        );
         return Ok(EXIT_ERR);
     }
     Ok(if launched { EXIT_OK } else { EXIT_ERR })

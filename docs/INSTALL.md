@@ -1,8 +1,9 @@
 # Install Moraine on Linux
 
-Moraine supports x86_64 Linux with a systemd user session & glibc. The workspace
-compiles on Windows, but no supported Windows runtime or installer exists before
-W2/W3.
+Moraine supports x86_64 Linux with a systemd user session & glibc. Windows
+compile support is not runtime support. A manually staged Windows demo suite
+is described below. A supported Windows installer does not exist, and Windows
+Product Ready remains No.
 
 Normal installation does not require Rust, Node.js or a source checkout.
 
@@ -91,3 +92,32 @@ moraine integrate codex --project /path/to/project --remove
 ```
 
 Contributor build instructions live in [CONTRIBUTING.md](../CONTRIBUTING.md).
+
+## Windows demo suite
+
+The Linux archive above remains the supported product install. The Windows
+demo is a staged suite for a follow-along on Windows 11 x86-64. It is not a
+signed installer, MSIX, WiX, or WinGet package. Windows Product Ready remains
+No. Hosted CI and smoke scripts are not standard-user acceptance.
+
+Build the archive on Windows 11 x86-64:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows-demo.ps1
+```
+
+The build script does not register a scheduled task and does not modify the
+user profile. The zip is `dist/moraine-<version>-windows-x86_64.zip` with a
+SHA-256 sidecar. A Linux run of that script is not a Windows demo.
+
+On the viewer machine, unzip and run `stage-windows-demo.ps1` from the
+archive. The script copies `moraine.exe`, `moraine-service.exe`, and
+`moraine-app.exe` into the prefix SuitePaths already discovers:
+`%LOCALAPPDATA%\Moraine`. Those executables sit in that directory. The
+manifest is `%LOCALAPPDATA%\Moraine\share\moraine\manifest.json`. The script
+refuses an elevated token. Do not run `./install.sh` on Windows. Stage the
+demo suite; no installer is available.
+
+The viewer script is [windows-demo.md](windows-demo.md). Demo uninstall stops
+the service, removes the current-user task with `moraine service uninstall`,
+and deletes only the suite directory. Project `.moraine/` directories stay.

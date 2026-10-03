@@ -76,6 +76,7 @@ jobs:
         run: |
           npm run check
           npm test
+      # Current-account mechanics only. Not W2-E standard-user acceptance.
       - name: Prove hook-to-spool named-pipe flow
         shell: pwsh
         run: ./scripts/windows-named-pipe-smoke.ps1
@@ -85,6 +86,22 @@ jobs:
       - name: Prove Windows ProductCapture closure
         shell: pwsh
         run: ./scripts/windows-product-capture-smoke.ps1
+      - name: Record that Windows smokes are not W2-E
+        shell: pwsh
+        run: |
+          $lines = @(
+            '## Windows current-account smokes are not W2-E',
+            '',
+            'windows-latest ran scripts/windows-named-pipe-smoke.ps1, scripts/windows-product-capture-smoke.ps1, and scripts/windows-task-scheduler-smoke.ps1.',
+            'These prove current-account mechanics. They are not W2-E.',
+            'Hosted CI is not standard-user acceptance.',
+            'Compile support is not runtime support.',
+            'This job does not upload a Windows demo zip and does not mark Product Ready.'
+          )
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ($lines -join "`n")
+      - name: Windows demo archive packaging self-test
+        shell: pwsh
+        run: python scripts/packaging/check_windows_demo_archive.py --self-test
       - name: Check desktop host
         run: cargo check -p moraine-app
 

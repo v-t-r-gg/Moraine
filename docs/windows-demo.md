@@ -2,6 +2,11 @@
 
 staged suite, installer unsupported, acceptance pending
 
+This showing is one Windows 11 standard-user session: unzip, stage, set up,
+run Codex, and open the desktop on a real run. No UAC prompt. No crash.
+That is not W2-E. Login autostart, repair, rollback, and Account B pipe
+denial stay `not_executed`. Do not spend the rehearsal on those gates.
+
 Windows Product Ready remains No. A supported Windows installer does not
 exist. This archive is a manually staged suite for a Windows 11 x86-64
 standard user. It is not W3.
@@ -9,7 +14,8 @@ standard user. It is not W3.
 Two machines. The presenter stays on the Linux product and only streams.
 The viewer follows this page on Windows. After unzip, the viewer steps are
 meant to fit in about 15 minutes. The archive works offline. The only
-external dependency is the coding agent.
+external dependency is the coding agent. The desktop on this branch is the
+review workspace: Projects, Runs, Review, with the fidelity panel.
 
 Rehearsal agent: not rehearsed on Windows in the session that wrote this
 script. No operator named an agent. The steps below use Codex. Claude Code
@@ -167,10 +173,9 @@ Uninstall and rollback do not delete project ledgers.
   installer, MSIX, WiX, WinGet, or Authenticode.
 * Windows Product Ready remains No. Compile support is not runtime support.
   Hosted CI and the smoke scripts are not standard-user acceptance.
-* W2-E was not executed for this archive unless
-  `docs/evidence/windows-demo/DISPOSITION.md` in the source checkout says
-  otherwise. A unit test does not prove that a second Windows account is
-  denied access to the pipe. Do not claim cross-account denial here.
+* W2-E was not executed. Login autostart, repair, rollback, and Account B
+  pipe denial stay `not_executed` for this showing. Do not rehearse them.
+  A unit test does not prove cross-account denial.
 * Claude Code capture is lifecycle hooks. Tool activity stays
   `not_supported`. Codex tool activity is a different adapter.
 * Redaction is not erasure. Raw sidecars, git history, logs, and backups

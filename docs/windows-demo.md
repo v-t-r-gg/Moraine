@@ -61,11 +61,23 @@ Expect a coherent suite when the prefix contains the manifest and binaries.
 Expect the installer to be described as unsupported. Expect no Product Ready
 claim. Doctor must not tell you to run `./install.sh`.
 
-Doctor check ids were not observed on Windows while this script was written.
-Do not treat any list as a recorded session. After you run `moraine doctor`,
-quote the `id` values from that output. The implementation's Windows report
-includes `windows.installer` and `windows.product_ready_claim`. If those ids
-are absent, stop. The binary and this script disagree.
+After you run `moraine doctor`, quote the `id` values from that output. The
+implementation's Windows report includes `windows.installer` and
+`windows.product_ready_claim`. If those ids are absent, stop. The binary and
+this script disagree.
+
+Recorded 2026-10-04 on the staged suite, standard user `demo`, no elevation.
+`moraine doctor` exited 0. `windows.installer` was `info`: observed
+`user_installation=unsupported`, expected `no supported Windows installer`,
+remediation `stage the demo suite; no installer is available.`
+`windows.product_ready_claim` was `info`: observed `product_ready_claim=no`.
+The other ids were `suite.cli_path` (info), `suite.manifest`,
+`suite.components`, `suite.cli_match`, `path.candidate.0`, `path.count`,
+`service.binary`, `runtime.backend`, `runtime.registration`,
+`runtime.capture`, `runtime.last_result` (info, task result `267011`),
+`windows.task_registration`, `windows.application_logs`, `service.online`,
+`desktop.binary`, and `desktop.registration` (info). With capture running,
+`runtime.capture` and `service.online` passed. Product Ready remains No.
 
 If the suite is missing, doctor fails closed with: stage the demo suite; no
 installer is available.
@@ -113,44 +125,70 @@ python .\examples\demo-project\tests\test_greet.py
 ```
 
 In Explorer, open `.moraine\runs\`. Expect one `<run>.md` and the sidecar
-`<run>.md.moraine.json`. Then, with the run id from the file name:
+`<run>.md.moraine.json`. The run id is the UUID on the `Run ID` line in that
+markdown. `moraine run coverage` rejects the file name.
 
 ```powershell
-moraine run coverage <RUN_ID> --project .\examples\demo-project
-moraine open
+moraine run coverage <RUN_UUID> --project .\examples\demo-project
+moraine open --run-id <FILE_PREFIX> --project .\examples\demo-project
 ```
 
-The desktop should show that run. Moraine records the run. It does not
-approve the change.
+`moraine open --run-id` matches the run file name. The file name ends with
+the first eight hex characters of the UUID, so pass that prefix. Coverage
+still wants the full UUID.
 
-On a Codex rehearsal, tool activity can be observed. On Claude Code, tool
-activity stays `not_supported`. This document has no recorded run id and no
-recorded fidelity states. Fill those in only from the session you just ran.
+The desktop should show that run. Moraine records the run. It does not
+approve the change. `run_start` adopts the hook's provisional run only when
+the call includes `sessionId`. Without it, the checkpoint run and the Codex
+session record are two files.
+
+Recorded 2026-10-04, same standard-user session. Codex exited 0. The
+checkpoint run is `76dbc89a-dfca-4902-a35e-926653a613fe`, lifecycle
+`ready_for_review`, one checkpoint, then `run_ready`. Coverage of that run:
+integration unknown, semantic start observed, checkpoints observed (1),
+session lifecycle, prompt activity, and tool activity unknown.
+`moraine run coverage` exited 0. `moraine open --run-id 76dbc89a` exited 0
+and launched `moraine-app.exe` on that markdown. The process was in the SSH
+session. It was not on the console.
+
+The hook session for that Codex process is bound to provisional run
+`0303e164-b184-4862-9325-869cc7c7b3c4`. Coverage of that run: integration
+`codex`, session lifecycle observed (2), prompt activity observed (1), tool
+activity not observed, semantic start not observed, checkpoints not observed.
+The installed hooks are SessionStart, UserPromptSubmit, and Stop.
+
+On Claude Code, tool activity stays `not_supported`.
 
 ## 4. Service down, then back
+
+Stop capture, then start a short follow-up that still exits normally. The
+hook must not fail the agent. A stopped Moraine service stays
+non-disruptive. `moraine doctor` should show capture not ready. Start
+capture again and leave the project ledger on disk.
+
+```powershell
+moraine service stop
+moraine doctor
+moraine service start
+moraine doctor
+```
+
+Recorded in the same session, after the checkpoint run:
 
 ```powershell
 moraine service stop
 ```
 
-Continue the agent session, or start a short follow-up that still exits
-normally. The hook must not fail the agent. A stopped Moraine service spools
-or otherwise stays non-disruptive. Then:
-
-```powershell
-moraine doctor
-```
-
-Expect capture not ready, or the runtime not running. The agent itself
-should have finished. Start capture again:
-
-```powershell
-moraine service start
-moraine doctor
-```
-
-The project ledger should still be on disk. Do not run `moraine project init`
-a second time to recreate it. Discovery should see the existing project.
+A follow-up Codex prompt exited 0 while capture was stopped. The hooks
+completed. `moraine doctor` then exited 0 with `runtime.capture` and
+`service.online` at warn (`running=false`). `moraine service start` brought
+capture back: a later SSH still saw HTTP 200 on `127.0.0.1:33111/status`,
+`captureReady` true, and git commit
+`c4095dcb17cf20014c5471c1ab4861f128e3007d`. The three run files that existed
+before the stop had the same SHA-256 after the start. The follow-up's
+spooled hooks were applied after start and wrote provisional run
+`1c90b60a-e707-48f6-9ac7-f50a151d0377`. Do not run `moraine project init`
+a second time.
 
 ## 5. Demo uninstall
 

@@ -17,6 +17,11 @@ pub use windows_identity::current_windows_user_identity;
 pub use windows_identity::{named_pipe_name_from_scope, scope_id_from_sid, WindowsUserIdentity};
 
 pub const DIAGNOSTICS_PORT: u16 = 33111;
+/// Process id file written under the runtime log directory.
+///
+/// Task Scheduler stop does not see a service that was started in the current
+/// token because the account had no interactive logon. Stop reads this file.
+pub const SERVICE_PID_FILE: &str = "moraine-service.pid";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlatformError {

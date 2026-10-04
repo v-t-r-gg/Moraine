@@ -351,6 +351,10 @@ fn which_codex() -> Option<PathBuf> {
             candidates.push(home.join(rel));
         }
     }
+    #[cfg(windows)]
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        candidates.push(PathBuf::from(local).join(r"Programs\OpenAI\Codex\bin\codex.exe"));
+    }
     // Optional override for advanced installs / onboarding picker.
     if let Ok(over) = std::env::var("MORAINE_CODEX") {
         candidates.insert(0, PathBuf::from(over));

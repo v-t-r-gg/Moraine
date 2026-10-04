@@ -73,10 +73,11 @@ async fn main() -> Result<()> {
     } = Args::parse();
     let runtime_layout = moraine_platform::RuntimeLayout::try_discover()?;
     #[cfg(target_os = "windows")]
-    {
+    let _service_pid = {
         let log_dir = log_dir.unwrap_or_else(|| runtime_layout.log_dir.clone());
         moraine_service::logging::init_windows_file_logging(&log_dir)?;
-    }
+        ServicePidFile::create(&log_dir)?
+    };
     #[cfg(not(target_os = "windows"))]
     {
         let _ = log_dir;
@@ -220,6 +221,31 @@ async fn main() -> Result<()> {
             capture.await?;
             Ok(())
         }
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct ServicePidFile(std::path::PathBuf);
+
+#[cfg(target_os = "windows")]
+impl ServicePidFile {
+    fn create(log_dir: &std::path::Path) -> anyhow::Result<Self> {
+        std::fs::create_dir_all(log_dir)?;
+        let path = log_dir.join(moraine_platform::SERVICE_PID_FILE);
+        std::fs::write(&path, format!("{}\n", std::process::id()))?;
+        info!(
+            pid = std::process::id(),
+            path = %path.display(),
+            "recorded service process"
+        );
+        Ok(Self(path))
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for ServicePidFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
     }
 }
 

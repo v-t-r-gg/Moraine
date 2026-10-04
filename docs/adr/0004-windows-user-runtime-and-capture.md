@@ -219,9 +219,14 @@ Operations map as follows:
 * `registration_fingerprint`; hash returned XML plus SDDL.
 * `install_runtime`; register or replace the exact definition.
 * `restore_registration`; restore exact prior XML plus ACL or exact absence.
-* `uninstall`; stop & delete only the SID-qualified Moraine task.
-* `start`; call `IRegisteredTask::Run`.
-* `stop`; stop all running instances of that task.
+* `uninstall`; stop & delete only the SID-qualified Moraine task, then stop a
+  service process recorded for that task.
+* `start`; call `IRegisteredTask::Run`. When that call does not enter RUNNING
+  because the account has no interactive logon, start the same user binary in
+  the current token, broken out of the caller job. No password, no S4U, no
+  elevation.
+* `stop`; stop all running instances of that task, then stop the recorded
+  service process when the task did not start it.
 * `restart`; stop, wait for stopped state & run.
 * `enable_autostart`; enable only the Moraine logon trigger.
 * `disable_autostart`; disable only that trigger.

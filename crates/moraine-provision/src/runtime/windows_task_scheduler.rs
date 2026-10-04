@@ -3,6 +3,9 @@
 //! COM objects are created, used & released on a dedicated MTA worker for every
 //! operation. The manager stores only owned Rust data & serializes mutations.
 
+use std::io::Read;
+use std::net::{SocketAddr, TcpStream};
+use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::sync::Mutex;
 use std::thread;
@@ -12,7 +15,8 @@ use chrono::Utc;
 use sha2::{Digest, Sha256};
 use windows::core::{BSTR, HRESULT, HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
-    LocalFree, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, HLOCAL, SCHED_E_TASK_NOT_RUNNING,
+    CloseHandle, LocalFree, ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_INVALID_PARAMETER,
+    ERROR_PATH_NOT_FOUND, HANDLE, HLOCAL, SCHED_E_TASK_NOT_RUNNING,
 };
 use windows::Win32::Security::Authorization::{
     ConvertStringSecurityDescriptorToSecurityDescriptorW, ConvertStringSidToSidW, SDDL_REVISION_1,
@@ -30,6 +34,12 @@ use windows::Win32::System::TaskScheduler::{
     IRegisteredTask, ITaskFolder, ITaskService, TaskScheduler, TASK_CREATE_OR_UPDATE,
     TASK_LOGON_INTERACTIVE_TOKEN, TASK_STATE_RUNNING,
 };
+use windows::Win32::System::Threading::{
+    CreateProcessW, OpenProcess, QueryFullProcessImageNameW, TerminateProcess,
+    CREATE_BREAKAWAY_FROM_JOB, CREATE_NO_WINDOW, DETACHED_PROCESS, PROCESS_CREATION_FLAGS,
+    PROCESS_INFORMATION, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+    STARTUPINFOW,
+};
 use windows::Win32::System::Variant::VARIANT;
 
 use crate::error::{ProvisionError, Result};
@@ -44,6 +54,8 @@ use moraine_platform::{CaptureEndpoint, RuntimeLayout};
 
 const STOP_BUDGET: Duration = Duration::from_secs(5);
 const STOP_POLL: Duration = Duration::from_millis(100);
+const DEMAND_START_WAIT: Duration = Duration::from_secs(3);
+const RECORDED_STOP_WAIT: Duration = Duration::from_secs(2);
 const TASK_FULL_ACCESS_MASK: u32 = 0x001f_01ff;
 /// Task Scheduler normalizes an extra current-account ACE after
 /// `SetSecurityDescriptor`. Observed production-backed form is SDDL `FR`
@@ -305,14 +317,22 @@ impl TaskSchedulerSession {
         }
     }
 
-    fn delete(&self, identity: &WindowsTaskIdentity) -> Result<()> {
+    fn delete(
+        &self,
+        identity: &WindowsTaskIdentity,
+        log_dir: &Path,
+        executable: &Path,
+    ) -> Result<()> {
         if self.get(identity)?.is_some() {
             self.stop_and_wait(identity, STOP_BUDGET)?;
+            stop_recorded_service(log_dir, executable)?;
             unsafe {
                 self.root
                     .DeleteTask(&BSTR::from(&identity.task_name), 0)
                     .map_err(task_error("delete Task Scheduler registration"))?;
             }
+        } else {
+            stop_recorded_service(log_dir, executable)?;
         }
         if self.get(identity)?.is_some() {
             return Err(ProvisionError::Service(
@@ -320,6 +340,33 @@ impl TaskSchedulerSession {
             ));
         }
         Ok(())
+    }
+
+    /// Run the registered task. InteractiveToken only starts when this account
+    /// already has an interactive logon. If the task does not enter RUNNING,
+    /// start the same binary with the current token, broken out of the caller
+    /// job. No password, no S4U, and no elevation.
+    fn demand_start(
+        &self,
+        identity: &WindowsTaskIdentity,
+        spec: &RuntimeInstallSpec,
+    ) -> Result<()> {
+        let task = self.get(identity)?.ok_or_else(|| {
+            ProvisionError::Service(format!("task {} is absent", identity.task_path))
+        })?;
+        if task_is_running(&task)? || diagnostics_accepting(spec.diagnostics_endpoint) {
+            return Ok(());
+        }
+        let run_error = unsafe { task.Run(&VARIANT::default()) }
+            .err()
+            .map(task_error("start Task Scheduler runtime"));
+        if wait_for_demand(&task, spec.diagnostics_endpoint)? {
+            return Ok(());
+        }
+        spawn_detached_service(spec).map_err(|spawn_error| match run_error {
+            Some(run_error) => ProvisionError::Service(format!("{run_error}; {spawn_error}")),
+            None => spawn_error,
+        })
     }
 
     fn stop_and_wait(&self, identity: &WindowsTaskIdentity, budget: Duration) -> Result<()> {
@@ -360,6 +407,206 @@ fn task_error(context: &'static str) -> impl FnOnce(windows::core::Error) -> Pro
     move |error| ProvisionError::Service(format!("{context}: {error}"))
 }
 
+fn task_is_running(task: &IRegisteredTask) -> Result<bool> {
+    Ok(unsafe { task.State().map_err(task_error("read task state"))? } == TASK_STATE_RUNNING)
+}
+
+fn diagnostics_accepting(endpoint: SocketAddr) -> bool {
+    TcpStream::connect_timeout(&endpoint, Duration::from_millis(200)).is_ok()
+}
+
+fn wait_for_demand(task: &IRegisteredTask, endpoint: SocketAddr) -> Result<bool> {
+    let deadline = Instant::now() + DEMAND_START_WAIT;
+    loop {
+        if task_is_running(task)? || diagnostics_accepting(endpoint) {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        thread::sleep(STOP_POLL);
+    }
+}
+
+fn wide_null(value: &std::ffi::OsStr) -> Vec<u16> {
+    value.encode_wide().chain(std::iter::once(0)).collect()
+}
+
+fn is_pe_image(path: &Path) -> bool {
+    let mut header = [0u8; 2];
+    std::fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut header))
+        .is_ok_and(|_| header == *b"MZ")
+}
+
+/// Start the suite service outside the caller's job when the job allows it.
+///
+/// `CREATE_BREAKAWAY_FROM_JOB` lets an OpenSSH session exit without killing
+/// capture. A nested job that forbids breakaway returns access denied; retry
+/// in that job so the caller can still stop the process by its pid file.
+fn spawn_detached_service(spec: &RuntimeInstallSpec) -> Result<()> {
+    if !is_pe_image(&spec.executable) {
+        return Err(ProvisionError::Service(format!(
+            "refusing to start a non-PE runtime executable: {}",
+            spec.executable.display()
+        )));
+    }
+    let broken_away = spawn_with_flags(
+        spec,
+        CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW | DETACHED_PROCESS,
+    );
+    match broken_away {
+        Ok(()) => Ok(()),
+        Err(error) if error.code() == HRESULT::from_win32(ERROR_ACCESS_DENIED.0) => {
+            spawn_with_flags(spec, CREATE_NO_WINDOW | DETACHED_PROCESS).map_err(|retry| {
+                ProvisionError::Service(format!(
+                    "start Moraine service outside the caller job: {error}; retry without job breakaway: {retry}"
+                ))
+            })
+        }
+        Err(error) => Err(task_error("start Moraine service outside the caller job")(
+            error,
+        )),
+    }
+}
+
+fn spawn_with_flags(
+    spec: &RuntimeInstallSpec,
+    flags: PROCESS_CREATION_FLAGS,
+) -> windows::core::Result<()> {
+    let command = service_command_line(spec).map_err(|error| {
+        windows::core::Error::new(
+            HRESULT::from_win32(ERROR_INVALID_PARAMETER.0),
+            error.to_string(),
+        )
+    })?;
+    let mut application = wide_null(spec.executable.as_os_str());
+    let mut directory = wide_null(spec.working_directory.as_os_str());
+    let mut command_wide: Vec<u16> = command.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut startup = STARTUPINFOW::default();
+    startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+    let mut process = PROCESS_INFORMATION::default();
+    let created = unsafe {
+        CreateProcessW(
+            PWSTR(application.as_mut_ptr()),
+            Some(PWSTR(command_wide.as_mut_ptr())),
+            None,
+            None,
+            false,
+            flags,
+            None,
+            PWSTR(directory.as_mut_ptr()),
+            &startup,
+            &mut process,
+        )
+    };
+    if created.is_ok() {
+        close_handle(process.hProcess);
+        close_handle(process.hThread);
+    }
+    created
+}
+
+fn stop_recorded_service(log_dir: &Path, executable: &Path) -> Result<()> {
+    let path = log_dir.join(moraine_platform::SERVICE_PID_FILE);
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(());
+    };
+    let Ok(pid) = text.trim().parse::<u32>() else {
+        let _ = std::fs::remove_file(&path);
+        return Ok(());
+    };
+    if pid == 0 {
+        let _ = std::fs::remove_file(&path);
+        return Ok(());
+    }
+    let Some(handle) = open_recorded_process(pid)? else {
+        let _ = std::fs::remove_file(&path);
+        return Ok(());
+    };
+    let image = match query_process_image(handle) {
+        Ok(image) => image,
+        Err(error) => {
+            close_handle(handle);
+            return Err(error);
+        }
+    };
+    if !paths_equal(Path::new(&image), executable) {
+        close_handle(handle);
+        return Ok(());
+    }
+    let terminated = unsafe { TerminateProcess(handle, 1) };
+    close_handle(handle);
+    terminated.map_err(task_error("stop recorded Moraine service"))?;
+    let deadline = Instant::now() + RECORDED_STOP_WAIT;
+    loop {
+        if !recorded_process_running(pid)? {
+            let _ = std::fs::remove_file(&path);
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(ProvisionError::Service(
+                "recorded Moraine service did not exit".into(),
+            ));
+        }
+        thread::sleep(STOP_POLL);
+    }
+}
+
+fn open_recorded_process(pid: u32) -> Result<Option<HANDLE>> {
+    match unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
+            false,
+            pid,
+        )
+    } {
+        Ok(handle) => Ok(Some(handle)),
+        Err(error) if error.code() == HRESULT::from_win32(ERROR_INVALID_PARAMETER.0) => Ok(None),
+        Err(error) => Err(task_error("open recorded Moraine service")(error)),
+    }
+}
+
+fn recorded_process_running(pid: u32) -> Result<bool> {
+    match open_recorded_process(pid)? {
+        Some(handle) => {
+            close_handle(handle);
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
+
+fn query_process_image(handle: HANDLE) -> Result<String> {
+    let mut buffer = vec![0u16; 32768];
+    let mut length = buffer.len() as u32;
+    unsafe {
+        QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_WIN32,
+            PWSTR(buffer.as_mut_ptr()),
+            &mut length,
+        )
+        .map_err(task_error("read recorded service image"))?;
+    }
+    let end = (length as usize).min(buffer.len());
+    let chars = &buffer[..end];
+    let end = chars
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(chars.len());
+    String::from_utf16(&chars[..end])
+        .map_err(|_| ProvisionError::Service("recorded service image is not valid Unicode".into()))
+}
+
+fn close_handle(handle: HANDLE) {
+    if !handle.is_invalid() {
+        unsafe {
+            let _ = CloseHandle(handle);
+        }
+    }
+}
+
 pub fn registration_fingerprint(xml: &str, sddl: &str) -> String {
     let mut digest = Sha256::new();
     digest.update(xml.as_bytes());
@@ -375,10 +622,7 @@ fn task_sddl(identity: &WindowsTaskIdentity) -> String {
     )
 }
 
-pub fn render_task_xml(
-    identity: &WindowsTaskIdentity,
-    spec: &RuntimeInstallSpec,
-) -> Result<String> {
+fn quoted_service_arguments(spec: &RuntimeInstallSpec) -> Result<String> {
     let CaptureEndpoint::WindowsNamedPipe(pipe) = &spec.capture_endpoint else {
         return Err(ProvisionError::Service(
             "Windows runtime requires a named-pipe capture endpoint".into(),
@@ -387,7 +631,7 @@ pub fn render_task_xml(
     let log_dir = spec.log_dir.as_ref().ok_or_else(|| {
         ProvisionError::Service("Windows runtime requires an application log directory".into())
     })?;
-    let arguments = [
+    Ok([
         "--http".to_owned(),
         spec.diagnostics_endpoint.to_string(),
         "--named-pipe".to_owned(),
@@ -400,7 +644,20 @@ pub fn render_task_xml(
     .into_iter()
     .map(|value| quote_windows_argument(&value))
     .collect::<Vec<_>>()
-    .join(" ");
+    .join(" "))
+}
+
+fn service_command_line(spec: &RuntimeInstallSpec) -> Result<String> {
+    let arguments = quoted_service_arguments(spec)?;
+    let executable = quote_windows_argument(&spec.executable.display().to_string());
+    Ok(format!("{executable} {arguments}"))
+}
+
+pub fn render_task_xml(
+    identity: &WindowsTaskIdentity,
+    spec: &RuntimeInstallSpec,
+) -> Result<String> {
+    let arguments = quoted_service_arguments(spec)?;
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -1129,6 +1386,8 @@ impl BackgroundRuntimeManager for WindowsTaskSchedulerRuntime {
             )));
         }
         let identity = self.task_identity.clone();
+        let log_dir = self.runtime_layout.log_dir.clone();
+        let executable = self.suite.service.clone();
         let state = snapshot.state.clone();
         if let WindowsTaskSnapshotState::Existing {
             xml,
@@ -1143,7 +1402,7 @@ impl BackgroundRuntimeManager for WindowsTaskSchedulerRuntime {
             }
         }
         let restored = self.run_com_operation("restore_registration", move |session| {
-            session.delete(&identity)?;
+            session.delete(&identity, &log_dir, &executable)?;
             match state {
                 WindowsTaskSnapshotState::Absent => Ok(()),
                 WindowsTaskSnapshotState::Existing {
@@ -1178,42 +1437,40 @@ impl BackgroundRuntimeManager for WindowsTaskSchedulerRuntime {
 
     fn uninstall(&self) -> Result<()> {
         let identity = self.task_identity.clone();
-        self.run_com_operation("uninstall", move |session| session.delete(&identity))
+        let log_dir = self.runtime_layout.log_dir.clone();
+        let executable = self.suite.service.clone();
+        self.run_com_operation("uninstall", move |session| {
+            session.delete(&identity, &log_dir, &executable)
+        })
     }
 
     fn start(&self) -> Result<()> {
         let identity = self.task_identity.clone();
+        let spec = self.expected_install_spec();
         self.run_com_operation("start", move |session| {
-            let task = session.get(&identity)?.ok_or_else(|| {
-                ProvisionError::Service(format!("task {} is absent", identity.task_path))
-            })?;
-            unsafe {
-                task.Run(&VARIANT::default())
-                    .map_err(task_error("start Task Scheduler runtime"))?;
-            }
-            Ok(())
+            session.demand_start(&identity, &spec)
         })
     }
 
     fn stop(&self) -> Result<()> {
         let identity = self.task_identity.clone();
+        let log_dir = self.runtime_layout.log_dir.clone();
+        let executable = self.suite.service.clone();
         self.run_com_operation("stop", move |session| {
-            session.stop_and_wait(&identity, STOP_BUDGET)
+            session.stop_and_wait(&identity, STOP_BUDGET)?;
+            stop_recorded_service(&log_dir, &executable)
         })
     }
 
     fn restart(&self) -> Result<()> {
         let identity = self.task_identity.clone();
+        let spec = self.expected_install_spec();
+        let log_dir = self.runtime_layout.log_dir.clone();
+        let executable = self.suite.service.clone();
         self.run_com_operation("restart", move |session| {
             session.stop_and_wait(&identity, STOP_BUDGET)?;
-            let task = session.get(&identity)?.ok_or_else(|| {
-                ProvisionError::Service(format!("task {} is absent", identity.task_path))
-            })?;
-            unsafe {
-                task.Run(&VARIANT::default())
-                    .map_err(task_error("restart Task Scheduler runtime"))?;
-            }
-            Ok(())
+            stop_recorded_service(&log_dir, &executable)?;
+            session.demand_start(&identity, &spec)
         })
     }
 
@@ -1491,5 +1748,40 @@ mod tests {
         assert!(read_application_logs(&temp.path().join("missing"), 10)
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn detached_command_line_matches_the_task_arguments() {
+        let spec = spec();
+        let arguments = quoted_service_arguments(&spec).unwrap();
+        let xml = render_task_xml(&identity(), &spec).unwrap();
+        let command = service_command_line(&spec).unwrap();
+        assert!(xml.contains(&xml_escape(&arguments)));
+        assert!(command.ends_with(&arguments));
+        assert!(command.starts_with(&quote_windows_argument(
+            &spec.executable.display().to_string()
+        )));
+    }
+
+    #[test]
+    fn detached_start_refuses_a_non_pe_file() {
+        let path = std::env::temp_dir().join(format!("moraine-not-pe-{}", std::process::id()));
+        std::fs::write(&path, b"disposable task action fixture").unwrap();
+        let error = spawn_detached_service(&RuntimeInstallSpec {
+            executable: path.clone(),
+            working_directory: std::env::temp_dir(),
+            capture_endpoint: CaptureEndpoint::WindowsNamedPipe(
+                r"\\.\pipe\moraine.capture.v1.test".into(),
+            ),
+            diagnostics_endpoint: "127.0.0.1:9".parse().unwrap(),
+            spool_dir: std::env::temp_dir(),
+            log_dir: Some(std::env::temp_dir()),
+        })
+        .unwrap_err();
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            error.to_string().contains("non-PE"),
+            "unexpected error: {error}"
+        );
     }
 }

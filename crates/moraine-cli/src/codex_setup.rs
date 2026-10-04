@@ -430,14 +430,19 @@ fn which_moraine() -> PathBuf {
 }
 
 fn which_codex() -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path) {
-        let cand = dir.join("codex");
-        if cand.is_file() {
-            return Some(cand);
+    let mut candidates = Vec::new();
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            candidates.push(dir.join("codex"));
+            #[cfg(windows)]
+            candidates.push(dir.join("codex.exe"));
         }
     }
-    None
+    #[cfg(windows)]
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        candidates.push(PathBuf::from(local).join(r"Programs\OpenAI\Codex\bin\codex.exe"));
+    }
+    candidates.into_iter().find(|path| path.is_file())
 }
 
 fn toml_escape(s: &str) -> String {

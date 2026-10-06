@@ -38,14 +38,29 @@ function Invoke-Checked {
     }
 }
 
+function Test-ContentDirty {
+    param([string]$Repo)
+    $porcelain = @(& git -C $Repo status --porcelain 2>$null)
+    $lines = @($porcelain | Where-Object { $_ -and $_.ToString().Trim() -ne "" })
+    if ($lines.Count -eq 0) { return $false }
+    foreach ($line in $lines) {
+        if ($line -match '^\?\?') { return $true }
+    }
+    $unstaged = @(& git -C $Repo diff --numstat 2>$null | Where-Object { $_ -and $_.ToString().Trim() -ne "" })
+    $staged = @(& git -C $Repo diff --cached --numstat 2>$null | Where-Object { $_ -and $_.ToString().Trim() -ne "" })
+    return ($unstaged.Count -gt 0 -or $staged.Count -gt 0)
+}
+
 $Version = if ($env:MORAINE_VERSION) { $env:MORAINE_VERSION } else { Read-WorkspaceVersion }
 if ($env:MORAINE_GIT_COMMIT) {
     $Commit = $env:MORAINE_GIT_COMMIT
 } else {
     $Commit = (& git -C $Root rev-parse HEAD 2>$null)
     if (-not $Commit) { $Commit = "unknown" }
-    $Dirty = & git -C $Root status --porcelain 2>$null
-    if ($Dirty) { $Commit = "$Commit-dirty" }
+    # Mode-only worktree noise (100755 in the index, 100644 on disk) is not a
+    # content change. Do not set core.filemode; a later sync must not rewrite
+    # script modes. Content diffs and untracked files still mark the commit dirty.
+    if (Test-ContentDirty $Root) { $Commit = "$Commit-dirty" }
 }
 $Target = if ($env:MORAINE_TARGET_TRIPLE) { $env:MORAINE_TARGET_TRIPLE } else { "x86_64-pc-windows-msvc" }
 $OutDir = if ($env:MORAINE_RELEASE_DIR) { $env:MORAINE_RELEASE_DIR } else { Join-Path $Root "dist" }

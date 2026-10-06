@@ -2167,4 +2167,56 @@ mod tests {
         assert!(replay.idempotent_replay);
         assert_eq!(replay.run_id, first.run_id);
     }
+
+    #[test]
+    fn run_start_without_session_id_does_not_adopt_the_provisional_run() {
+        let dir = tempdir().unwrap();
+        let project = init_project(Some(dir.path())).unwrap();
+        let external = "sess-unbound";
+        let _ = crate::agent_protocol::session::session_observe(
+            crate::agent_protocol::session::SessionObserveRequest {
+                session_id: external.into(),
+                integration: "codex".into(),
+                project: Some(project.project_root.clone()),
+                source: "user_prompt".into(),
+                initial_task: Some("Fix the greeting".into()),
+                ended: false,
+                confine_existing_project: true,
+            },
+        )
+        .unwrap();
+        let provisional = provisional_run_ensure(ProvisionalRunRequest {
+            session_id: external.into(),
+            project: Some(project.project_root.clone()),
+            objective: Some("Fix the greeting".into()),
+            idempotency_key: None,
+            integration: Some("codex".into()),
+        })
+        .unwrap();
+
+        let separate = run_start(RunStartRequest {
+            objective: "Fix the greeting".into(),
+            idempotency_key: "mcp-without-session".into(),
+            project: Some(project.project_root.clone()),
+            session_id: None,
+        })
+        .unwrap();
+        assert_ne!(separate.run_id, provisional.run_id);
+
+        let report = crate::agent_protocol::capture_fidelity_report(
+            Some(&project.project_root),
+            separate.run_id,
+            &crate::agent_protocol::CaptureCapabilityProfile::unknown(),
+        )
+        .unwrap();
+        for dimension in ["session_lifecycle", "prompt_activity"] {
+            let observation = report
+                .dimensions
+                .iter()
+                .find(|d| d.dimension.as_str() == dimension)
+                .map(|d| d.observation.as_str())
+                .unwrap_or("");
+            assert_eq!(observation, "unknown", "{dimension}");
+        }
+    }
 }

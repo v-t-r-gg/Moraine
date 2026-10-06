@@ -110,10 +110,13 @@ blocker. Do not approve elevation.
 
 ## 3. One agent run
 
-Start Codex in `examples\demo-project`. Paste:
+Start Codex in a fresh `examples\demo-project` (do not reuse a preserved
+ledger unless you intend to append). The Moraine hook context names the host
+session id. Paste:
 
 ```text
-Call Moraine run_start. Fix src/greet.py so tests/test_greet.py passes.
+Call Moraine run_start with sessionId set to the host session id from the
+Moraine hook context. Fix src/greet.py so tests/test_greet.py passes.
 Checkpoint the change, then call run_ready. Record the work. Do not ask
 Moraine to approve a merge, deployment, or release.
 ```
@@ -124,40 +127,29 @@ Python 3 can run the check locally:
 python .\examples\demo-project\tests\test_greet.py
 ```
 
-In Explorer, open `.moraine\runs\`. Expect one `<run>.md` and the sidecar
-`<run>.md.moraine.json`. The run id is the UUID on the `Run ID` line in that
-markdown. `moraine run coverage` rejects the file name.
+Expect one run id. The UUID is the `Run ID` line in `.moraine\runs\<run>.md`.
+`moraine run coverage` rejects the file name. Pass that UUID:
 
 ```powershell
 moraine run coverage <RUN_UUID> --project .\examples\demo-project
-moraine open --run-id <FILE_PREFIX> --project .\examples\demo-project
 ```
 
-`moraine open --run-id` matches the run file name. The file name ends with
-the first eight hex characters of the UUID, so pass that prefix. Coverage
-still wants the full UUID.
+Coverage of that same UUID should show session lifecycle observed, prompt
+activity observed, and at least one checkpoint. Tool activity `not_observed`
+is a valid report when the session recorded no tool event. Do not mark it
+observed. `moraine open` is optional and is not part of this demo. Do not
+launch `moraine-app.exe`.
 
-The desktop should show that run. Moraine records the run. It does not
-approve the change. `run_start` adopts the hook's provisional run only when
-the call includes `sessionId`. Without it, the checkpoint run and the Codex
-session record are two files.
-
-Recorded 2026-10-04, same standard-user session. Codex exited 0. The
-checkpoint run is `76dbc89a-dfca-4902-a35e-926653a613fe`, lifecycle
-`ready_for_review`, one checkpoint, then `run_ready`. Coverage of that run:
-integration unknown, semantic start observed, checkpoints observed (1),
-session lifecycle, prompt activity, and tool activity unknown.
-`moraine run coverage` exited 0. `moraine open --run-id 76dbc89a` exited 0
-and launched `moraine-app.exe` on that markdown. The process was in the SSH
-session. It was not on the console.
-
-The hook session for that Codex process is bound to provisional run
-`0303e164-b184-4862-9325-869cc7c7b3c4`. Coverage of that run: integration
-`codex`, session lifecycle observed (2), prompt activity observed (1), tool
-activity not observed, semantic start not observed, checkpoints not observed.
-The installed hooks are SessionStart, UserPromptSubmit, and Stop.
+Omitting `sessionId` still creates a run. That run is a different id from the
+hook's provisional run, and coverage of it keeps session lifecycle and prompt
+activity `unknown`. An earlier standard-user session hit that split:
+checkpoint run `76dbc89a-dfca-4902-a35e-926653a613fe` and provisional run
+`0303e164-b184-4862-9325-869cc7c7b3c4`.
 
 On Claude Code, tool activity stays `not_supported`.
+
+The coverage transcript for the session-id rehearsal is filled from the SSH
+session that runs this archive. Product Ready remains No.
 
 ## 4. Service down, then back
 

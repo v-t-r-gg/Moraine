@@ -227,8 +227,13 @@ fn confirm_and_checkpoint(
     let confirmed_id = start_v
         .pointer("/run/id")
         .and_then(|x| x.as_str())
-        .unwrap_or(&run_id.to_string())
+        .unwrap_or("")
         .to_string();
+    assert_eq!(
+        confirmed_id,
+        run_id.to_string(),
+        "run_start with the hook session id must confirm the provisional run, not create a second id: {start_v}"
+    );
 
     let show = Command::new(cli)
         .args([

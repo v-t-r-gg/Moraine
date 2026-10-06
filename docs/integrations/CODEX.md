@@ -1,7 +1,7 @@
 # Codex integration
 
-Codex is Moraine’s supported reference agent on Linux. Windows Codex capture is
-not supported until the native Windows runtime exists.
+Codex is Moraine’s supported reference agent on Linux. The staged Windows suite
+uses the same `sessionId` call. Windows Product Ready remains No.
 
 ## Set up
 
@@ -36,6 +36,16 @@ semantic account.
 The local MCP lets Codex start or resume a run, record checkpoints & evidence,
 manage findings & append corrections. The process is confined to one project
 root. Discover the live tool inventory through MCP `tools/list`.
+
+`run_start` takes `objective`, `idempotencyKey`, and `sessionId`. The Codex
+hook payload already carries `session_id`. Session start and user-prompt hooks
+print that host session id into Codex context. Pass that exact value as
+`sessionId`. Moraine then confirms the provisional run from the hooks, so
+session lifecycle, prompt activity, and later checkpoints share one run id.
+Omitting `sessionId` still starts a run. That run is a different id, and its
+coverage keeps session lifecycle and prompt activity `unknown`. Do not invent
+a tool-activity observation. Tool activity stays `not_observed` unless a tool
+event was recorded, and Claude Code tool-call capture stays `not_supported`.
 
 Healthy ProductCapture needs both paths. A run with hooks but no semantic
 confirmation should not be presented as complete evidence.

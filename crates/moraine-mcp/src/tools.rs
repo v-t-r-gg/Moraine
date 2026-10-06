@@ -183,7 +183,7 @@ pub struct RespondToFindingArgs {
 #[tool_router]
 impl MoraineMcp {
     #[tool(
-        description = "Start a Moraine run. Args: objective, idempotencyKey, optional sessionId (reconciles provisional). Returns runId, contentHash, state. No full Markdown."
+        description = "Start a Moraine run. Args: objective, idempotencyKey, and sessionId when the Moraine hook context includes a host session id. sessionId confirms that provisional run. Omitting sessionId starts a different run. Returns runId, contentHash, state. No full Markdown."
     )]
     async fn run_start(
         &self,
@@ -607,6 +607,7 @@ mod tests {
         assert!(instr.len() <= crate::server::SERVER_INSTRUCTIONS_MAX_BYTES);
         let head: String = instr.chars().take(512).collect();
         assert!(head.contains("run_start"));
+        assert!(head.contains("sessionId"));
         assert!(head.contains("run_ready"));
         assert!(head.contains("human approval") || head.contains("Never record"));
     }

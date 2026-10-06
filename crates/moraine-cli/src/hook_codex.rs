@@ -36,7 +36,37 @@ pub fn run_hook_codex(
     let spool = spool_dir.unwrap_or_else(default_spool_dir);
 
     handle_delivery(capture::deliver(&endpoint, &body), &endpoint, &spool, &body)?;
+    // Codex adds this stdout to the model context. It is the host session id
+    // already present on the hook payload, not a transcript scrape.
+    if let Some(hint) = session_hint_json(&event) {
+        println!("{hint}");
+    }
     Ok(0)
+}
+
+/// Model-visible hook context. Only lifecycle events that precede substantive
+/// work name the host session id. Tool events stay quiet.
+fn session_hint_json(event: &Value) -> Option<String> {
+    let kind = event.get("kind").and_then(|v| v.as_str())?;
+    let hook_event = match kind {
+        "session_start" => "SessionStart",
+        "user_prompt" => "UserPromptSubmit",
+        _ => return None,
+    };
+    let session_id = event.get("sessionId").and_then(|v| v.as_str())?;
+    if session_id.is_empty() {
+        return None;
+    }
+    let additional = format!(
+        "Moraine host session id: {session_id}. Pass this exact value as sessionId on run_start before other Moraine calls. Omitting sessionId starts a different run."
+    );
+    serde_json::to_string(&json!({
+        "hookSpecificOutput": {
+            "hookEventName": hook_event,
+            "additionalContext": additional,
+        }
+    }))
+    .ok()
 }
 
 fn handle_delivery(
@@ -467,6 +497,42 @@ mod tests {
         assert_eq!(ev2["kind"], "command_finished");
         assert_eq!(ev2["payload"]["exitCode"], 0);
         assert_eq!(ev2["payload"]["output"], "test result: ok");
+    }
+
+    #[test]
+    fn user_prompt_hint_names_the_host_session_id() {
+        let payload = json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "abc",
+            "cwd": "/tmp/proj",
+            "prompt": "Fix the bug",
+        });
+        let event = map_codex_hook(&payload).unwrap().unwrap();
+        let hint = session_hint_json(&event).unwrap();
+        let parsed: Value = serde_json::from_str(&hint).unwrap();
+        assert_eq!(
+            parsed["hookSpecificOutput"]["hookEventName"],
+            "UserPromptSubmit"
+        );
+        let text = parsed["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+        assert!(text.contains("abc"));
+        assert!(text.contains("sessionId"));
+    }
+
+    #[test]
+    fn tool_events_do_not_emit_a_session_hint() {
+        let payload = json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": "abc",
+            "cwd": "/tmp/proj",
+            "tool_name": "bash",
+            "tool_use_id": "call-1",
+            "command": "cargo test",
+        });
+        let event = map_codex_hook(&payload).unwrap().unwrap();
+        assert!(session_hint_json(&event).is_none());
     }
 
     #[test]

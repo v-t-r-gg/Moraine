@@ -196,6 +196,7 @@ impl AgentAdapter for CodexAdapter {
         let mcp_block = format!(
             r#"
 {MANAGED_TOML_START}
+# Pass the host session id from the Moraine hook context as sessionId on run_start.
 [mcp_servers.moraine]
 command = "{cli}"
 args = ["mcp", "--project", "{project}"]
@@ -437,9 +438,13 @@ fn ensure_managed_hooks(doc: &mut Value, hook_cmd: &str) -> usize {
         (
             "SessionStart",
             Some("startup|resume"),
-            "Moraine session observe",
+            "Moraine host session id is in hook context. Pass it as sessionId on run_start.",
         ),
-        ("UserPromptSubmit", None, "Moraine provisional run"),
+        (
+            "UserPromptSubmit",
+            None,
+            "Moraine host session id is in hook context. Pass it as sessionId on run_start.",
+        ),
         ("Stop", None, "Moraine session stop"),
     ];
 

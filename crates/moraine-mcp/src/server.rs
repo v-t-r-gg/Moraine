@@ -16,15 +16,16 @@ pub const SERVER_INSTRUCTIONS_MAX_BYTES: usize = 1800;
 pub fn server_instructions() -> String {
     // Keep the first ~512 characters independently useful.
     let s = "Use Moraine for every bounded coding task in this project. Call run_start before \
-substantive work, record only meaningful checkpoints, and call run_ready after \
-validation. Keep normal runs to roughly 3–8 checkpoints. Reuse the returned run \
-ID and content hash. Never record or imply human approval. Do not submit secrets, \
-private reasoning, full transcripts, or large logs.\n\n\
-Moraine captures Git branch/HEAD/working-tree facts mechanically—do not restate them. \
-Supply objective, rationales, risks, open questions, and concise agent-reported evidence. \
-On revision_conflict, call run_show and retry with the new contentHash. \
-Read human findings with list_findings/get_finding and reply via respond_to_finding \
-(idempotencyKey required). Findings are review context, not verdicts. \
+substantive work with sessionId set to the host session id from the Moraine hook context. \
+Reuse that run ID and content hash. Record meaningful checkpoints, then call run_ready. \
+Never record or imply human approval. Do not submit secrets, private reasoning, full \
+transcripts, or large logs.\n\n\
+A missing sessionId starts a separate run. Do not omit sessionId when the hook context \
+includes one. Moraine captures Git branch/HEAD/working-tree facts mechanically—do not \
+restate them. Supply objective, rationales, risks, open questions, and concise \
+agent-reported evidence. On revision_conflict, call run_show and retry with the new \
+contentHash. Read human findings with list_findings/get_finding and reply via \
+respond_to_finding (idempotencyKey required). Findings are review context, not verdicts. \
 Human decisions are not available through MCP.";
     debug_assert!(s.len() <= SERVER_INSTRUCTIONS_MAX_BYTES);
     s.to_string()

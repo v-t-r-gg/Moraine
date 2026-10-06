@@ -77,7 +77,11 @@ The other ids were `suite.cli_path` (info), `suite.manifest`,
 `runtime.capture`, `runtime.last_result` (info, task result `267011`),
 `windows.task_registration`, `windows.application_logs`, `service.online`,
 `desktop.binary`, and `desktop.registration` (info). With capture running,
-`runtime.capture` and `service.online` passed. Product Ready remains No.
+`runtime.capture` and `service.online` passed. The same ids were recorded
+again on 2026-10-06 against embedded commit
+`e6dd109be7957c79d26b96f721bbb851e14fcd3d`. `moraine doctor` exited 0.
+`runtime.last_result` stayed `info` with observed `267011`. Product Ready
+remains No.
 
 If the suite is missing, doctor fails closed with: stage the demo suite; no
 installer is available.
@@ -148,8 +152,110 @@ checkpoint run `76dbc89a-dfca-4902-a35e-926653a613fe` and provisional run
 
 On Claude Code, tool activity stays `not_supported`.
 
-The coverage transcript for the session-id rehearsal is filled from the SSH
-session that runs this archive. Product Ready remains No.
+Recorded 2026-10-06 as `demo`, no UAC, embedded commit
+`e6dd109be7957c79d26b96f721bbb851e14fcd3d`. Codex exited 0. One run id,
+`8bb95bee-ba04-40c8-9ffa-bc953d49c9a8`, lifecycle `ready_for_review`, one
+checkpoint, then `run_ready`. The hook session
+`01a11322-798b-7cb3-8e63-0c1af62a1240` lists that same run id.
+`moraine run coverage` exited 0. `moraine open` was not run.
+`moraine-app.exe` was not started. Product Ready remains No.
+
+```json
+{
+  "coverage": {
+    "dimensions": [
+      {
+        "capability": "supported",
+        "countIsComplete": true,
+        "dimension": "session_lifecycle",
+        "exactCount": 1,
+        "explanation": "Session lifecycle events were recorded for this run.",
+        "observation": "observed"
+      },
+      {
+        "capability": "supported",
+        "countIsComplete": true,
+        "dimension": "prompt_activity",
+        "exactCount": 1,
+        "explanation": "Prompt activity was observed (prompt text may be withheld by privacy defaults).",
+        "observation": "observed"
+      },
+      {
+        "capability": "supported",
+        "countIsComplete": true,
+        "dimension": "tool_activity",
+        "exactCount": 0,
+        "explanation": "No tool or command activity was recorded for this run.",
+        "observation": "not_observed"
+      },
+      {
+        "capability": "supported",
+        "countIsComplete": true,
+        "dimension": "semantic_start",
+        "explanation": "The run is semantically confirmed (not provisional).",
+        "observation": "observed"
+      },
+      {
+        "capability": "supported",
+        "countIsComplete": true,
+        "dimension": "checkpoints",
+        "exactCount": 1,
+        "explanation": "Semantic checkpoints were recorded (1).",
+        "observation": "observed"
+      },
+      {
+        "capability": "supported",
+        "countIsComplete": true,
+        "dimension": "mechanical_evidence",
+        "exactCount": 0,
+        "explanation": "No mechanical evidence with Moraine-observed provenance was recorded.",
+        "observation": "not_observed"
+      },
+      {
+        "capability": "supported",
+        "countIsComplete": true,
+        "dimension": "agent_reported_evidence",
+        "exactCount": 0,
+        "explanation": "No agent-reported evidence claims were recorded.",
+        "observation": "not_observed"
+      },
+      {
+        "capability": "supported",
+        "countIsComplete": true,
+        "dimension": "review_findings",
+        "exactCount": 0,
+        "explanation": "No review findings were recorded.",
+        "observation": "not_observed"
+      }
+    ],
+    "gaps": [
+      {
+        "dimension": "tool_activity",
+        "reason": "No tool or command activity was recorded for this run."
+      },
+      {
+        "dimension": "mechanical_evidence",
+        "reason": "No mechanical evidence with Moraine-observed provenance was recorded."
+      },
+      {
+        "dimension": "agent_reported_evidence",
+        "reason": "No agent-reported evidence claims were recorded."
+      },
+      {
+        "dimension": "review_findings",
+        "reason": "No review findings were recorded."
+      }
+    ],
+    "integration": "codex",
+    "legacyCoverage": "full",
+    "provisional": false,
+    "runId": "8bb95bee-ba04-40c8-9ffa-bc953d49c9a8",
+    "schemaVersion": 1,
+    "sessionBound": true
+  },
+  "ok": true
+}
+```
 
 ## 4. Service down, then back
 
@@ -165,22 +271,19 @@ moraine service start
 moraine doctor
 ```
 
-Recorded in the same session, after the checkpoint run:
+Recorded in the 2026-10-06 session, after run
+`8bb95bee-ba04-40c8-9ffa-bc953d49c9a8`:
 
-```powershell
-moraine service stop
-```
-
-A follow-up Codex prompt exited 0 while capture was stopped. The hooks
-completed. `moraine doctor` then exited 0 with `runtime.capture` and
-`service.online` at warn (`running=false`). `moraine service start` brought
-capture back: a later SSH still saw HTTP 200 on `127.0.0.1:33111/status`,
+`moraine service stop` exited 0. A follow-up Codex prompt exited 0 while
+capture was stopped. The hooks completed. `moraine doctor` exited 0 with
+`runtime.capture` and `service.online` at warn (`running=false`).
+`moraine service start` exited 0. A later SSH still saw HTTP 200,
 `captureReady` true, and git commit
-`c4095dcb17cf20014c5471c1ab4861f128e3007d`. The three run files that existed
-before the stop had the same SHA-256 after the start. The follow-up's
-spooled hooks were applied after start and wrote provisional run
-`1c90b60a-e707-48f6-9ac7-f50a151d0377`. Do not run `moraine project init`
-a second time.
+`e6dd109be7957c79d26b96f721bbb851e14fcd3d`. The run file and sidecar that
+existed before the stop had the same SHA-256 after the start. The follow-up
+is a second Codex process. Its spooled hooks were applied after start and
+wrote provisional run `8ddb5810-8f1a-47ba-9976-fef541dafd41`. That file is not the checkpoint run. Do not
+run `moraine project init` a second time.
 
 ## 5. Demo uninstall
 
